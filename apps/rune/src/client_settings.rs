@@ -8,7 +8,10 @@ pub use keys::{COMMANDS, Command, binding_label, event_chord};
 use rune::{Color, Family, TextEdit, TextStyle};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -71,7 +74,10 @@ pub struct ClientSettings {
     owner: Option<DraftScope>,
     config: Value,
     path: Option<PathBuf>,
+    saved: Preferences,
+    touched: BTreeSet<Vec<String>>,
     writable: bool,
+    retry_at: Option<std::time::Instant>,
     next_read: f64,
     reading: bool,
 }
@@ -93,7 +99,10 @@ impl ClientSettings {
             owner: None,
             config: json!({}),
             path: None,
+            saved: Preferences::default(),
+            touched: BTreeSet::new(),
             writable: true,
+            retry_at: None,
             next_read: 0.,
             reading: false,
         }
@@ -109,26 +118,30 @@ impl ClientSettings {
     }
     fn load_at(&mut self, path: PathBuf) {
         self.path = Some(path.clone());
-        match std::fs::read(&path) {
-            Ok(bytes) => match serde_json::from_slice::<Preferences>(&bytes) {
-                Ok(mut p) if p.version == 1 => {
-                    p.normalize();
-                    self.prefs = p;
-                    self.writable = true;
-                }
-                _ => {
-                    self.error=Some("Saved display preferences are invalid or newer than this client; the file is preserved.".into());
-                    self.writable = false;
-                }
-            },
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(_) => {
-                self.error = Some(
-                    "Saved display preferences could not be read; the file is preserved.".into(),
-                );
+        self.retry_at = None;
+        match crate::client::store::load::<Preferences>(&path, Self::validate_preferences) {
+            Ok(mut p) => {
+                p.normalize();
+                self.saved = p.clone();
+                self.prefs = p;
+                self.touched.clear();
+                self.writable = true;
+                self.error = None;
+            }
+            Err(error) => {
+                self.error = Some(error);
                 self.writable = false;
             }
         }
+    }
+    fn validate_preferences(p: &Preferences) -> Result<(), String> {
+        if p.version != 1 {
+            return Err(
+                "Saved display preferences use an unsupported schema; their file was preserved"
+                    .into(),
+            );
+        }
+        Ok(())
     }
     fn save(&mut self, persist: bool) {
         if !persist {
@@ -147,17 +160,45 @@ impl ClientSettings {
                 .path
                 .as_ref()
                 .ok_or("The client state directory is unavailable")?;
-            let bytes = serde_json::to_vec_pretty(&self.prefs)
-                .map_err(|_| "Display preferences could not be encoded")?;
-            crate::client::private_write(path, &bytes)
+            crate::client::store::save_patch_forced(
+                path,
+                &self.saved,
+                &self.prefs,
+                &self.touched.iter().cloned().collect::<Vec<_>>(),
+                Self::validate_preferences,
+            )
         })();
         match result {
-            Ok(()) => {
+            Ok(mut merged) => {
+                merged.normalize();
+                self.saved = merged.clone();
+                self.prefs = merged;
+                self.touched.clear();
+                self.retry_at = None;
                 self.error = None;
                 self.notice = Some("Saved on this device".into());
             }
-            Err(e) => self.error = Some(e),
+            Err(e) => {
+                self.error = Some(e);
+                self.retry_at = Some(std::time::Instant::now() + std::time::Duration::from_secs(1));
+            }
         }
+    }
+    /// Retry the pending local diff; this does not observe foreign writes live.
+    pub fn poll_preferences(&mut self) -> bool {
+        if self
+            .retry_at
+            .is_some_and(|at| at <= std::time::Instant::now())
+        {
+            self.save(true);
+            true
+        } else {
+            false
+        }
+    }
+    pub fn preferences_wake_after(&self) -> Option<std::time::Duration> {
+        self.retry_at
+            .map(|at| at.saturating_duration_since(std::time::Instant::now()))
     }
     pub fn act(&mut self, a: Action, persist: bool) {
         match a {
@@ -168,12 +209,36 @@ impl ClientSettings {
                 }
                 return;
             }
-            Action::Scale(n) => self.prefs.chat_scale = n,
-            Action::Density(n) => self.prefs.session_density = n,
-            Action::Bubble(n) => self.prefs.bubble_transparency = n,
-            Action::Reasoning(n) => self.prefs.reasoning_collapsed = n,
-            Action::Technical(n) => self.prefs.technical_tools = n,
+            Action::Scale(n) => {
+                self.touch("chat_scale");
+                self.prefs.chat_scale = n;
+            }
+            Action::Density(n) => {
+                self.touch("session_density");
+                self.prefs.session_density = n;
+            }
+            Action::Bubble(n) => {
+                self.touch("bubble_transparency");
+                self.prefs.bubble_transparency = n;
+            }
+            Action::Reasoning(n) => {
+                self.touch("reasoning_collapsed");
+                self.prefs.reasoning_collapsed = n;
+            }
+            Action::Technical(n) => {
+                self.touch("technical_tools");
+                self.prefs.technical_tools = n;
+            }
             Action::ResetDisplay => {
+                for key in [
+                    "chat_scale",
+                    "session_density",
+                    "bubble_transparency",
+                    "reasoning_collapsed",
+                    "technical_tools",
+                ] {
+                    self.touch(key);
+                }
                 let p = Preferences::default();
                 self.prefs.chat_scale = p.chat_scale;
                 self.prefs.session_density = p.session_density;
@@ -186,12 +251,21 @@ impl ClientSettings {
                 return;
             }
             Action::Reset(id) => {
+                if !COMMANDS.iter().any(|c| c.id == id) {
+                    return;
+                }
+                self.touched.insert(vec!["bindings".into(), id.clone()]);
                 self.prefs.bindings.remove(&id);
             }
-            Action::ResetBindings => self
-                .prefs
-                .bindings
-                .retain(|id, _| !COMMANDS.iter().any(|c| c.id == id)),
+            Action::ResetBindings => {
+                for command in COMMANDS {
+                    self.touched
+                        .insert(vec!["bindings".into(), command.id.into()]);
+                }
+                self.prefs
+                    .bindings
+                    .retain(|id, _| !COMMANDS.iter().any(|c| c.id == id));
+            }
         }
         self.prefs.normalize();
         self.save(persist);
@@ -200,6 +274,7 @@ impl ClientSettings {
         if !COMMANDS.iter().any(|c| c.id == id) {
             return;
         }
+        self.touched.insert(vec!["bindings".into(), id.clone()]);
         let next = chord
             .into_iter()
             .filter_map(|s| keys::canonical(&s))
@@ -221,6 +296,9 @@ impl ClientSettings {
         }
         self.capture = None;
         self.save(persist);
+    }
+    fn touch(&mut self, key: &str) {
+        self.touched.insert(vec![key.into()]);
     }
     pub fn bindings(&self, id: &str) -> Vec<String> {
         self.prefs
@@ -421,5 +499,7 @@ impl ClientSettings {
             || self.config.pointer("/display/timestamps") == Some(&json!(1))
     }
 }
+#[cfg(test)]
+mod shared_tests;
 #[cfg(test)]
 mod tests;

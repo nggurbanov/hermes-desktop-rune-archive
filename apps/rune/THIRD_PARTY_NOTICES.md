@@ -31,3 +31,19 @@ notification adapter directly uses zbus 5.19.0 and the locked futures-util
 0.3.34; their original texts are retained in their named `licenses/` directories.
 The complete dependency resolution remains in `Cargo.lock`; final distribution
 assembly and platform packaging are tracked separately in the parity ledger.
+
+
+Native audio-file playback statically includes the unmodified Sonic library,
+pinned source `b93885dcb70aae50c6f76b0fe4e0868f029a077e`, under Apache-2.0.
+Its complete source/header, license and source hashes are in
+[`vendor/sonic/`](vendor/sonic/). The build does not download Sonic or run ffmpeg.
+
+Four exact Symphonia 0.5.5 crates are retained under `vendor/` with local resource
+validation patches: `symphonia-core`, `symphonia-metadata`,
+`symphonia-format-riff` and `symphonia-format-isomp4`. Each retains the complete
+MPL-2.0 text, original source files and a `HERMES_PATCH.json` recording the
+registry archive checksum, modified files and before/after hashes. Distributions
+must preserve these notices and make the corresponding modified MPL-covered
+source available. The native audio ledger describes the narrow patch scope.
+The synthetic compressed audio fixtures have their generation commands and
+hashes in [`assets/test-audio/manifest.json`](assets/test-audio/manifest.json).

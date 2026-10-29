@@ -62,3 +62,38 @@ preferences, embed consent and the profile-scoped reaction/tip/tour tool mirrors
 The original mirror contract writes only explicitly touched preferences on a
 connection, so an initial default must never overwrite an independently managed
 agent's configuration.
+
+
+## Shared preference writers
+
+Main device/layout preferences, display/shortcut settings, profile overlays and
+sidebar preferences now save only changes from their last successful local
+snapshot under an OS file lock. The transaction re-reads and validates the latest
+file, recursively merges changed JSON fields and atomically commits privately.
+Unrelated/unknown fields survive a stale writer. Arrays and sets are one atomic
+field; this does not promise merging individual set members.
+
+Explicit display/sidebar choices carry touched field paths. Reset, Clear and
+selecting an already displayed value therefore apply the user's intent even
+when another writer has changed that value on disk. Shortcut reset removes only
+its named known binding, retaining unloaded-plugin bindings. Failed saves retain
+both local edits and touched paths for a scheduled retry. A malformed/future file
+is preserved; an initial failed load grants no write access. Profile removals
+also name their key explicitly, including a profile absent from a stale snapshot.
+
+Display/sidebar controls adopt the merged preferences and baseline together.
+Main-window layout/appearance and profile overlays retain their local successful
+snapshot as the diff baseline; otherwise the next UI poll would echo another
+window's stored geometry or appearance back into the file. There is no automatic
+live observation of other windows yet. Independent WindowId, per-window geometry,
+connection-registry transactions and admission ownership remain separate work.
+
+The frozen integration passed **439** default tests with zero failures and three
+ignored private entry points. The two storage helpers are exercised by default
+parent tests launching actual child processes; the physical-output-free private
+audio case remains explicitly exercised at the previous checkpoint. Shared-state
+contracts cover stale writers, the OS lock, nested removal, unknown/schema
+preservation, forced unchanged resets and failed-save repair/retry. Focused logs:
+`/tmp/hermes-shared-client-tests.out`, `/tmp/hermes-shared-display-tests.out` and
+`/tmp/hermes-shared-sidebar-tests.out`. Parent default log:
+`/tmp/hermes-goal-six-tests.out`.

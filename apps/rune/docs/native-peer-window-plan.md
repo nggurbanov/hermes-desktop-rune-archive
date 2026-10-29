@@ -1,7 +1,8 @@
 # Concurrent surfaces and native peer windows
 
-Status: read-only audit and proposed implementation, 2026-10-29. No production,
-test, dependency, protocol, or Rune source changes belong to this document.
+Status: next-step design, refreshed against checkpoint `f0461bc305` on 2026-10-29.
+This document proposes the remaining concurrent-surface and native host work; it
+does not establish its implementation or acceptance.
 The standalone retained Electron tree is the behavior baseline. Rune is pinned to
 `bfb8facae2e4665e5e6d17afe85561884a7fd402`.
 
@@ -71,11 +72,22 @@ multiple owner-keyed views and workers, but several Viewer action guards still
 require the one current `connection_epoch`. Its existing worker, journal, CAS,
 policy-stamp and recovery contracts should be reused, not duplicated.
 
-`Composer.drafts` is keyed by `DraftScope { connection, profile, session }`.
-Two fresh inputs would therefore share `session: None`; two views of one stored
-session would share a TextEdit and policy identity. `composer/persistence.rs`
-atomically replaces an entire per-principal JSON snapshot. Atomic replacement
-protects one write, not two independent writers merging different drafts.
+The fifth checkpoint gives existing tabs actual independent `Composer` and
+`TextEdit` controllers with stable `EditorId` values. Its v4 private draft store
+already locks read/merge/write, applies per-entry CAS with monotonic revisions
+and clear tombstones, and passes two-process contention contracts. These are
+implemented prerequisites, not remaining whole-map draft work.
+
+`Editors.bindings` still maps one `DraftScope` to one editor: two simultaneous
+surfaces of one stored session need separate `SurfaceId → EditorId` bindings.
+Two fresh conversations still share `DraftScope.session: None`, so they need an
+independent conversation lifecycle UUID as well. `Composer::primary()` currently
+uses one device identity, which must not be mounted concurrently in two windows.
+Device/layout/display/profile/sidebar preferences now use locked leaf-patch
+writes with explicit field intents and failed-write retry. Saved connection
+registry transactions, live observation and per-window geometry still need
+the corresponding shared services. Array/set fields remain atomic values; this
+is not complete multiple-window state reconciliation.
 
 `app/decks.rs::pane_visible` currently recognizes only fixed workspace/sidebar/
 tool panes. `view/layout.rs` consumes caller-supplied pane bodies and does not
@@ -153,8 +165,9 @@ mints another editor initialized from the latest shared text stash. It must not
 share TextEdit, attachment mutation handles or policy revision counters. Preserve
 stable ids for restored surfaces, and never mount one persisted EditorId twice.
 
-Replace whole-map competing draft writes with a shared writer accepting per-entry
-patches. A proposed receipt is `{ stash_key, editor_id, editor_revision,
+Extend the existing locked per-entry draft writer with shared observation and
+surface/window ownership. Its current CAS/tombstones must be retained. A proposed
+cross-surface receipt is `{ stash_key, editor_id, editor_revision,
 store_revision }`; broker order supplies the monotonic store revision. A submitted
 clear names the captured receipt and cannot clear newer text or another editor's
 unsent buffer. Broadcast stash changes without replacing actively edited local
@@ -247,3 +260,37 @@ whole-file lost updates, cross-source epoch collisions, child-process broker
 lifetime, and native platform lifecycle/focus differences. Each is a concrete
 acceptance boundary above. This plan does not introduce an agent-side API or
 promise parity from replicated read-only views.
+
+## Rechecked implementation boundaries after the editor checkpoint
+
+Rune's element handlers require a `'static` application state, while `States`,
+`Cx::retype` and the handler mapping are crate-private. Render borrowed explicit
+`ChatSurfaceView` references, but keep callbacks typed to `Viewer` and capture
+surface/generation tokens. A borrowed `Deref<Viewer>` facade does not redirect
+inherited methods away from the foreground owner. Rune keyed layout lookup uses
+the first matching key; every focus/anchor/timeline/input key must be explicitly
+qualified by the surface, including overlays, rather than only wrapping a tree.
+
+Keep Conversation's `DraftScope → ConversationView/worker` shared. Split Chat's
+current combined presentation: disclosures, edit buffer, preview and completion
+selection belong to a surface/editor, whereas unknown slash/branch mutations
+remain serialized by conversation owner. Completion replies need an editor and
+generation token in addition to owner/query. Surface close detaches UI without
+stopping the agent, repeating a send or discarding an uncertain admission.
+
+The existing subagent child transport closes on control EOF and its owner Drop
+kills the child. It cannot establish independent full-peer lifetime. In Rune,
+`App::window` registers only before `run`, and secondary windows do not retain the
+application after primary close. A concrete event-thread extension can queue
+single-consumption `WindowSpec<T>` requests from `Tx`, using the existing native
+file-dialog call pattern, then start ordinary main-lifetime hosts through the
+shared GPU/event loop. It requires generation-qualified host slots, creation
+receipts/errors, cleanup, local Close/global Quit, and native tooling coverage;
+no fixed predeclared peer pool is an acceptable substitute.
+
+Before full Viewers share that host, give each an exclusive durable WindowId and
+share source leases, settings observation/per-window geometry and pending-admission
+ownership. Existing locked settings patches are a prerequisite, not this host. The
+current UUID-per-file journal's separate `.settled` check/write is insufficient
+as a multi-controller claim. Notification and sound arbitration already lives
+in process-wide brokers; separate-process peers would need equivalent IPC.

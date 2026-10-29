@@ -129,7 +129,31 @@ pointer and physical-keyboard seeking, rate, mute, volume, both appearances,
 1024 × 520 geometry, byte-exact original save and owner retirement. Evidence is
 in `/tmp/hermes-goal-five-audio`. This proof uses the production controls with
 a private loopback peer; Play/output is established by the separate strict
-private-device case, not by a native Play click. Full Viewer navigation from
-Files/Artifacts/transcript into this component still needs its own native
-acceptance; three real application-controller tests cover those routing/owner
-seams. Closing a rendered preview is also fenced by its captured PlayerId.
+private-device case, not by a native Play click. Three real application-controller
+tests cover routing/owner seams; the ordinary Viewer render/input acceptance is
+recorded below. Closing a rendered preview is also fenced by its captured PlayerId.
+
+The same immutable binary subsequently passed all **11** normal Viewer cases in
+`scripts/check-audio-navigation.mjs`: Files to paused audio in both themes and a
+1024 × 520 viewport, close back to the source chat, replacing one file player with
+another, transcript file actions and return to their source message, indexing
+an audio delivery from another profile, opening it with that exact profile/session,
+restoring the existing Artifacts selection after Close, and retiring the player
+when the connection incarnation changes. The fixture rejects every HTTP mutation
+and any RPC outside its explicit read/attachment allowlist. The cross-profile
+recording is read as `archive / archive-audio` while the window remains on
+`research`; neither the ambient profile nor the selected chat replaces its owner.
+Evidence: `/tmp/hermes-full-audio-navigation/{result.json,requests.json}` and the
+11 PNG/tree/log triples. This uses the ordinary Viewer and its production input
+callbacks through Rune's offscreen renderer with actual asynchronous loopback
+HTTP/WebSocket workers. It does not establish native window-manager behavior,
+click Play, open physical output, or connect to an installed agent/provider.
+
+Run with `node apps/rune/scripts/check-audio-navigation.mjs --binary PATH --out DIR`.
+
+
+The sixth preference integration reran all eleven full Viewer audio-navigation
+cases successfully on immutable binary `1ccda04a1714fb312aeb4fa4f404e6f7c714bbe609517368f22248a2083896dc`.
+Evidence is in `/tmp/hermes-goal-six-audio-navigation`; source metadata/output
+limits remain as described above. No audio player or transport production code
+changed after the fifth private output proof.

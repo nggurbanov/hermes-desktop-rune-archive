@@ -1,23 +1,36 @@
 //! Desktop overlays are scoped by the external gateway principal and profile.
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+    time::{Duration, Instant},
+};
+#[cfg(test)]
+mod tests;
 #[derive(Default)]
 pub struct ProfilePreferences {
     entries: BTreeMap<String, Value>,
     writable: bool,
+    baseline: BTreeMap<String, Value>,
+    path: Option<PathBuf>,
+    retry_at: Option<Instant>,
+    error: Option<String>,
+    removals: BTreeSet<Vec<String>>,
 }
 impl ProfilePreferences {
     pub fn load() -> Result<Self, String> {
-        let path = super::state_dir()?.join("profile-preferences.json");
-        let entries = match std::fs::read(path) {
-            Ok(bytes) => serde_json::from_slice(&bytes)
-                .map_err(|_| "Saved profile preferences are invalid; the file was retained")?,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => BTreeMap::new(),
-            Err(_) => return Err("Profile preferences could not be read".into()),
-        };
+        Self::load_at(super::state_dir()?.join("profile-preferences.json"))
+    }
+    fn load_at(path: PathBuf) -> Result<Self, String> {
+        let entries: BTreeMap<String, Value> = super::store::load(&path, |_| Ok(()))?;
         Ok(Self {
+            baseline: entries.clone(),
             entries,
             writable: true,
+            path: Some(path),
+            retry_at: None,
+            error: None,
+            removals: BTreeSet::new(),
         })
     }
     fn key(connection: &crate::gateway::Connection, profile: &str) -> Result<String, String> {
@@ -36,7 +49,9 @@ impl ProfilePreferences {
         self.save()
     }
     pub fn remove(&mut self, c: &crate::gateway::Connection, p: &str) -> Result<(), String> {
-        self.entries.remove(&Self::key(c, p)?);
+        let key = Self::key(c, p)?;
+        self.entries.remove(&key);
+        self.removals.insert(vec![key]);
         self.save()
     }
     pub fn rename(
@@ -50,15 +65,58 @@ impl ProfilePreferences {
         }
         self.save()
     }
-    fn save(&self) -> Result<(), String> {
+    fn save(&mut self) -> Result<(), String> {
         if !self.writable {
             return Err("Profile preferences were not loaded; their file was retained".into());
         }
-        super::private_write(
-            &super::state_dir()?.join("profile-preferences.json"),
-            &serde_json::to_vec_pretty(&self.entries)
-                .map_err(|_| "Profile preferences could not be encoded")?,
-        )
+        if self.entries == self.baseline && self.removals.is_empty() {
+            self.retry_at = None;
+            self.error = None;
+            return Ok(());
+        }
+        let result = self
+            .path
+            .as_ref()
+            .ok_or_else(|| "The profile preferences directory is unavailable".to_owned())
+            .and_then(|path| {
+                super::store::save_patch_forced(
+                    path,
+                    &self.baseline,
+                    &self.entries,
+                    &self.removals.iter().cloned().collect::<Vec<_>>(),
+                    |_| Ok(()),
+                )
+            });
+        match result {
+            Ok(_) => {
+                // Other windows may have their own appearance. Retain our local
+                // snapshot as the diff baseline so polling cannot echo theirs back.
+                self.baseline = self.entries.clone();
+                self.removals.clear();
+                self.retry_at = None;
+                self.error = None;
+                Ok(())
+            }
+            Err(error) => {
+                self.retry_at = Some(Instant::now() + Duration::from_secs(2));
+                self.error = Some(error.clone());
+                Err(error)
+            }
+        }
+    }
+    pub fn poll_storage(&mut self) -> Result<bool, String> {
+        if self.retry_at.is_some_and(|at| at <= Instant::now()) {
+            self.save().map(|_| true)
+        } else {
+            Ok(false)
+        }
+    }
+    pub fn storage_error(&self) -> Option<&str> {
+        self.error.as_deref()
+    }
+    pub fn wake_after(&self) -> Option<Duration> {
+        self.retry_at
+            .map(|at| at.saturating_duration_since(Instant::now()))
     }
 }
 impl crate::app::Viewer {

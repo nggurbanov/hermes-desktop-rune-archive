@@ -1221,6 +1221,30 @@ pub fn poll(s: &mut Viewer, now: f64, tx: &mut Tx) -> bool {
     if let Some(at) = s.preferences_retry_at {
         tx.wake_after(at.saturating_duration_since(std::time::Instant::now()));
     }
+    let mut stored_preferences_changed = false;
+    if !s.fixture {
+        stored_preferences_changed |= s.client_settings.poll_preferences();
+        stored_preferences_changed |= s.sidebar_state.poll_storage();
+        if let Some(delay) = s.sidebar_state.storage_wake_after() {
+            tx.wake_after(delay);
+        }
+        if let Some(delay) = s.client_settings.preferences_wake_after() {
+            tx.wake_after(delay);
+        }
+        let prior_error = s.profile_preferences.storage_error().map(str::to_owned);
+        match s.profile_preferences.poll_storage() {
+            Ok(saved) => {
+                stored_preferences_changed |= saved;
+                if saved && prior_error.is_some() && s.client_error == prior_error {
+                    s.client_error = None;
+                }
+            }
+            Err(error) => s.client_error = Some(error),
+        }
+        if let Some(delay) = s.profile_preferences.wake_after() {
+            tx.wake_after(delay);
+        }
+    }
     if !s.fixture {
         match s.composer.poll_storage(now) {
             Ok(Some(delay)) => tx.wake_after(delay),
@@ -1271,6 +1295,7 @@ pub fn poll(s: &mut Viewer, now: f64, tx: &mut Tx) -> bool {
     let sounds_changed = s.poll_sounds();
     let notification_changes = s.poll_notifications();
     let pages_changed = editors_changed
+        | stored_preferences_changed
         | sounds_changed
         | notification_changes
         | s.poll_preview()
@@ -1595,12 +1620,14 @@ impl Viewer {
         self.remember_profile_appearance();
         let next = self.client_preferences_snapshot();
         if next != self.preferences {
-            if let Err(error) = next.save() {
+            if let Err(error) = next.save_patch(&self.preferences) {
                 self.preferences_retry_at =
                     Some(std::time::Instant::now() + std::time::Duration::from_secs(2));
                 self.preferences_error = Some(error.clone());
                 return Err(error);
             }
+            // Keep the local presentation as our diff baseline. Adopting merged
+            // geometry here would echo foreign window state on the next poll.
             self.preferences = next;
         }
         if self.client_error.as_ref() == self.preferences_error.as_ref() {

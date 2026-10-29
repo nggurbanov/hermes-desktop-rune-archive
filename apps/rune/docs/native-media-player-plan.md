@@ -1,8 +1,10 @@
 # Native media player plan
 
-2026-10-29. Read-only implementation audit and proposed next increment. This is
-not a statement that audio/PDF/video players have shipped. No dependency,
-production/test source or runtime binary changed during this audit.
+2026-10-29. The original read-only audit below led to the native audio-file
+implementation in checkpoint `f0461bc305`; its verified scope and remaining
+codec/surface limitations are in [native audio parity](native-audio-player-parity.md).
+PDF/video/HTML and concurrent inline media remain planned work. The dependency
+choices below for those remaining players are proposals, not shipped support.
 
 ## Original behavior to preserve
 

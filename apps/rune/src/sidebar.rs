@@ -4,6 +4,7 @@ use crate::{
     pages::{PageEffect, PageRequest, segment},
 };
 use chrono::{Datelike, Duration, Local, NaiveDate, TimeZone};
+mod persistence;
 #[cfg(test)]
 mod tests;
 use rune::TextEdit;
@@ -96,9 +97,11 @@ impl Status {
         }
     }
 }
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Preferences {
+    #[serde(flatten)]
+    pub other: BTreeMap<String, Value>,
     pub grouping: Grouping,
     pub ordering: Ordering,
     pub collapsed: BTreeSet<String>,
@@ -117,6 +120,7 @@ pub struct Preferences {
 impl Default for Preferences {
     fn default() -> Self {
         Self {
+            other: BTreeMap::new(),
             grouping: Grouping::Date,
             ordering: Ordering::Updated,
             collapsed: BTreeSet::new(),
@@ -195,6 +199,7 @@ pub enum Confirmation {
 }
 pub struct SidebarState {
     pub prefs: Preferences,
+    preferences_storage: persistence::Storage,
     pub owner_profile: String,
     pub owner_connection: u64,
     pub demo: bool,
@@ -243,6 +248,7 @@ impl SidebarState {
     pub fn new() -> Self {
         Self {
             prefs: Preferences::default(),
+            preferences_storage: Default::default(),
             owner_profile: "default".into(),
             owner_connection: 0,
             demo: false,
@@ -356,36 +362,6 @@ impl SidebarState {
         self.recovery = None;
         self.mutation = None;
         Ok(())
-    }
-    pub fn load_preferences(&mut self) {
-        let result = (|| {
-            let path = crate::client::state_dir()?.join("sidebar.json");
-            match std::fs::read(path) {
-                Ok(bytes) => serde_json::from_slice(&bytes)
-                    .map_err(|_| "Saved sidebar preferences are invalid".into()),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    Ok(Preferences::default())
-                }
-                Err(_) => Err("Sidebar preferences could not be read".into()),
-            }
-        })();
-        match result {
-            Ok(prefs) => self.prefs = prefs,
-            Err(error) => self.notice = Some(error),
-        }
-    }
-    fn save_preferences(&mut self) {
-        if self.demo {
-            return;
-        }
-        let result = crate::client::state_dir().and_then(|path| {
-            serde_json::to_vec_pretty(&self.prefs)
-                .map_err(|_| "Sidebar preferences could not be encoded".into())
-                .and_then(|bytes| crate::client::private_write(&path.join("sidebar.json"), &bytes))
-        });
-        if let Err(error) = result {
-            self.notice = Some(error);
-        }
     }
     pub fn reset_data(&mut self) {
         self.recents = Slice::default();
@@ -625,32 +601,32 @@ impl SidebarState {
             }
             Action::Collapse(id) => {
                 toggle(&mut self.prefs.collapsed, id);
-                self.save_preferences();
+                self.save_preferences(&["collapsed"]);
                 vec![]
             }
             Action::Grouping(grouping) => {
                 self.prefs.grouping = grouping;
-                self.save_preferences();
+                self.save_preferences(&["grouping"]);
                 vec![]
             }
             Action::Ordering(ordering) => {
                 self.prefs.ordering = ordering;
-                self.save_preferences();
+                self.save_preferences(&["ordering"]);
                 vec![]
             }
             Action::Status(status) => {
                 toggle(&mut self.prefs.status, status);
-                self.save_preferences();
+                self.save_preferences(&["status"]);
                 vec![]
             }
             Action::Profile(profile) => {
                 toggle(&mut self.prefs.profiles, profile);
-                self.save_preferences();
+                self.save_preferences(&["profiles"]);
                 vec![]
             }
             Action::Project(project) => {
                 toggle(&mut self.prefs.projects, project);
-                self.save_preferences();
+                self.save_preferences(&["projects"]);
                 vec![]
             }
             Action::Toggle(key) => {
@@ -663,9 +639,13 @@ impl SidebarState {
                     "cost" => self.prefs.cost = !self.prefs.cost,
                     "profile" => self.prefs.profile = !self.prefs.profile,
                     "rail" => self.prefs.rail = !self.prefs.rail,
-                    _ => {}
+                    _ => return vec![],
                 }
-                self.save_preferences();
+                self.save_preferences(&[if key == "all-profiles" {
+                    "all_profiles"
+                } else {
+                    key
+                }]);
                 if matches!(key, "all-profiles" | "archived") {
                     let profile = self.owner_profile.clone();
                     self.load(&profile)
@@ -722,12 +702,15 @@ impl SidebarState {
                         self.prefs.collapsed.remove(&key);
                     }
                 }
-                self.save_preferences();
+                self.save_preferences(&["collapsed"]);
                 vec![]
             }
             Action::ResetView => {
-                self.prefs = Preferences::default();
-                self.save_preferences();
+                self.prefs = Preferences {
+                    other: std::mem::take(&mut self.prefs.other),
+                    ..Default::default()
+                };
+                self.save_preferences(persistence::KNOWN_FIELDS);
                 let profile = self.owner_profile.clone();
                 self.load(&profile)
             }

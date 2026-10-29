@@ -116,3 +116,9 @@ frame input updates its original parked editor, while a retired profile receives
 no live draft change. Returning to a healthy active editor clears a failed
 activation's blocked presentation. The complete default suite passed 421 tests
 with zero failures and the two documented ignored entry points.
+
+
+The sixth preference integration reran all five native editor cases successfully
+on immutable binary `1ccda04a1714fb312aeb4fa4f404e6f7c714bbe609517368f22248a2083896dc`.
+Its complete default suite passed 439 tests; safe preference persistence is
+separate from the remaining simultaneous-surface/window ownership work.

@@ -27,12 +27,35 @@ complete target and earlier checkpoints. **Full parity is not achieved.**
 | Voice | Actual CPAL/Rodio, dictation/chained/wake/autoread, scoped cancellation, native Linux WebRTC/Opus/AEC3, incremental GPT-Live delegation | Actual provider integration and macOS/Windows device/permission acceptance; synthetic AEC is not a hardware measurement |
 | GUI SDK | Original React/runtime/kit, retained canonical HermesGateway, authenticated brokers, events/storage/multipart/socket/native OS dialogs, verified cross-source leases and parent routing; bundled Bots groups/Petdex native acceptance; actual native SDK notification body/button callbacks, source/window leases and native focus | Remaining pane geometry/data engines/preview contributions, fleet freshness and complete parent-window/platform acceptance |
 | Connections | Typed saved Local/Remote/SSH, private keyring references, transactional metadata, strict SSH forwarding, read-only readiness, retained source lease pool and verified cross-source GUI routing | Cloud/OAuth login, complete fleet presentation/default-startup restoration and all native OS acceptance |
-| Client state | Native device prefs with failed-write retry, principal-scoped v4 per-editor multimodal drafts/favorites with locked per-entry CAS/monotonic revisions/tombstones, migrated legacy input and durable owner-slot identities, named layouts/profile overlays, workspace/statusbar/timers/resource reads and custom shortcuts | Multiple-window reconciliation, skins/arbitrary fonts/global hotkeys and remaining fleet/client controls |
+| Client state | Locked per-field device/layout/display/sidebar/profile preference patches with explicit Reset/Clear intents and failed-write retry, principal-scoped v4 per-editor multimodal drafts/favorites with locked per-entry CAS/monotonic revisions/tombstones, migrated legacy input and durable owner-slot identities, named layouts/profile overlays, workspace/statusbar/timers/resource reads and custom shortcuts | Live multiple-window observation, per-window geometry, registry/admission ownership, skins/arbitrary fonts/global hotkeys and remaining fleet/client controls |
 | Notifications and feedback | Real Linux D-Bus delivery, device preferences, seven live source kinds including background processes and original SDK plugins, reconnect/replay/focus guards, bounded broker, owner-bound actions, native/SDK completion cue ownership and all fourteen original sounds plus None/mute/preview | Native/SDK speech-segment ownership, HUD/haptics, pure-occlusion visibility and macOS/Windows adapters; see native-notifications-parity.md, native-plugin-notifications.md and native-completion-sounds-parity.md |
 | Background processes | Per-session authenticated process list/kill, running-to-exited completion, linger/output/confirmed stop/dismiss/rewind and one-shot read-only runtime recovery; visible-running safety polling and scope retirement | Full concurrent tile/peer integration and external-host/platform acceptance; see native-background-processes-parity.md |
 | Audio-file playback | Actual native WAV/MP3/Vorbis/FLAC/AAC and Ogg Opus playback, paused metadata, seek/volume/mute/pitch-preserving 0.25–4x, authenticated agent files and credential-free external HTTP, bounded range/sequential transport, cancellation generations and exact original saving; pinned decoder metadata/allocation patches | Inline concurrent players/remount positions, multichannel/chained/container Opus, music-quality and native OS acceptance; video/PDF/HTML remain separate; see native-audio-player-parity.md |
 
 ## Evidence at this checkpoint
+
+- The sixth frozen integration passed **439 Rust tests**, zero failed, three
+  ignored. Two ignored storage helpers are launched by passing default parents
+  in actual separate processes; the explicitly run private audio proof remains
+  recorded below. Formatting and build passed. Immutable binary SHA-256:
+  `1ccda04a1714fb312aeb4fa4f404e6f7c714bbe609517368f22248a2083896dc`.
+- That exact binary passed **97 native renderer/input scenarios**: five editor,
+  nineteen composer, fifteen client settings, ten shell, twenty-four feature
+  pages, thirteen rich-chat and eleven full Viewer audio-navigation cases.
+  The audio cases use the ordinary Files/Artifacts/transcript routes, including
+  cross-profile file ownership, return selection, replacement and connection
+  retirement. Neither these offscreen cases nor the private metadata proof
+  establish macOS/Windows or window-manager acceptance.
+- Shared preference contracts verify two processes waiting on the real OS lock,
+  stale unrelated edits, explicit unchanged Reset/Clear/selection, nested binding
+  removal, unknown/future-schema preservation and failed-save repair/retry.
+  This is safe persistence, not live peer-window synchronization. Connection
+  registry transactions, admission claims and independent window geometry remain.
+- The Linux CI workflow now declares the audio/WebKit/AEC toolchain dependencies
+  used by the local build and includes editor/client-settings/feature-page native
+  checks. Its YAML parses; remote CI execution and other OS jobs are not claimed.
+
+### Fifth checkpoint
 
 - The fifth frozen integration passed **421 Rust tests**, zero failed, two ignored.
   One ignored entry is the private-device test run explicitly; the other is an

@@ -47,7 +47,9 @@ invocation. They are independent from desktop installation and startup.
   sidebar sources/pins/filtering, bot/profile identity management and archives.
 - T3 Code-style multiline composer, provider/model search and favorites,
   a compact model summary and one reasoning/tier/approval popover, real file
-  upload and durable prepared sends. Hermes dictation and voice actions remain.
+  upload and durable prepared sends. Every existing chat tab retains its actual
+  editor, attachments and pending model choices; late dialogs return to the
+  originating input. Hermes dictation and voice actions remain.
 - Native rich transcript, earlier history, canonical edit/retry/restore/branch
   with durable mutation recovery, copy/quote/read aloud, tools and images.
 - Separate native Rune subagent windows: lazy read-only history/streaming,
@@ -58,7 +60,10 @@ invocation. They are independent from desktop installation and startup.
   replies and GPT-Live. Linux uses native WebRTC/Opus with WebRTC AEC3; actual
   provider/device/platform acceptance limits are in [voice parity](docs/voice-parity.md).
 - Files tree/text editor with read-before-save, conflict preservation, local
-  Rename/Trash, scoped remote access, image previews and streaming download.
+  Rename/Trash, scoped remote access, native image/audio previews and streaming
+  download. Audio supports paused metadata, seeking, volume/mute, pitch-preserving
+  0.25–4× speed and exact original saving. Inline/concurrent media, remaining
+  containers and video/PDF/HTML acceptance are still tracked in the ledger.
 - Persistent split/group pane layout with native docking, stacked tabs,
   minimize/close/reopen and divider resizing. More original presets/tile/window
   interactions remain in scope.
@@ -79,12 +84,15 @@ cargo test --locked --manifest-path apps/rune/Cargo.toml
 cargo build --locked --manifest-path apps/rune/Cargo.toml
 node apps/rune/scripts/check-scenes.mjs
 node apps/rune/scripts/check-composer.mjs
+node apps/rune/scripts/check-editors.mjs
 node apps/rune/scripts/check-pages.mjs
 node apps/rune/scripts/check-chat.mjs
 node apps/rune/scripts/check-decks.mjs
 node apps/rune/scripts/check-client-settings.mjs
 node apps/rune/scripts/check-notifications.mjs
 xvfb-run -a node apps/rune/scripts/check-preview.mjs
+xvfb-run -a node apps/rune/scripts/check-audio-preview.mjs
+node apps/rune/scripts/check-audio-navigation.mjs
 xvfb-run -a node apps/rune/scripts/check-subagent-windows.mjs
 xvfb-run -a node apps/rune/scripts/check-plugin-host.mjs --canonical
 xvfb-run -a node apps/rune/scripts/check-builtin-bots.mjs

@@ -1,5 +1,6 @@
 //! Client-owned preferences and private runtime files, never an agent home.
 pub mod profiles;
+pub(crate) mod store;
 use serde::{Deserialize, Serialize};
 use std::{
     io::Write,
@@ -102,33 +103,45 @@ pub fn private_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
 }
 impl Preferences {
     pub fn load() -> Result<Self, String> {
-        let path = state_dir()?.join("preferences.json");
-        match std::fs::read(path) {
-            Ok(bytes) => {
-                let mut p: Self = serde_json::from_slice(&bytes)
-                    .map_err(|_| "Saved client preferences are invalid")?;
-                p.sidebar_width = if p.sidebar_width.is_finite() {
-                    p.sidebar_width.clamp(190.0, 360.0)
-                } else {
-                    237.0
-                };
-                p.inspector_width = if p.inspector_width.is_finite() {
-                    p.inspector_width.clamp(240.0, 520.0)
-                } else {
-                    300.0
-                };
-                Ok(p)
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
-            Err(_) => Err("Saved client preferences could not be read".into()),
-        }
+        Self::load_at(&state_dir()?.join("preferences.json"))
     }
-    pub fn save(&self) -> Result<(), String> {
-        private_write(
-            &state_dir()?.join("preferences.json"),
-            &serde_json::to_vec_pretty(self)
-                .map_err(|_| "Client preferences could not be encoded")?,
-        )
+    pub(crate) fn load_at(path: &Path) -> Result<Self, String> {
+        let mut p: Self = store::load(path, Self::validate)?;
+        p.normalize();
+        Ok(p)
+    }
+    /// `base` is this writer's last successful snapshot, never another window's
+    /// live state. The returned value includes the other writers' stored changes.
+    pub fn save_patch(&self, base: &Self) -> Result<Self, String> {
+        self.save_patch_at(base, &state_dir()?.join("preferences.json"))
+    }
+    pub(crate) fn save_patch_at(&self, base: &Self, path: &Path) -> Result<Self, String> {
+        let mut merged = store::save_patch(path, base, self, Self::validate)?;
+        merged.normalize();
+        Ok(merged)
+    }
+    fn validate(&self) -> Result<(), String> {
+        for name in ["version", "schema_version"] {
+            if self.other.get(name).is_some_and(|v| v.as_u64() != Some(1)) {
+                return Err(
+                    "Saved client preferences use an unsupported schema; their file was preserved"
+                        .into(),
+                );
+            }
+        }
+        Ok(())
+    }
+    fn normalize(&mut self) {
+        self.sidebar_width = if self.sidebar_width.is_finite() {
+            self.sidebar_width.clamp(190.0, 360.0)
+        } else {
+            237.0
+        };
+        self.inspector_width = if self.inspector_width.is_finite() {
+            self.inspector_width.clamp(240.0, 520.0)
+        } else {
+            300.0
+        };
     }
 }
 
