@@ -53,7 +53,8 @@ contract results together: an older external runtime may lack the required API.
 Typecheck this lane with `tsc -p tsconfig.external.json --noEmit` from
 `apps/desktop`.
 
-The inherited installer/update Playwright lane still describes the original
-monorepo's installation semantics. It is migration work, rather than proof of
-standalone compatibility. Do not delete its coverage or mark it skipped to
-make an extraction pass.
+The original bundled-agent installer/update lane was removed together with its
+installer and agent updater. It is not part of this client's behavior. Manual
+client update policy is covered by `electron/updater/standalone.test.ts`; external
+runtime selection and standalone startup have dedicated unit and Electron tests.
+URL/SSH fixture tests do not establish acceptance against a real remote host.

@@ -418,8 +418,7 @@ declare global {
       assumeFreshInstall?: boolean
       /** Sanitized local `display.skin`, available before any gateway connects. */
       localSkin?: { profile: string; skin: HermesSkin } | null
-      /** This machine's shared UI preferences store (#145213): preload IPC natively,
-       *  `/api/ui-preferences` on the Webapp. */
+      /** Client UI preferences in Electron userData; independent of the agent's Webapp store. */
       uiPreferences?: UiPreferencesBridge
       setTranslucency?: (payload: TranslucencyState) => void
       setKeepAwake?: (mode: KeepAwakeMode) => void

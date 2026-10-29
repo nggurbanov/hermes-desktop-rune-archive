@@ -14,7 +14,6 @@ import { removeDesktopPlugin } from './desktop-plugin-remove'
 import {
   DESKTOP_PLUGINS_DIR,
   ensureDir,
-  migrateProfileScopedDesktopPlugins,
   reconcileDesktopHalvesReport,
   reconcileUnifiedDesktopHalves
 } from './desktop-plugins-root'
@@ -115,14 +114,7 @@ export function registerFsIpc({
     }
   })
 
-  // The LOCAL Desktop runtime-plugin root: `<HERMES_HOME>/desktop-plugins`,
-  // resolved from the main-process HERMES_HOME (see resolveHermesHome) — NOT from
-  // the connected backend. A remote backend reports its own `hermes_home` over
-  // the gateway, which is a path on the REMOTE box; deriving the plugin dir from
-  // it yields `undefined/desktop-plugins` (or a non-existent remote path) and the
-  // on-disk plugin door silently breaks (#66899). Electron owns this resolution
-  // so it stays valid in every connection mode. Created on demand, like openDir.
-  // Profile-scoped roots (agent plugins, logs) live under profiles/<name>/ for a
+  // Profile-scoped agent roots (logs) live under profiles/<name>/ for a
   // named Desktop profile — they belong to THAT agent. 'default'/unset pins the
   // global root. The owner is renderer-supplied (in remote mode it comes from
   // the remote backend's session record), so only a profile NAME may reach the
@@ -141,11 +133,12 @@ export function registerFsIpc({
   // The standalone desktop-plugin root is APP-level, never profile-scoped: a
   // desktop plugin extends this app, not an agent, so it must stay installed
   // and loaded whichever profile / gateway / machine the window is pointed at.
-  // Earlier builds scoped it per profile; anything left in those folders is
-  // moved up once so it does not silently vanish on a profile switch.
+  // External agent packages may contribute desktop halves, but are read-only
+  // sources: the app never moves legacy folders out of an agent installation.
+  const desktopPluginsPath = path.join(app.getPath('userData'), DESKTOP_PLUGINS_DIR)
+
   async function desktopPluginsRoot(): Promise<string> {
-    const root = await ensureDir(path.join(hermesHome, DESKTOP_PLUGINS_DIR))
-    await migrateProfileScopedDesktopPlugins(hermesHome, root)
+    const root = await ensureDir(desktopPluginsPath)
     await reconcileUnifiedDesktopHalves(hermesHome, root)
 
     return root
@@ -158,7 +151,7 @@ export function registerFsIpc({
   // package without waiting for the next root resolution. Answers which
   // packages' halves it refused too, so the install dialog can say so.
   ipcMain.handle('hermes:fs:reconcileDesktopPlugins', async () => {
-    const root = await ensureDir(path.join(hermesHome, DESKTOP_PLUGINS_DIR))
+    const root = await ensureDir(desktopPluginsPath)
 
     return reconcileDesktopHalvesReport(hermesHome, root)
   })
@@ -201,7 +194,7 @@ export function registerFsIpc({
   // Uninstall a standalone desktop plugin by FOLDER NAME under the app-level
   // root. The renderer never passes a path; containment is re-checked inside.
   ipcMain.handle('hermes:plugin:removeDesktop', async (_event, payload) =>
-    removeDesktopPlugin(path.join(hermesHome, DESKTOP_PLUGINS_DIR), payload?.name)
+    removeDesktopPlugin(desktopPluginsPath, payload?.name)
   )
 
   // Rename a file/folder in place. The renderer passes the existing path + a new

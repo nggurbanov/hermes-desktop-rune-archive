@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // Emit the Desktop catalog's key set for language-pack validation.
 //
-// `hermes plugins validate` checks a pack's `<lang>.desktop.yaml` keys against
-// `locales/_keys.desktop.json` (repo root, committed). This script derives that
+// Language-pack tools can check a pack's `<lang>.desktop.yaml` keys against
+// `apps/desktop/locales/_keys.desktop.json` (committed). This script derives that
 // file from `src/i18n/en.ts` — every leaf's dotted path, sorted; function-
 // valued entries are keys too (a pack overrides them with a positional
 // `{0}`/`{1}` string). Run via `npm run i18n:keys` and commit the result (`--check` verifies);
-// the build never writes it — a dirty checkout would break `hermes update`.
+// the build never writes it, keeping source checkout builds reproducible.
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -73,7 +73,7 @@ async function loadEnglishCatalog(source) {
 
 export async function emitDesktopKeys({ source = repoRoot, out, check = false } = {}) {
   source = resolve(source)
-  out = resolve(out ?? join(source, 'locales', `_keys.${SURFACE}.json`))
+  out = resolve(out ?? join(source, 'apps/desktop/locales', `_keys.${SURFACE}.json`))
   const en = await loadEnglishCatalog(source)
   const rendered = renderKeysFile(flattenKeys(en))
   if (check) {

@@ -32,7 +32,6 @@ vi.mock('./desktop-plugin-install', () => ({ installDesktopPluginFromGit: vi.fn(
 vi.mock('./desktop-plugins-root', () => ({
   DESKTOP_PLUGINS_DIR: 'desktop-plugins',
   ensureDir: vi.fn(async (dir: string) => dir),
-  migrateProfileScopedDesktopPlugins: vi.fn(),
   reconcileUnifiedDesktopHalves: vi.fn()
 }))
 

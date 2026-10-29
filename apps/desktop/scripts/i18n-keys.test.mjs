@@ -16,7 +16,7 @@ test('flattenKeys lists every leaf as a sorted dotted path, functions included, 
 })
 
 test('the committed locales/_keys.desktop.json matches the English catalog (run `npm run i18n:keys`)', async () => {
-  const out = join(repoRoot, 'locales', `_keys.${SURFACE}.json`)
+  const out = join(repoRoot, 'apps/desktop/locales', `_keys.${SURFACE}.json`)
   const committed = JSON.parse(readFileSync(out, 'utf8'))
   assert.equal(committed.surface, SURFACE)
   assert.ok(committed.keys.includes('common.save'))

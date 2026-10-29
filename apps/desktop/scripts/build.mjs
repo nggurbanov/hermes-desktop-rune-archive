@@ -21,8 +21,8 @@ export function buildSourceDesktop({ source = repoRoot, icons, run = execFileSyn
     // prepared pixels; do not create another Python environment to redraw them.
     cpSync(join(icons, 'apps/desktop/assets'), join(app, 'assets'), { recursive: true })
   }
-  // locales/_keys.desktop.json is a committed artifact (i18n-keys.test.mjs pins it to en.ts);
-  // the build must not write into the checkout — a dirty tree breaks `hermes update`.
+  // apps/desktop/locales/_keys.desktop.json is committed and checked against en.ts;
+  // compiling must not rewrite source artifacts.
   // The native inputs carry their own receipt (inputs identity + tree digest): restaging the
   // same sources recompiles two universal helpers for identical bytes on every update.
   const nativeDeps = join(app, 'build/native-deps')

@@ -33,7 +33,7 @@ export interface RendererLoadErrorDetails {
   url?: string
   /** Module files index.html declares but that are missing on disk. */
   missingAssets?: string[]
-  /** Repair command hint, e.g. `hermes desktop --force-build`. */
+  /** Repair instructions for the standalone client installation. */
   repairHint?: string
   /**
    * URL to navigate to when the user clicks Reload. On a data: page
@@ -107,7 +107,7 @@ export function buildRendererLoadErrorPage(details: RendererLoadErrorDetails = {
   const title = escapeHtml(details.title || 'Hermes couldn\u2019t start the desktop UI')
   const description = escapeHtml(details.errorDescription || 'The desktop renderer failed to load.')
   const url = details.url ? `<p><code>${escapeHtml(details.url)}</code></p>` : ''
-  const repair = details.repairHint ? `<p>Repair with: <code>hermes desktop --force-build</code></p>` : ''
+  const repair = details.repairHint ? `<p>${escapeHtml(details.repairHint)}</p>` : ''
 
   return `<!doctype html>
 <html lang="en">
@@ -165,8 +165,8 @@ export function buildRendererLoadErrorPage(details: RendererLoadErrorDetails = {
   ${url}
   ${missingAssetsList(details.missingAssets)}
   ${repair}
-  <p>If this keeps happening, check <code>logs/desktop.log</code> and try
-  <code>hermes desktop --force-build</code>, then restart the app.</p>
+  <p>If this keeps happening, check <code>logs/desktop.log</code> in the app's data directory.
+  Reinstall Hermes Desktop Rune, or run <code>npm run build</code> in its source checkout.</p>
   ${reloadButtonJs(details)}
 </main>
 </body>

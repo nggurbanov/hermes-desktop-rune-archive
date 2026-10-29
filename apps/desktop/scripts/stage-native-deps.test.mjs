@@ -704,7 +704,7 @@ test('a half-installed get-windows dir is found and named in a repair hint', () 
       console.warn = origWarn
     }
     assert.equal(warnings.length, 1)
-    assert.match(warnings[0], /hermes desktop --force-build/)
+    assert.match(warnings[0], /npm ci/)
     assert.ok(warnings[0].includes(join(tmp, 'node_modules', 'get-windows')))
 
     fs.rmSync(join(tmp, 'node_modules'), { recursive: true, force: true })

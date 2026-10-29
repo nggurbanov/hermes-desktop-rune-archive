@@ -20,7 +20,7 @@ remote resolution and exposure lifecycle; a remote failure must never start a lo
 
 The gateway `gateway ensure` attaches to is **one multiplexing owner per home**: `HERMES_DESKTOP=1`
 is not how the app finds it, and no per-profile `hermes serve --port 0` child is spawned. One
-gateway process serves sessions from several homes (`tui_gateway/AGENTS.md` § Profile scope); a
+gateway process serves sessions from several homes (see `../docs/canonical-gateway-protocol.md`); a
 served secondary answers through the multiplexer's control socket (`GatewayEndpoint.multiplex_home`).
 Remote connections (SSH, URL+token, Cloud) likewise reach a backend that may serve several profiles
 from one process. Every lifecycle/status/settings REST call carries `?profile=` (or the `profile`
@@ -39,8 +39,8 @@ as CLI, dropping launch options, or falling back to an independent local serve o
   and their desktop surfaces) + the block-list. A command's desktop disposition (terminal-only /
   messaging-only / settings-owned / advanced / hidden) is authored ONCE, as `desktop=` on its
   `CommandDef` in `hermes_cli/commands.py`; the live `commands.catalog` carries it, and
-  `src/lib/desktop-slash-registry.json` (regenerate with `scripts/dump_desktop_slash_registry.py`;
-  `tests/hermes_cli/test_desktop_slash_registry.py` + the vitest file fail on drift) is the offline
+  `src/lib/desktop-slash-registry.json` (a retained upstream compatibility snapshot;
+  see `desktop-baseline.json` at the repository root) is the offline
   fallback. Only names the Python registry has never heard of (`/density`, `/details`, `/logs`,
   `/mouse` — Ink-local; `/pets`) live in `TS_ONLY_NO_DESKTOP_SURFACE`. `isDesktopSlashCommand(name)`
   gates **execution** (true
@@ -93,8 +93,8 @@ by title); roster preview, activity signals, and the `/new`→`/compact` guard a
 identity and click identity are the same row by construction. Contract tests:
 in `src/plugins/hermes-bots/`: `canonical-chat-registry.test.ts` (tripwire: the open path never
 reads/writes a stored pointer), `canonical-chat-creation.test.ts`, `canonical-chat-adopt-on-conflict.test.ts`,
-`bot-row-opens-canonical-chat.test.ts`, `hide-bot-chats.test.ts`; plus repo-root
-`tests/tui_gateway/test_profiles_list_canonical_session.py`.
+`bot-row-opens-canonical-chat.test.ts`, `hide-bot-chats.test.ts`.
+Server-side contracts belong to the separately installed Hermes runtime.
 
 ## Free tier surfaces (`src/store/free-tier*.ts`, Billing, statusbar chip, onboarding ready screen)
 

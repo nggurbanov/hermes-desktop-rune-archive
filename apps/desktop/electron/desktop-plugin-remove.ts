@@ -1,5 +1,5 @@
 // Uninstall of a STANDALONE desktop plugin: delete one folder directly under
-// the app-level `<HERMES_HOME>/desktop-plugins` root. The renderer names the
+// the app-level `<userData>/desktop-plugins` root. The renderer names the
 // folder, never a path — containment is by construction (single segment) and
 // re-checked after resolution so nothing outside the root can be addressed.
 //

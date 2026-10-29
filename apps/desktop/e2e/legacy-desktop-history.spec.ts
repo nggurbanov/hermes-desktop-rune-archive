@@ -6,6 +6,7 @@ import { writeEnvFile, writeMockProviderConfig } from './support/mock-provider-c
 import { startMockServer } from './support/mock-server'
 
 import { buildAppEnv, createSandbox, launchDesktop } from './fixtures'
+import { externalPythonRuntime } from './external-runtime'
 import { expect, test } from './test'
 
 // Pre-cutover Desktop rows as main writes them (source='desktop', profile stamped, optional
@@ -23,8 +24,7 @@ test('pre-cutover Desktop conversations remain visible and open across profiles'
   test.setTimeout(300_000)
   const sandbox = createSandbox('legacy-desktop-history')
   const mock = await startMockServer()
-  const python = process.env.HERMES_DESKTOP_PYTHON!
-  const root = path.resolve(import.meta.dirname, '../../..')
+  const { python, root } = externalPythonRuntime()
   const env = buildAppEnv(sandbox, { HERMES_DESKTOP_PYTHON: python, TIRITH_ENABLED: 'false' })
   const multiplex = process.env.E2E_MULTIPLEX === '1'
   writeMockProviderConfig(sandbox.hermesHome, mock.url, undefined, multiplex ? 'gateway:\n  multiplex_profiles: true\n' : undefined)

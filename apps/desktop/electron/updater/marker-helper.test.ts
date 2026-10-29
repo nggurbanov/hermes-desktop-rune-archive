@@ -7,7 +7,6 @@
 
 import fs from 'fs'
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
 import os from 'os'
 import path from 'path'
 
@@ -231,49 +230,52 @@ test('the Windows command line: powershell -File windows.ps1 -MarkerOp ... (hidd
   ])
 })
 
-// Review K132354 (helper always spawned): with no marker the gate skips the
-// helper only when the script would answer "not held" for a missing checkout
-// lock, so the TS path must be the script's own.
-describe.skipIf(process.platform === 'win32')('checkout lock path mirrors marker.sh', () => {
-  const markerSh = path.resolve(__dirname, '../../../../scripts/desktop-update/marker.sh')
-
-  const scriptPath = (root: string) =>
-    execFileSync('bash', ['-c', 'source "$0"; checkout_lock_path', markerSh], {
-      env: { ...process.env, INSTALL_ROOT: root },
-      encoding: 'utf8'
-    }).trim()
-
-  const layouts: Record<string, (root: string, other: string) => void> = {
-    'no .git (ZIP install)': () => {},
-    '.git directory': root => fs.mkdirSync(path.join(root, '.git')),
-    'linked worktree: BOM, CRLF, relative gitdir, relative commondir': root => {
-      fs.mkdirSync(path.join(root, 'wt', 'admin'), { recursive: true })
-      fs.writeFileSync(path.join(root, '.git'), '\uFEFFgitdir: wt/admin \r\n')
-      fs.writeFileSync(path.join(root, 'wt', 'admin', 'commondir'), '../common\n')
+// Existing agent installations may be linked worktrees; the shared git lock
+// must be resolved before deciding whether it is safe to bypass the helper.
+describe.skipIf(process.platform === 'win32')('checkout lock layout', () => {
+  const layouts: Array<{ name: string; arrange: (root: string, other: string) => void; lock: (root: string, other: string) => string }> = [
+    { name: 'ZIP install', arrange: () => {}, lock: root => path.join(root, '.hermes-update.lock') },
+    { name: 'git checkout', arrange: root => fs.mkdirSync(path.join(root, '.git')), lock: root => path.join(root, '.git/hermes-update.lock') },
+    {
+      name: 'linked worktree with BOM, CRLF and relative common dir',
+      arrange: root => {
+        fs.mkdirSync(path.join(root, 'wt/admin'), { recursive: true })
+        fs.writeFileSync(path.join(root, '.git'), '\uFEFFgitdir: wt/admin \r\n')
+        fs.writeFileSync(path.join(root, 'wt/admin/commondir'), '../common\n')
+      },
+      lock: root => path.join(root, 'wt/common/hermes-update.lock')
     },
-    'absolute gitdir and commondir': (root, other) => {
-      fs.writeFileSync(path.join(root, '.git'), `gitdir:${other}\n`)
-      fs.writeFileSync(path.join(other, 'commondir'), `\t${path.join(other, 'main')}\n`)
+    {
+      name: 'linked worktree with absolute common dir',
+      arrange: (root, other) => {
+        fs.writeFileSync(path.join(root, '.git'), `gitdir:${other}\n`)
+        fs.writeFileSync(path.join(other, 'commondir'), `\t${path.join(other, 'main')}\n`)
+      },
+      lock: (_root, other) => path.join(other, 'main/hermes-update.lock')
     },
-    '.git file that is not a gitdir pointer': root => fs.writeFileSync(path.join(root, '.git'), 'GITDIR: x\n'),
-    'empty .git file': root => fs.writeFileSync(path.join(root, '.git'), ''),
-    'empty commondir': root => {
-      fs.mkdirSync(path.join(root, '.git'))
-      fs.writeFileSync(path.join(root, '.git', 'commondir'), '\n')
+    { name: 'non-pointer .git file', arrange: root => fs.writeFileSync(path.join(root, '.git'), 'GITDIR: x\n'), lock: root => path.join(root, '.hermes-update.lock') },
+    { name: 'empty .git file', arrange: root => fs.writeFileSync(path.join(root, '.git'), ''), lock: root => path.join(root, '.hermes-update.lock') },
+    {
+      name: 'empty common dir file',
+      arrange: root => {
+        fs.mkdirSync(path.join(root, '.git'))
+        fs.writeFileSync(path.join(root, '.git/commondir'), '\n')
+      },
+      lock: root => path.join(root, '.git/hermes-update.lock')
     }
-  }
+  ]
 
-  test.each(Object.keys(layouts))('%s', name => {
+  test.each(layouts)('$name', ({ arrange, lock }) => {
     const root = scratchRoot('lock-path')
     const other = scratchRoot('lock-path-other')
-    layouts[name](root, other)
+    arrange(root, other)
+    const expected = lock(root, other)
 
-    const expected = scriptPath(root)
     assert.equal(path.resolve(checkoutLockPath(root, false)), path.resolve(expected))
-    assert.equal(checkoutLockMayBeHeld(root, false), false, 'no lock file: the script answers not held')
+    assert.equal(checkoutLockMayBeHeld(root, false), false)
     fs.mkdirSync(path.dirname(expected), { recursive: true })
     fs.writeFileSync(expected, '')
-    assert.equal(checkoutLockMayBeHeld(root, false), true, 'a lock file: only the script can tell')
+    assert.equal(checkoutLockMayBeHeld(root, false), true)
   })
 
   test('an unreadable .git pointer asks the script', () => {

@@ -38,6 +38,8 @@ be selected as its own agent runtime.
 Hermes owns agent execution, profiles, sessions, memory, and tools. Closing this
 client disconnects its viewer without stopping the canonical local gateway.
 SSH connections retain the existing dedicated-server ownership behavior.
+See [the runtime contract](apps/desktop/docs/runtime-compatibility.md) for
+protocol requirements, state ownership and verification limits.
 
 ## Packaging
 
@@ -62,15 +64,27 @@ Generated gateway TypeScript/OpenRPC and slash-command fallback definitions are
 retained client compatibility snapshots; ordinary builds never regenerate them
 from Python server modules.
 
-Build/runtime/packaging separation is in progress. Backend directories remain
-until independent builds and external local, URL, and SSH acceptance pass. Their
-presence is temporary and does not make them desktop build inputs. Do not run the
-upstream agent installer or updater to build this client.
+The repository contains only the desktop client, its shared gateway client,
+JavaScript build tools and desktop documentation/tests. Python/server sources,
+the upstream installer, TUI, dashboard, website and legacy release CI are removed.
 
-The default Vitest lane is client-only. Python/server parity checks use the
-explicit `npm run test:external` lane and require a selected external installation.
-The inherited installer/update E2E lane and shared agent-home plugin/preference
-ownership still need review before backend deletion. See
-[the E2E guide](apps/desktop/e2e/README.md) for external-runtime testing.
+Preferences, desktop runtime plugins and client logs live under this app's own
+Electron userData directory. Locally installed unified agent packages may supply
+desktop plugin halves through read-only source scans; generated copies belong to
+the client. Starting the client never moves plugins out of an agent home.
+
+The default Vitest lane is client-only. Optional Python/server compatibility
+checks use `npm run test:external` and a selected external installation. See
+[the E2E guide](apps/desktop/e2e/README.md). The old bundled-agent installation and
+self-update tests were removed with those features; standalone startup, updater
+policy, connection and packaging contracts remain covered.
+
+Local attachment to Chikibryak (Hermes 0.22.5) was verified on Linux. URL/SSH
+contract tests use controlled fixtures; live remote-host acceptance remains
+unverified. The user waived live full-chat-cycle acceptance for extraction.
+Clean-source installation, typechecks, all 16,391 client tests (30 platform
+skips), Linux unpacked packaging and actual no-agent startup passed on
+2026-10-29. Windows and macOS packaging remain unverified. Rune implementation
+has not begun.
 
 Upstream MIT copyright and license notices are preserved in [LICENSE](LICENSE).

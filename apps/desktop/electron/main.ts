@@ -1295,10 +1295,8 @@ const PROFILE_NAME_RE = DESKTOP_PROFILE_NAME_RE
 // tracks main. User can also override at runtime via
 // hermesDesktop.updates.setBranch().
 const DEFAULT_UPDATE_BRANCH = 'main'
-// desktop.log lives under HERMES_HOME/logs/ so it sits next to agent.log,
-// errors.log, gateway.log produced by hermes_logging.setup_logging — one log
-// directory per user, regardless of which UI surface produced the line.
-const DESKTOP_LOG_PATH = path.join(HERMES_HOME, 'logs', 'desktop.log')
+// Client diagnostics belong to this app, including when no agent is installed.
+const DESKTOP_LOG_PATH = path.join(app.getPath('userData'), 'logs', 'desktop.log')
 const DESKTOP_LOG_FLUSH_MS = 120
 const DESKTOP_LOG_BUFFER_MAX_CHARS = 64 * 1024
 // Bound desktop.log on disk. It is an append-only forensic log, so a boot loop
@@ -4231,7 +4229,7 @@ function resolveRendererIndexWithMissing(): { index: string; missing: string[] }
     rememberLog(
       `[renderer] every renderer bundle is incomplete (${present.join(', ')}). ` +
         `The last update replaced the app while its files were locked. ` +
-        `Repair with: hermes desktop --force-build`
+        `Reinstall Hermes Desktop Rune, or run npm run build in its source checkout.`
     )
 
     // present[0]'s own list, captured on the first loop iteration — never the
@@ -4245,7 +4243,7 @@ function resolveRendererIndexWithMissing(): { index: string; missing: string[] }
   rememberLog(
     `[renderer] index.html not found — the desktop app was packaged without a ` +
       `renderer bundle. Tried: ${candidates.join(', ')}. ` +
-      `Rebuild with: hermes desktop --force-build`
+      `Reinstall Hermes Desktop Rune, or run npm run build in its source checkout.`
   )
 
   return { index: candidates[0], missing: [] }
@@ -13179,7 +13177,7 @@ function createWindow() {
             errorCode: details?.exitCode,
             errorDescription:
               'The desktop renderer crashed repeatedly (Windows STATUS_STACK_BUFFER_OVERRUN / 0xC0000409). GPU fallback could not recover the window.',
-            repairHint: 'hermes desktop --force-build',
+            repairHint: 'Reinstall Hermes Desktop Rune, or run npm run build in its source checkout.',
             reloadUrl: DEV_SERVER || pathToFileURL(resolveRendererIndex()).toString()
           })
 
@@ -13236,7 +13234,7 @@ function createWindow() {
           errorCode: details?.errorCode,
           url: details?.url,
           errorDescription: 'The desktop renderer failed to load repeatedly after the update.',
-          repairHint: 'hermes desktop --force-build',
+          repairHint: 'Reinstall Hermes Desktop Rune, or run npm run build in its source checkout.',
           reloadUrl: DEV_SERVER || pathToFileURL(resolveRendererIndex()).toString()
         })
       },
@@ -13297,7 +13295,7 @@ function createWindow() {
       errorCode: 'ERR_FILE_NOT_FOUND',
       errorDescription: `The desktop renderer bundle is incomplete after the last update (${tornAssets.length} missing file(s)).`,
       missingAssets: tornAssets,
-      repairHint: 'hermes desktop --force-build',
+      repairHint: 'Reinstall Hermes Desktop Rune, or run npm run build in its source checkout.',
       reloadUrl: pathToFileURL(rendererIndex).toString()
     })
   } else {
@@ -16308,9 +16306,9 @@ ipcMain.on('hermes:logs:renderer-error', (_event, report) => {
 })
 
 // Pre-paint payloads the preload reads synchronously: the local skin, and this
-// machine's shared UI preferences (#145213) — see local-skin.ts, ui-preferences.ts.
+// client's UI preferences — see local-skin.ts, ui-preferences.ts.
 registerLocalSkinIpc(ipcMain, HERMES_HOME, id => windowConnectionRoutes.get(id)?.profile, primaryProfileKey)
-registerMachineUiPreferences(HERMES_HOME)
+registerMachineUiPreferences()
 
 // Renderer error toasts (notifyError): the toast shows the summarized copy,
 // so the caller posts the full error here for desktop.log. Fire-and-forget,

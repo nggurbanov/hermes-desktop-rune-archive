@@ -5,8 +5,6 @@ import { describe, expect, it } from 'vitest'
 
 import { buildStampPayload } from '../../scripts/write-build-stamp.mjs'
 
-import { buildManualUpdateCommand } from './checkout'
-
 import { resolveUpdaterMechanism } from './index'
 
 describe('build stamp → update ownership', () => {
@@ -28,17 +26,5 @@ describe('build stamp → update ownership', () => {
     expect(resolveUpdaterMechanism({ platform, updateMechanism: undefined })).toBe(
       platform === 'win32' ? 'windows-handoff' : 'posix-handoff'
     )
-  })
-})
-
-describe('buildManualUpdateCommand', () => {
-  it('bare command on main and detached HEAD', () => {
-    expect(buildManualUpdateCommand('main')).toBe('hermes update')
-    expect(buildManualUpdateCommand('HEAD')).toBe('hermes update')
-    expect(buildManualUpdateCommand(null)).toBe('hermes update')
-  })
-
-  it('branch-pinned for non-main checkouts', () => {
-    expect(buildManualUpdateCommand('ethie/pm')).toBe('hermes update --branch ethie/pm')
   })
 })

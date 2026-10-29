@@ -1,20 +1,6 @@
-// The standalone desktop-plugin root (`<HERMES_HOME>/desktop-plugins`) and the
-// one-time migrations that make it the ONLY place desktop code loads from.
-//
-// A desktop plugin extends THIS APP — panes, palette commands, themes — not an
-// agent. Profiles are agents; anything discovered through a profile's folder
-// appeared and disappeared with the active profile, which read as "my plugin
-// vanished" every time the user switched. Bundled plugins never had that
-// problem (they ship in the app), which hid the bug for disk installs.
-//
-// Two profile-shaped sources are lifted into the app root:
-//   1. `profiles/<name>/desktop-plugins/<id>` — earlier builds scoped the
-//      standalone root per profile.
-//   2. `plugins/<name>/desktop/plugin.js` (default home AND every profile) —
-//      the desktop half of a unified agent+desktop package. The agent half
-//      stays where it is (it runs in that profile's gateway); the desktop half
-//      is COPIED out as `<root>/<name>/` with a `.hermes-package.json` marker
-//      so the UI can pair it back to the agent row and re-copy on update.
+// Desktop plugins live in Electron userData, independently of agent profiles.
+// Unified packages contribute desktop halves through read-only source scans;
+// materialized copies and their provenance markers belong only to this app.
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -140,50 +126,6 @@ export async function localHomes(hermesHome: string): Promise<string[]> {
   const profiles = await listDirs(path.join(hermesHome, 'profiles'))
 
   return [hermesHome, ...profiles.map(name => path.join(hermesHome, 'profiles', name))]
-}
-
-/** Move every `profiles/<name>/desktop-plugins/<id>` folder into the app-level
- *  root. A plugin already present at the root wins (folders are keyed by plugin
- *  id, so a duplicate is the same plugin installed twice); the profile copy is
- *  left in place for the user to delete rather than destroyed. Emptied profile
- *  roots are removed so the migration is a no-op on the next launch. */
-export function migrateProfileScopedDesktopPlugins(hermesHome: string, appRoot: string): Promise<string[]> {
-  return withDesktopPluginsRoot(appRoot, () => migrateProfileScoped(hermesHome, appRoot))
-}
-
-async function migrateProfileScoped(hermesHome: string, appRoot: string): Promise<string[]> {
-  const moved: string[] = []
-
-  for (const profile of await listDirs(path.join(hermesHome, 'profiles'))) {
-    const scopedRoot = path.join(hermesHome, 'profiles', profile, DESKTOP_PLUGINS_DIR)
-
-    for (const entry of await listDirs(scopedRoot)) {
-      const from = path.join(scopedRoot, entry)
-      const to = path.join(appRoot, entry)
-
-      if (fs.existsSync(to)) {
-        continue
-      }
-
-      try {
-        await fs.promises.rename(from, to)
-        moved.push(to)
-      } catch {
-        // Cross-device or permission failure: leave the folder; the user can
-        // still reach it through the profile directory.
-      }
-    }
-
-    try {
-      if ((await fs.promises.readdir(scopedRoot)).length === 0) {
-        await fs.promises.rmdir(scopedRoot)
-      }
-    } catch {
-      // Not empty or already gone — either is fine.
-    }
-  }
-
-  return moved
 }
 
 async function readMarker(dir: string): Promise<DesktopHalfMarker | null> {

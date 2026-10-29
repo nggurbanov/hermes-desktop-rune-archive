@@ -7,15 +7,12 @@ import { expect, test } from 'vitest'
 import { HermesGateway } from './client'
 
 // The canonical dispatcher refuses any key outside CanonicalBotDeliverParams (4001
-// invalid_params, handler never called). Read that closed set from the Python contract so the
-// fixture owner refuses exactly what the real one does.
+// invalid_params, handler never called). Use the client's pinned wire contract
+// so the fixture owner checks the same closed set without an agent source tree.
 function canonicalDeliverKeys(): Set<string> {
-  const source = readFileSync(join(process.cwd(), '..', '..', 'tui_gateway/contracts/canonical_projections.py'), 'utf8')
-  const body = source.match(/class CanonicalBotDeliverParams\(Params\):\n((?: {4}\w+:.*\n)+)/)
+  const contract = JSON.parse(readFileSync(join(process.cwd(), '..', 'shared', 'src', 'gateway-contract.openrpc.json'), 'utf8'))
 
-  expect(body, 'CanonicalBotDeliverParams must exist in canonical_projections.py').toBeTruthy()
-
-  return new Set([...body![1].matchAll(/^ {4}(\w+):/gm)].map(match => match[1]))
+  return new Set(Object.keys(contract.components.schemas.CanonicalBotDeliverParams.properties))
 }
 
 test('a Bot Relay delivery on a canonical dial carries only keys the owner admits, sender as a bot author', async () => {

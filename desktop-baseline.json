@@ -24,21 +24,30 @@
     "profiles and canonical Bot Chat isolation",
     "closing app does not stop canonical gateway"
   ],
-  "status": "extraction-in-progress",
+  "status": "standalone-electron-extracted",
   "checkpoint": {
-    "phase": "standalone-electron-foundation",
+    "phase": "desktop-only-extraction",
     "verified": [
       "client-only workspace install",
       "desktop-only source export build and typecheck",
       "Linux unpacked package without agent payload",
       "no-local-agent Electron startup and remote setup",
-      "external discovery and standalone packaging unit contracts"
+      "external discovery and standalone packaging unit contracts",
+      "local native attach to Chikibryak Hermes 0.22.5; gateway instance survives close",
+      "desktop-owned preferences, plugin output and logs isolated from agent home",
+      "URL/SSH remote failure and authentication contracts with controlled fixtures",
+      "non-client tracked sources and legacy agent CI removed",
+      "clean desktop-only source npm ci, complete TypeScript checks and Linux unpacked packaging",
+      "full client suite: 1862 files / 16391 tests passed; 4 files / 30 platform skips",
+      "actual packaged Electron no-agent startup and existing-connection setup"
     ],
     "pending": [
-      "compatible external Hermes local, URL and SSH acceptance",
-      "Windows and macOS native package verification",
-      "remaining agent-home preference/plugin ownership review",
-      "obsolete server tree and legacy CI removal"
-    ]
+      "live remote URL and SSH host acceptance",
+      "Windows and macOS native package verification"
+    ],
+    "waived": [
+      "live full-chat-cycle acceptance, explicitly waived by user on 2026-10-29"
+    ],
+    "verifiedAt": "2026-10-29"
   }
 }

@@ -3,7 +3,7 @@
 // Adds a fixed Vite port and CDP (9344) so the run can be driven and read
 // from outside. When you only want to click through it yourself:
 //   D=$(mktemp -d) && env -u HERMES_SHARED_AUTH_DIR \
-//     HERMES_HOME="$D/home" HERMES_DESKTOP_USER_DATA_DIR="$D/userdata" hermes desktop
+//     HERMES_HOME="$D/home" HERMES_DESKTOP_USER_DATA_DIR="$D/userdata" npm run dev
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -16,6 +16,9 @@ const root = path.resolve(desktop, '../..')
 const sandbox = process.argv[2] ? path.resolve(process.argv[2]) : fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-connectors-'))
 const port = 5194
 const url = `http://127.0.0.1:${port}`
+const runtimeRoot = process.env.HERMES_DESKTOP_HERMES_ROOT
+if (!runtimeRoot || !fs.existsSync(path.join(runtimeRoot, 'hermes_cli/main.py'))) throw new Error('Set HERMES_DESKTOP_HERMES_ROOT to an external Hermes source installation.')
+if (path.resolve(runtimeRoot) === root) throw new Error('The desktop checkout cannot be its own agent runtime.')
 const python = process.env.HERMES_DESKTOP_PYTHON
 if (!python || !fs.existsSync(python)) throw new Error('Set HERMES_DESKTOP_PYTHON to your installed Hermes Python executable.')
 if (!fs.existsSync(path.join(desktop, 'dist/electron-main.mjs'))) throw new Error('Run node scripts/bundle-electron-main.mjs --dev first.')
@@ -29,7 +32,7 @@ const env = Object.fromEntries(['PATH', 'TMPDIR', 'LANG', 'SHELL'].filter(key =>
 Object.assign(env, {
   HOME: sandbox, HERMES_HOME: path.join(sandbox, '.hermes'), HERMES_SHARED_AUTH_DIR: path.join(sandbox, '.hermes/shared'),
   HERMES_DESKTOP_USER_DATA_DIR: path.join(sandbox, 'electron'), HERMES_DESKTOP_CWD: path.join(sandbox, 'work'),
-  HERMES_DESKTOP_HERMES_ROOT: root, HERMES_DESKTOP_PYTHON: python,
+  HERMES_DESKTOP_HERMES_ROOT: path.resolve(runtimeRoot), HERMES_DESKTOP_PYTHON: python,
   HERMES_DESKTOP_IGNORE_EXISTING: '1', HERMES_DESKTOP_APP_NAME: 'Hermes Connector Rehearsal',
   HERMES_DESKTOP_DEV_SERVER: url, HERMES_DESKTOP_CDP_PORT: '9344'
 })

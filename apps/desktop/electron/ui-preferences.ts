@@ -1,11 +1,8 @@
-// Machine-level UI preferences (#145213): one JSON document beside the ROOT
-// Hermes home, shared by native Desktop (this module, over the typed preload
-// capability) and every browser that opens this machine's Webapp (the Python
-// twin `hermes_cli/ui_preferences.py`, over `/api/ui-preferences`). Not per
-// profile, not per gateway connection: a Desktop connected to a remote gateway
-// still reads and writes ITS OWN machine's file.
+// Client UI preferences: one JSON document in Electron userData, shared by all
+// windows of this app through the typed preload capability. Not per profile
+// or gateway connection, and never shared with the external agent's Webapp.
 //
-// On-disk contract, kept in lockstep with the Python writer:
+// On-disk contract:
 //   { "version": 1, "generation": <str>, "revision": <int>, "values": { <key>: <string> } }
 // A write merges per key under the `<store>.lock` directory lock (mkdir is
 // atomic on every OS and in Python), bumps `revision`, and lands by temp file +
@@ -42,16 +39,14 @@ export interface UiPreferencesWrite {
   values: Record<string, null | string>
 }
 
-export const uiPreferencesPath = (hermesHome: string) => path.join(hermesHome, UI_PREFERENCES_FILE)
+export const uiPreferencesPath = (storeRoot: string) => path.join(storeRoot, UI_PREFERENCES_FILE)
 
-/** The store's directory for main's root home, through symlinks, as the Python
- *  writer's `store_path()` resolves it: a symlinked root or profile directory
- *  must not split the machine into two stores. */
-export function uiPreferencesRoot(hermesHome: string): string {
+/** Resolve symlinked client directories to one preferences store. */
+export function uiPreferencesRoot(storeRoot: string): string {
   try {
-    return fs.realpathSync.native(hermesHome)
+    return fs.realpathSync.native(storeRoot)
   } catch {
-    return path.resolve(hermesHome)
+    return path.resolve(storeRoot)
   }
 }
 
@@ -300,7 +295,7 @@ interface IpcMainLike {
 
 export interface UiPreferencesIpcDeps {
   ipcMain: IpcMainLike
-  hermesHome: string
+  userDataDir: string
   /** Every app window's webContents; changes are pushed to all of them. */
   broadcast: (snapshot: UiPreferencesSnapshot) => void
 }
@@ -308,11 +303,11 @@ export interface UiPreferencesIpcDeps {
 /**
  * `hermes:ui-preferences:*` — the renderer's only door to the store: a
  * synchronous first-paint snapshot, a read, and a validated per-key write. A
- * write made here, or by the Webapp's Python process on this machine (seen by
- * a cheap stat poll), is pushed to every window so open ones follow live.
+ * write made here, or by another app instance (seen by a cheap stat poll), is
+ * pushed to every window so open ones follow live.
  */
-export function registerUiPreferencesIpc({ ipcMain, hermesHome, broadcast }: UiPreferencesIpcDeps): () => void {
-  const file = uiPreferencesPath(uiPreferencesRoot(hermesHome))
+export function registerUiPreferencesIpc({ ipcMain, userDataDir, broadcast }: UiPreferencesIpcDeps): () => void {
+  const file = uiPreferencesPath(uiPreferencesRoot(userDataDir))
 
   const stamp = (snapshot: null | UiPreferencesSnapshot) =>
     snapshot ? `${snapshot.generation ?? ''}:${snapshot.revision}:${snapshot.exists}` : null
