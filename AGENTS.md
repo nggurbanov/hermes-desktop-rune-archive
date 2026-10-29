@@ -3,12 +3,14 @@
 This repository owns a standalone desktop client. It does not contain or maintain
 Hermes agent execution, the Python package manager, messaging gateway, CLI, TUI,
 website, or the upstream installer. The retained Electron interface is the parity
-baseline for the future Rune implementation; redesign is a later phase.
+baseline for the native Rune port. Preserve placements and behavior while using
+the user-selected OpenCode Rune theme and components. Structural redesign is later.
 
 ## Layout and commands
 
 - `apps/desktop`: Electron main/preload, React UI, native helpers and client tests.
 - `apps/shared`: gateway client, types and frozen protocol compatibility artifacts.
+- `apps/rune`: native Rust/Rune viewer, starting with real read-only gateway access.
 - `scripts/build`: JavaScript compilation, freshness and Node/Electron input helpers.
 - `desktop-baseline.json`: upstream snapshot provenance and migration status.
 
@@ -43,3 +45,14 @@ backend source text or freeze incidental implementation details in tests. Never
 write tests to a real Hermes home or use live provider credentials implicitly.
 Preserve MIT attribution and third-party notices. Do not contact the user through
 Hermes/Telegram for tasks started manually in T3 unless explicitly asked.
+
+## Rune port
+
+Read PRODUCT.md, DESIGN.md and apps/rune/README.md. Native Rune code is separate
+from the Electron baseline. Keep Rune/runtime/kit/theme pinned to one Git revision
+and commit the Cargo lockfile. Reuse upstream OpenCode components and selected
+view functions with recorded provenance and notices. OpenCode transport, fixture
+fallbacks, single-session IDs and its Beta storage are not Hermes semantics.
+Run npm run test:rune and cargo fmt --manifest-path apps/rune/Cargo.toml --check.
+Inspect actual native renders; an element-tree dump does not establish platform
+screen-reader support. Never claim full parity from the first read-only slice.

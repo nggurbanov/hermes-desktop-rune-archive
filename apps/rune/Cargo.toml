@@ -1,0 +1,23 @@
+[package]
+name = "hermes-rune"
+version = "0.1.0-alpha.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+
+[dependencies]
+rune = { git = "https://github.com/anomalyco/rune", rev = "bfb8facae2e4665e5e6d17afe85561884a7fd402" }
+rune-kit = { git = "https://github.com/anomalyco/rune", rev = "bfb8facae2e4665e5e6d17afe85561884a7fd402", features = ["markdown", "mermaid"] }
+rune-theme-opencode = { git = "https://github.com/anomalyco/rune", rev = "bfb8facae2e4665e5e6d17afe85561884a7fd402" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tungstenite = { version = "0.28", features = ["rustls-tls-native-roots"] }
+url = "2"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls-native-roots"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { version = "1", features = ["net", "process"] }
+sha2 = "0.10"
+
+[profile.dev.package."*"]
+debug = false

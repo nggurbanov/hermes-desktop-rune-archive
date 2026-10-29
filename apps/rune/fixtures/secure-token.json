@@ -1,0 +1,6 @@
+{
+  "events": [
+    {"t": 0.1, "type": "tap", "key": "connection-token"},
+    {"t": 0.2, "type": "type", "text": "synthetic-secret-never-real", "every": 0.01}
+  ]
+}

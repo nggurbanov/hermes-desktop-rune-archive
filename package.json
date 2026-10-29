@@ -18,7 +18,11 @@
     "test:ui": "npm run test:ui --workspace apps/desktop",
     "test:electron": "npm run test:desktop:platforms --workspace apps/desktop",
     "check": "npm run typecheck && npm run test && npm run lint --workspaces",
-    "fix": "npm run fix --workspaces"
+    "fix": "npm run fix --workspaces",
+    "dev:rune": "cargo run --manifest-path apps/rune/Cargo.toml --",
+    "test:rune": "cargo test --manifest-path apps/rune/Cargo.toml",
+    "build:rune": "cargo build --manifest-path apps/rune/Cargo.toml --release",
+    "test:rune:ui": "node apps/rune/scripts/check-scenes.mjs"
   },
   "repository": {
     "type": "git",

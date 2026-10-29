@@ -3,8 +3,12 @@
 A standalone desktop client for existing Hermes agents, extracted from
 [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent).
 
-The first phase keeps the existing Electron interface. Rune parity and a later
-conversation-focused redesign follow after standalone extraction is verified.
+The standalone Electron interface is the behavioral baseline. The native Rune
+port preserves its panel placement and logic while reusing the OpenCode Rune
+visual system. A later phase will redesign the conversation workflow.
+
+The first native increment is a read-only gateway viewer in
+[apps/rune](apps/rune/README.md). Run it with `npm run dev:rune`.
 
 ## Development
 
@@ -84,7 +88,7 @@ contract tests use controlled fixtures; live remote-host acceptance remains
 unverified. The user waived live full-chat-cycle acceptance for extraction.
 Clean-source installation, typechecks, all 16,391 client tests (30 platform
 skips), Linux unpacked packaging and actual no-agent startup passed on
-2026-10-29. Windows and macOS packaging remain unverified. Rune implementation
-has not begun.
+2026-10-29. Windows and macOS packaging remain unverified. The first read-only Rune increment is implemented and verified on Linux; full
+parity has not been established.
 
 Upstream MIT copyright and license notices are preserved in [LICENSE](LICENSE).

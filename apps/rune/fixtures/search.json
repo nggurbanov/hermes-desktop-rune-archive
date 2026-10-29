@@ -1,0 +1,6 @@
+{
+  "events": [
+    {"t": 0.1, "type": "tap", "key": "session-search"},
+    {"t": 0.2, "type": "type", "text": "notes", "every": 0.02}
+  ]
+}
