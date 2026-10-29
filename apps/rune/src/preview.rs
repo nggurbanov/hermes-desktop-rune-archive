@@ -30,11 +30,33 @@ impl Kind {
         Some(match ext.as_str() {
             "png" | "jpg" | "jpeg" | "webp" | "gif" | "svg" | "bmp" => Self::Image,
             "pdf" => Self::Pdf,
-            "wav" | "mp3" | "m4a" | "ogg" | "flac" | "aac" => Self::Audio,
+            "wav" | "mp3" | "m4a" | "ogg" | "oga" | "opus" | "flac" | "aac" => Self::Audio,
             "mp4" | "webm" | "mov" | "mkv" | "m4v" => Self::Video,
             "html" | "htm" => Self::Html,
             _ => return None,
         })
+    }
+    pub fn for_source(source: &str) -> Option<Self> {
+        if let Some(meta) = source
+            .strip_prefix("data:")
+            .and_then(|s| s.split_once(',').map(|p| p.0))
+        {
+            let mime = meta.split(';').next().unwrap_or("").to_ascii_lowercase();
+            return if mime.starts_with("audio/") {
+                Some(Self::Audio)
+            } else if mime.starts_with("image/") {
+                Some(Self::Image)
+            } else if mime.starts_with("video/") {
+                Some(Self::Video)
+            } else if mime == "application/pdf" {
+                Some(Self::Pdf)
+            } else if mime == "text/html" {
+                Some(Self::Html)
+            } else {
+                None
+            };
+        }
+        Self::for_path(source)
     }
     pub fn available(self) -> bool {
         self == Self::Image

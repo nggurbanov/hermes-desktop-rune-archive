@@ -35,9 +35,9 @@ fn peer(response: &'static str) -> (Connection, std::thread::JoinHandle<String>)
 fn raw_range_and_head_preserve_auth_owner_headers_and_http_verdict() {
     for head in [false, true] {
         let (connection, thread) = peer(if head {
-            "HTTP/1.1 200 OK\r\nContent-Length: 1234\r\nContent-Type: video/webm\r\nAccept-Ranges: bytes\r\nETag: \"fixture\"\r\nConnection: close\r\n\r\n"
+            "HTTP/1.1 200 OK\r\nContent-Length: 1234\r\nContent-Type: video/webm\r\nContent-Encoding: gzip\r\nAccept-Ranges: bytes\r\nETag: \"fixture\"\r\nConnection: close\r\n\r\n"
         } else {
-            "HTTP/1.1 206 Partial Content\r\nContent-Length: 4\r\nContent-Range: bytes 4-7/12\r\nContent-Type: video/webm\r\nAccept-Ranges: bytes\r\nETag: \"fixture\"\r\nConnection: close\r\n\r\n4567"
+            "HTTP/1.1 206 Partial Content\r\nContent-Length: 4\r\nContent-Range: bytes 4-7/12\r\nContent-Type: video/webm\r\nContent-Encoding: gzip\r\nAccept-Ranges: bytes\r\nETag: \"fixture\"\r\nConnection: close\r\n\r\n4567"
         });
         let mut gateway = Gateway::connect(&connection).unwrap();
         let mut request = Request::download(
@@ -64,6 +64,11 @@ fn raw_range_and_head_preserve_auth_owner_headers_and_http_verdict() {
             assert_eq!(metadata.content_range.as_deref(), Some("bytes 4-7/12"));
         }
         let request = thread.join().unwrap();
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("accept-encoding: identity\r\n")
+        );
         let target = request
             .lines()
             .next()

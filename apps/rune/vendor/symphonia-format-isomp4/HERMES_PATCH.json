@@ -1,0 +1,79 @@
+{
+  "crate": "symphonia-format-isomp4",
+  "version": "0.5.5",
+  "registry": "https://crates.io",
+  "upstream_archive_sha256": "243739585d11f81daf8dac8d9f3d18cc7898f6c09a259675fc364b382c30e0a5",
+  "license": "MPL-2.0",
+  "license_source": "https://www.mozilla.org/media/MPL/2.0/index.txt",
+  "license_sha256": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04",
+  "modified": {
+    "src/atoms/alac.rs": {
+      "upstream_sha256": "72e9db8c6dfa3ab792a282b1d8144753b3c99e3970c2cb1c1958ffd7f908af15",
+      "patched_sha256": "56c562e6b53141fdf8f5ca4542af76d5c1684c47f896b989c20c82a441f4a55c"
+    },
+    "src/atoms/co64.rs": {
+      "upstream_sha256": "ae01cd79f6e688e7d648d22755e2bebd35692dd75fed0f71a513a735dae581e3",
+      "patched_sha256": "a93e12a4999c2bc3999ceb076e38b5fc655d920f227f3922ef8f7fc5f29298c1"
+    },
+    "src/atoms/esds.rs": {
+      "upstream_sha256": "d244ee7e39a75df4f69fc15db5656c78f9b0d956dbef4223a91352742b298398",
+      "patched_sha256": "fe71f1d0c50348bf0d9bee39bc311c0c4e8a086e5dcef025878a08d893fc9ef8"
+    },
+    "src/atoms/ftyp.rs": {
+      "upstream_sha256": "4267f3374e26b61f69ce6088b00927f6ec6dc0101d742eee709d8a6088f4a1e4",
+      "patched_sha256": "4377d2f3e8066b6b8a414013b29320787e87d5440e9e1418b51666485d149523"
+    },
+    "src/atoms/hdlr.rs": {
+      "upstream_sha256": "7ee625aefea56161497b53b58df52cedbed92f695aa3c097feaba138f2f46394",
+      "patched_sha256": "77c151d44b8b9b6f85a11f12c702eb35e0fae125c008bc3f8a0ae5dced23acfc"
+    },
+    "src/atoms/ilst.rs": {
+      "upstream_sha256": "1dd4899ee2e1d875d2d082cf24719589f01500a952c13789d06f2a43a8ee1ffb",
+      "patched_sha256": "ce7484d666585c9c830e801a36749f04c0541e2230ea8fd621452e28fa18a46e"
+    },
+    "src/atoms/mdhd.rs": {
+      "upstream_sha256": "fc1e6a313fa1bc6302dfcc5a10baf05ee16c7ea98f9e3dd9f753b588d6e7f9c5",
+      "patched_sha256": "438b2f4ee83e1e907ba2d21f653af64ae50f92c1ac68a6f7d56717f9c0b9295b"
+    },
+    "src/atoms/meta.rs": {
+      "upstream_sha256": "9bcfa367f6968db5d9d13dd68357c612937bcdc7e12e2cfdb75f9797aa862c66",
+      "patched_sha256": "0eec798d3f42d4b8e6588ede3ce4b2d31eec4b425431c0bb494cb80191cfaabf"
+    },
+    "src/atoms/mod.rs": {
+      "upstream_sha256": "17bce04a438823cd087eb9bdbb45476cda610628fd3d7bbaf7e6feb57f2c70bc",
+      "patched_sha256": "247d50335095d3e81c62aa40f7639a5835b7d4aadc918e7c476e9e4327d0954f"
+    },
+    "src/atoms/stco.rs": {
+      "upstream_sha256": "c4960bba397a3a9b81044607346bc1d1f37df6ee0e858b7720e955b740eca8b2",
+      "patched_sha256": "471d413e0b814a5dfddccf85f9c70ca08f54477a773d48eb0a256b0ceeab2e03"
+    },
+    "src/atoms/stsc.rs": {
+      "upstream_sha256": "0664e2ae5c3ef84823aef3d5a697cc728ad409990a72eb5eb1597775a8c0c119",
+      "patched_sha256": "f0551114850c6c2d45b0ac5e41a52938e48695d95125e9a8b018af2c0d48aa8f"
+    },
+    "src/atoms/stsd.rs": {
+      "upstream_sha256": "81614ca0f0b6f446acb0c4270f423e073893a881e81acdb28cd4b9d2141e3a9f",
+      "patched_sha256": "e30a55ad888b6989a733d42baea0bb6cb257ed4812401606ab2b71ccaeaf895f"
+    },
+    "src/atoms/stsz.rs": {
+      "upstream_sha256": "bec7d4d009c07ef20c2fbbc8eaf70bb3f6279a2e36363452ef870c6c89087125",
+      "patched_sha256": "40a55d6e15f1b4bfc746190605a8e621a27b41ad7abcd8bf43f5125ae56567dc"
+    },
+    "src/atoms/stts.rs": {
+      "upstream_sha256": "100ec9979eb0d96e943debee975cc78b9d97d4df8ca6c3306c717ce839a51c49",
+      "patched_sha256": "a876bfa1e1ba0eed3e69b6c718dc6316ea6b245372d1f1ca202d2126013e0605"
+    },
+    "src/atoms/trun.rs": {
+      "upstream_sha256": "c0b0ca14ddd6ec2655dff8a18a555eb9449e71ba079ca49ab9feffba755d7817",
+      "patched_sha256": "5aee04454e00e059b15284030d60136bb7066e8888c6dbf9d3fdf1bedf944041"
+    }
+  },
+  "rationale": "Bound untrusted metadata and table allocations before capacity reservation; preserve arbitrary large media data and millions of samples.",
+  "limits": {
+    "per_metadata_atom_bytes": 67108864,
+    "per_table_allocation_bytes": 67108864,
+    "table_policy": "Encoded count must fit remaining atom payload before fallible capacity reservation; large media-data/free/skip/unknown boxes are exempt from metadata-size limit; checked offsets and nonzero media timescale."
+  },
+  "schema": 1,
+  "license_file": "LICENSE-MPL-2.0.txt"
+}

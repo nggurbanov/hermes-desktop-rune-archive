@@ -15,7 +15,9 @@ pub fn page(s: &Viewer, k: &Kit, layer: &mut Vec<El>) -> El {
         Route::Bots => bots::page(s, k, layer),
         Route::Connections => super::connections::panel(s, k, layer),
         Route::FilePreview => {
-            if s.preview.active().is_some() {
+            if let Some(id) = s.audio_preview {
+                super::media_player::panel(s, id, k)
+            } else if s.preview.active().is_some() {
                 super::preview::panel(s, k)
             } else {
                 super::files::preview(s, k)

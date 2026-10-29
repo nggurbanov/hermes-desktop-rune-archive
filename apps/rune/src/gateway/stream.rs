@@ -4,6 +4,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
+pub(crate) mod range;
 
 #[derive(Clone, Default)]
 pub struct Cancel(Arc<Cancellation>);
@@ -50,6 +51,8 @@ pub struct Request {
     pub if_none_match: Option<String>,
     pub if_modified_since: Option<String>,
     pub limit: u64,
+    /// None keeps a long-lived media response open while its bounded reader is paused.
+    pub timeout: Option<Duration>,
 }
 impl Request {
     pub fn download(path: String, session: Option<String>, limit: u64) -> Self {
@@ -63,6 +66,7 @@ impl Request {
             if_none_match: None,
             if_modified_since: None,
             limit,
+            timeout: Some(Duration::from_secs(300)),
         }
     }
 }
@@ -85,6 +89,18 @@ impl Gateway {
         profile: &str,
         request: &Request,
         cancel: &Cancel,
+        output: &mut impl Write,
+    ) -> Result<Metadata, String> {
+        self.stream_file_events(profile, request, cancel, |_| Ok(()), output)
+    }
+    /// Validate response headers before any body bytes reach the destination. This also runs
+    /// for HEAD/error verdicts, so range clients cannot accidentally accept a full response.
+    pub fn stream_file_events(
+        &mut self,
+        profile: &str,
+        request: &Request,
+        cancel: &Cancel,
+        mut on_headers: impl FnMut(&Metadata) -> Result<(), String>,
         output: &mut impl Write,
     ) -> Result<Metadata, String> {
         valid_scope(profile)?;
@@ -117,6 +133,10 @@ impl Gateway {
             url.query_pairs_mut().append_pair("session_id", session);
         }
         let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::ACCEPT_ENCODING,
+            reqwest::header::HeaderValue::from_static("identity"),
+        );
         for (name, value) in [
             ("range", &request.range),
             ("if-range", &request.if_range),
@@ -151,9 +171,15 @@ impl Gateway {
             }
         }
         let mut client = reqwest::Client::builder()
+            .no_gzip()
+            .no_brotli()
+            .no_deflate()
+            .no_zstd()
             .connect_timeout(Duration::from_secs(5))
-            .timeout(Duration::from_secs(300))
             .redirect(reqwest::redirect::Policy::none());
+        if let Some(timeout) = request.timeout {
+            client = client.timeout(timeout);
+        }
         #[cfg(target_os = "linux")]
         if matches!(&self.auth, Auth::Native(_)) {
             client = client.no_proxy();
@@ -186,6 +212,7 @@ impl Gateway {
                 accept_ranges:header("accept-ranges"), etag:header("etag"),
                 last_modified:header("last-modified"), received:0,
             };
+            on_headers(&metadata)?;
             // Preserve HTTP verdicts without downloading an error/redirect document into a file.
             if request.method==Method::Head || !response.status().is_success() { return Ok(metadata); }
             if metadata.content_length.is_some_and(|n|n>request.limit) {

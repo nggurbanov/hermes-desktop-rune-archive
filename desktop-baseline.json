@@ -57,9 +57,9 @@
     "opencodeReferenceRevision": "3f70cd6b675c89a8a7b64fc09b1bf2b455e0ad1a",
     "scope": "Standalone native Rune full functional transfer. Real scoped pages, conversations/admissions, native voice, original GUI SDK and saved connections implemented in development; complete acceptance still pending. No full-parity claim.",
     "verified": [
-      "Fourth integration: 374 Rust tests passed; one private virtual-audio test ignored by default and passed explicitly with private Pulse/ALSA voice and actual completion actor playback",
+      "Fifth frozen integration: 421 Rust tests passed, zero failed; private virtual audio explicitly passed and the ignored storage-child entry is exercised by an actual two-process parent test",
       "Native Linux WebRTC peer loopback, Opus and WebRTC AEC3 synthetic double-talk checks",
-      "Fourth pre-layout binary: 10 shell, 19 updated T3 composer, 13 rich-chat, 24 feature-pages and 5 notification-settings native checks (71 total); earlier third checkpoint also proves 10 layouts and 15 client-settings",
+      "Fifth immutable binary: 5 independent-editor, 19 T3 composer, 10 shell, 24 feature-page and 13 rich-chat native scenarios (71); actual native audio window metadata/keyboard+pointerseek/rate/mute/volume/themes/shortwindow/exactsave/retirement also passed",
       "Actual separate native Rune rich subagent window: one lazy read-only attach, shared image/file/tool presentation, real clipboard copy, same PID/window reuse, focus/theme and viewer-only detach",
       "Canonical multimodal rewind contracts: immutable attachment freeze/upload before deletion, restore without prompt submission and lost-ACK UUID/payload/CAS retention; persisted replay drafts",
       "Native Files/Review/Terminal controllers; real isolated Git and PTY/remote replay contracts",
@@ -72,14 +72,17 @@
       "Event-driven scoped background process list/kill lifecycle: transition-only completions, output, linger, dismiss, rewind, runtime recovery and private WebSocket ownership/lost-ACK contracts",
       "Actual original SDK native OS notification bridge: body/button/dismissal callbacks, focus, source/window/weak-lease fencing and exact handler retirement; 3 native Wry proof flows",
       "Shared asynchronous safe image worker: Files, Artifacts and rich chat, SVG content sniffing/bundled fonts/no external resources, bounded admission/cancellation; actual 24-image and mislabeled-SVG acceptance",
-      "Post-layout binary: all 10 native feedback cases passed, including 1024x520 full composer dock/toolbar/scroll viewport and last background row with an 18-line draft; both themes and all sound settings"
+      "Post-layout binary: all 10 native feedback cases passed, including 1024x520 full composer dock/toolbar/scroll viewport and last background row with an 18-line draft; both themes and all sound settings",
+      "Actual existing-tab Composer controllers and durable per-editor slots, v4 per-entry CAS/tombstones, legacy migration and original-input callback/policy routing; 25 composer plus 5 application editor contracts, including two real storage processes",
+      "Native audio preview: authenticated agent-file and credential-free external HTTP range/sequential sources; pitch-preserving Sonic, actual WAV/MP3/Vorbis/FLAC/AAC/OggOpus, paused metadata/seek/mute/volume/rate/exactsave; 16 audio/resource and 14 raw/range contracts",
+      "Pinned unmodified Sonic plus four exact Symphonia crates with recorded MPL source patches; before-allocation metadata/table validation, source-operation byte/call quotas and verified source/license/fixture hashes"
     ],
     "pending": [
-      "Remaining rich chat: complete slash directives, provider sidecars, reactions/search/minimap and media players; canonical snapshots cannot expose absent deferred slots after a fully settled restart",
+      "Remaining rich chat: complete slash directives, provider sidecars, reactions/search/minimap, inline/remount audio and remaining media/container support; canonical snapshots cannot expose absent deferred slots after a fully settled restart",
       "Concurrent session/preview/route tiles, plugin pane geometry and full peer windows; original preset catalog and named saved layouts are now implemented",
       "Remaining client skins/arbitrary fonts/global hotkeys, multiple-window state reconciliation, native/SDK speech ownership, HUD/haptics and macOS/Windows notification adapters",
       "Remaining GUI SDK pane geometry/data engines/preview contributions and parent-window acceptance",
-      "Complete Files/Artifacts media/PDF/HTML preview and OS watcher behavior",
+      "Complete Files/Artifacts inline audio and video/PDF/HTML previews, remount positions, remaining codec/platform acceptance and OS watcher behavior",
       "Cloud/OAuth connection workflow and native macOS/Windows discovery/device/packaging acceptance"
     ],
     "parityInventory": "apps/rune/docs/shell-parity.md",
@@ -104,7 +107,7 @@
       "Read-only Chikibryak voice status: chained selected and GPT-Live available; no microphone, call, transcription or configuration write",
       "Regression contract: synthetic scenes with a preconfigured live route cannot request voice/model reads"
     ],
-    "binarySha256": "056c315e07a355a98414199b844aca6567ba7ed2ff0c4cbc62662f213af68ff8",
+    "binarySha256": "02bca4b8963a81fa79c1b59b57dbd5216f531f7f7e76520c94d36a7f70829d77",
     "evidenceBinaries": [
       {
         "name": "third integration",
@@ -120,6 +123,11 @@
         "name": "fourth background minimum-height correction",
         "sha256": "056c315e07a355a98414199b844aca6567ba7ed2ff0c4cbc62662f213af68ff8",
         "evidence": "Sole production delta is shrinkable background stack; formatting/build, final 374 default Rust tests (one ignored) and all 10 native feedback cases pass, including complete composer dock in 1024x520; see native-background-processes-parity.md"
+      },
+      {
+        "name": "fifth independent-editor and native audio integration",
+        "sha256": "02bca4b8963a81fa79c1b59b57dbd5216f531f7f7e76520c94d36a7f70829d77",
+        "evidence": "421 default Rust tests; 71 native shell/composer/editor/pages/chat scenarios and actual native audio controls/keyboard/shortviewport/originalsave/retirement; explicit private output separately passed after decoder patches"
       }
     ]
   }

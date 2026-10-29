@@ -1,0 +1,34 @@
+{
+  "crate": "symphonia-metadata",
+  "version": "0.5.5",
+  "registry": "https://crates.io",
+  "upstream_archive_sha256": "36306ff42b9ffe6e5afc99d49e121e0bd62fe79b9db7b9681d48e29fa19e6b16",
+  "license": "MPL-2.0",
+  "license_source": "https://www.mozilla.org/media/MPL/2.0/index.txt",
+  "license_sha256": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04",
+  "modified": {
+    "src/flac.rs": {
+      "upstream_sha256": "d06200d517cca7988d3dbb1f3bf4544db11209b0b277dccde242a4b9d70a4afe",
+      "patched_sha256": "0c2c76c6fcdde4393d905ed68d102315664fdfdfc017190a9556cec2b9e548c1"
+    },
+    "src/id3v2/frames.rs": {
+      "upstream_sha256": "adb76f9878c3465cbce635c4a3c49b24432859928bc0c54c22bacb556c837597",
+      "patched_sha256": "fde29c00f62a4f69d2421c85180c6c1c82363eb17e27191819172b27418fc6ad"
+    },
+    "src/id3v2/mod.rs": {
+      "upstream_sha256": "9b8ce7b5bd5017114544f851b16381c4ec11c8295814cc431780fff8946f8b77",
+      "patched_sha256": "c53dd82b22836291313afb7011236bc47bfe0592acab4c7aae9bd482153b5af8"
+    },
+    "src/lib.rs": {
+      "upstream_sha256": "a7eb4a3c1822d293aef2c5478b2738a57eebb9fb10329eaba622fe12731a71b2",
+      "patched_sha256": "a87cc78552d67499e9af7ec5fc835c16c31364f0ad85e0545ba7c254bdca1324"
+    },
+    "src/vorbis.rs": {
+      "upstream_sha256": "b1690a3e07eb5c83a3cc77476caa41536a882e94865c83a7e62531d2a6ee9b80",
+      "patched_sha256": "8e8f27c0090a05b85997adf58afb69c299e9c1e2e81f0eb9abbc08df2b24cb21"
+    }
+  },
+  "rationale": "Reject untrusted declared allocation sizes before allocation, retain source-independent streaming and large-file seek support. Single boxed reads cap at 16 MiB; finite enclosing packet lengths are validated. Metadata fields and ID3 bodies cap at 4 MiB, with aggregate/comment/frame count bounds and requested ID3 budget honored.",
+  "schema": 1,
+  "license_file": "LICENSE-MPL-2.0.txt"
+}

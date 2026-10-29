@@ -78,7 +78,7 @@ impl Viewer {
                     .bypass_receipt(&owner, &value["session_bypass"])
                 {
                     if let Some(view) = self.conversation.view(&owner) {
-                        self.composer.reconcile_policy(&owner, &view.policy);
+                        self.reconcile_editor_policy(&owner, &view.policy.clone());
                     }
                     let view = self.chat.presentation(owner);
                     view.error = value["warning"].as_str().map(str::to_owned);
@@ -106,9 +106,9 @@ impl Viewer {
         let Some(mode) = self.client_settings.confirmed_approval_mode(&owner) else {
             return false;
         };
-        let mut changed = self.composer.reconcile_approval(&owner, &mode);
+        let mut changed = self.reconcile_editor_approval(&owner, &mode);
         for (scope, policy) in self.conversation.profile_approval(&owner, &mode) {
-            changed |= self.composer.reconcile_policy(&scope, &policy);
+            changed |= self.reconcile_editor_policy(&scope, &policy);
         }
         changed
     }

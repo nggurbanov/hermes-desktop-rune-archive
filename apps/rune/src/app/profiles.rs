@@ -23,6 +23,8 @@ impl Viewer {
         self.retired_profiles
             .insert((self.connection_epoch, profile.into()));
         self.preview.close_profile(self.connection_epoch, profile);
+        self.media_players
+            .close_profile(self.connection_epoch, profile);
         self.chat.close_profile(self.connection_epoch, profile);
         self.subagents.close_profile(self.connection_epoch, profile);
         self.conversation
@@ -111,8 +113,7 @@ impl Viewer {
                 tab.profile = to.into();
             }
         }
-        self.composer
-            .rename_profile(self.connection_epoch, from, to);
+        self.rename_editor_profile(from, to);
         if let Some(connection) = self.connection.clone() {
             if let Err(error) = self.profile_preferences.rename(&connection, from, to) {
                 self.client_error = Some(error);
@@ -129,7 +130,7 @@ impl Viewer {
     }
     pub fn profile_deleted(&mut self, name: &str) {
         self.tabs.retain(|t| t.profile != name);
-        self.composer.delete_profile(self.connection_epoch, name);
+        self.delete_editor_profile(name);
         if let Some(connection) = self.connection.clone() {
             if let Err(error) = self.profile_preferences.remove(&connection, name) {
                 self.client_error = Some(error);
@@ -153,7 +154,7 @@ impl Viewer {
                 }
                 crate::pages::bots::ProfileChange::Deleted(name) => self.profile_deleted(&name),
                 crate::pages::bots::ProfileChange::Created(name) => {
-                    self.composer.delete_profile(self.connection_epoch, &name);
+                    self.delete_editor_profile(&name);
                     self.tabs.retain(|t| t.profile != name);
                     if let Some(connection) = self.connection.clone() {
                         if let Err(error) = self.profile_preferences.remove(&connection, &name) {

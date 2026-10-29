@@ -16,6 +16,8 @@ mod identities;
 mod image_previews;
 mod layout;
 mod media;
+mod media_player;
+mod media_preview_proof;
 mod native_fs;
 mod notifications;
 mod oauth;
@@ -35,6 +37,9 @@ use app::Viewer;
 use rune::{AppSpec, Chrome};
 
 fn main() {
+    if media_preview_proof::run_if_proof_mode() {
+        return;
+    }
     if preview::run_if_proof_mode() {
         return;
     }

@@ -17,6 +17,7 @@ impl Viewer {
         }
         self.route = crate::pages::Route::Chat;
         self.selected_session = None;
+        self.ensure_editor();
         self.messages.clear();
         self.history_loading = false;
         self.history_truncated = false;
@@ -26,6 +27,9 @@ impl Viewer {
         self.composer.close();
     }
     pub fn send_draft(&mut self) {
+        if !self.ensure_editor() {
+            return;
+        }
         self.compose_error = None;
         if let Some(reason) = self.read_only_reason() {
             self.compose_error = Some(reason.into());
@@ -168,6 +172,7 @@ impl Viewer {
                     self.trigger_background(scope, runtime)
                 }
                 Update::ProfileApprovalSet { scope, mode } => {
+                    self.reconcile_editor_approval(&scope, &mode);
                     self.client_settings.confirm_approval_mode(&scope, &mode);
                     let effects = self.client_settings.refresh();
                     self.page_requests(effects);
@@ -223,7 +228,7 @@ impl Viewer {
                     if let Some(sequence) = self.spoken_completion.remove(&origin) {
                         self.spoken_completion.insert(destination.clone(), sequence);
                     }
-                    self.composer.rehome(&origin, destination);
+                    self.rehome_editors(&origin, destination);
                     if origin.connection == self.connection_epoch {
                         if !self
                             .tabs
@@ -260,7 +265,7 @@ impl Viewer {
                 }
                 Update::Changed { scope } => {
                     if let Some(view) = self.conversation.view(&scope) {
-                        self.composer.reconcile_policy(&scope, &view.policy);
+                        self.reconcile_editor_policy(&scope, &view.policy.clone());
                     }
                     if let Some(view) = self.conversation.view(&scope) {
                         let previous = self
@@ -291,14 +296,24 @@ impl Viewer {
                     ..
                 } => {
                     if let Some(replay) = restored_replay {
-                        let draft = self.composer.draft_mut(scope.clone());
-                        if draft.text.text.is_empty()
-                            && draft.attachments.is_empty()
-                            && draft.replay.is_none()
+                        let restored = if let Some(editor) =
+                            self.editor_for_policy_mut(&scope, policy_stamp.as_ref())
                         {
-                            draft.text.replace_text(replay.visible.clone());
-                            draft.replay = Some(replay);
+                            let draft = editor.draft_mut(scope.clone());
+                            if draft.text.text.is_empty()
+                                && draft.attachments.is_empty()
+                                && draft.replay.is_none()
+                            {
+                                draft.text.replace_text(replay.visible.clone());
+                                draft.replay = Some(replay.clone());
+                                true
+                            } else {
+                                false
+                            }
                         } else {
+                            false
+                        };
+                        if !restored {
                             let view = self.chat.presentation(scope.clone());
                             view.restored_candidate = Some(replay);
                             view.notice = Some(
@@ -308,10 +323,10 @@ impl Viewer {
                     }
                     self.policy_sends.remove(&submission_id);
                     if let Some(stamp) = &policy_stamp {
-                        self.composer.settle_policy(&scope, stamp, policy_fields);
+                        self.settle_editor_policy(&scope, stamp, policy_fields);
                     }
                     if let Some(view) = self.conversation.view(&scope) {
-                        self.composer.reconcile_policy(&scope, &view.policy);
+                        self.reconcile_editor_policy(&scope, &view.policy.clone());
                     }
                     self.recovery_scope = None;
                     if scope == self.composer_scope() {
@@ -360,7 +375,8 @@ impl Viewer {
 
 impl Viewer {
     pub fn can_send(&self) -> bool {
-        !self.audio_blocks_send()
+        self.editor_ready()
+            && !self.audio_blocks_send()
             && self.connection.is_some()
             && !self.fixture
             && !self.history_loading
@@ -545,7 +561,7 @@ impl Viewer {
             match event{
    crate::connections::Event::Ready(connection)=>self.use_connection(connection),
    crate::connections::Event::Changed=>{},
-   crate::connections::Event::Lost{id,revision,message}=>{if self.connection.as_ref().is_some_and(|connection|matches!(connection,Connection::Saved{id:current,revision:current_revision,..}if current==&id&&current_revision==&revision)){self.conversation.close_connection(self.connection_epoch);self.chat.close_connection(self.connection_epoch);self.subagents.close_connection(self.connection_epoch);self.audio.close_connection(self.connection_epoch);self.background.retire_connection(self.connection_epoch);self.preview.close_connection(self.connection_epoch);self.error=Some(message);self.status="Disconnected".into();self.loading=false;self.history_loading=false;}}
+   crate::connections::Event::Lost{id,revision,message}=>{if self.connection.as_ref().is_some_and(|connection|matches!(connection,Connection::Saved{id:current,revision:current_revision,..}if current==&id&&current_revision==&revision)){self.conversation.close_connection(self.connection_epoch);self.chat.close_connection(self.connection_epoch);self.subagents.close_connection(self.connection_epoch);self.audio.close_connection(self.connection_epoch);self.background.retire_connection(self.connection_epoch);self.preview.close_connection(self.connection_epoch);self.media_players.close_connection(self.connection_epoch);self.audio_preview=None;self.error=Some(message);self.status="Disconnected".into();self.loading=false;self.history_loading=false;}}
   }
         }
         changed

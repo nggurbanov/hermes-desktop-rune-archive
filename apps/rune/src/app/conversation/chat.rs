@@ -682,7 +682,12 @@ impl Viewer {
         let value = match result {
             Ok(v) => v,
             Err(e) => {
-                let draft = self.composer.draft_mut(owner.clone());
+                let Some(editor) = self.editor_for_policy_mut(&owner, policy.policy_stamp.as_ref())
+                else {
+                    self.chat.presentation(owner).failed_command = Some(input);
+                    return;
+                };
+                let draft = editor.draft_mut(owner.clone());
                 if draft.text.text.trim().is_empty() {
                     draft.text.replace_text(input.clone());
                 } else {
@@ -708,10 +713,10 @@ impl Viewer {
                 policy.policy_stamp.clone(),
             );
             if let Some(stamp) = &policy.policy_stamp {
-                self.composer.settle_policy(&owner, stamp, fields);
+                self.settle_editor_policy(&owner, stamp, fields);
             }
             if let Some(view) = self.conversation.view(&owner) {
-                self.composer.reconcile_policy(&owner, &view.policy);
+                self.reconcile_editor_policy(&owner, &view.policy.clone());
             }
             if let Some(connection) = self.connection.clone() {
                 let _ = self.conversation.reconnect(connection, &owner);
@@ -732,7 +737,11 @@ impl Viewer {
                 let Some(connection) = self.connection.clone() else {
                     return;
                 };
-                let mut sent = self.composer.draft(&owner).cloned().unwrap_or_default();
+                let mut sent = self
+                    .editor_for_policy_mut(&owner, policy.policy_stamp.as_ref())
+                    .and_then(|c| c.draft(&owner))
+                    .cloned()
+                    .unwrap_or_default();
                 if let Some(stamp) = &policy.policy_stamp {
                     sent.policy_id = stamp.draft_id.clone();
                     sent.policy_revisions = stamp.revisions;
@@ -753,7 +762,13 @@ impl Viewer {
             }
             "prefill" => {
                 if let Some(message) = value["message"].as_str() {
-                    let draft = self.composer.draft_mut(owner.clone());
+                    let Some(editor) =
+                        self.editor_for_policy_mut(&owner, policy.policy_stamp.as_ref())
+                    else {
+                        self.chat.presentation(owner).prefill_candidate = Some(message.into());
+                        return;
+                    };
+                    let draft = editor.draft_mut(owner.clone());
                     if draft.text.text.is_empty() {
                         draft.text.replace_text(message);
                     } else {

@@ -13,6 +13,7 @@ mod decks;
 mod directories;
 pub(crate) mod files;
 pub(crate) mod layout;
+pub(crate) mod media_player;
 pub(crate) mod notifications;
 pub(crate) mod operations;
 pub(crate) mod pages;

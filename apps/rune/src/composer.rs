@@ -88,10 +88,13 @@ pub enum Popup {
     VoiceEngine,
 }
 
+mod editor;
+pub use editor::EditorId;
 mod persistence;
 mod policy;
 pub use policy::{PolicyFields, PolicyRevisions, PolicyStamp};
 pub struct Composer {
+    editor: EditorId,
     persisted: Option<persistence::Persistence>,
     storage_revision: u64,
     pub popup: Option<Popup>,
@@ -139,6 +142,7 @@ struct CatalogReply {
 impl Default for Composer {
     fn default() -> Self {
         Self {
+            editor: EditorId::new(),
             persisted: None,
             storage_revision: 0,
             popup: None,

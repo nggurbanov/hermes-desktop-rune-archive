@@ -130,6 +130,40 @@ fn native_virtual_device_roundtrip() {
             pcm.len(),
             cue_capture.rate
         );
+        let file_controls = Arc::new(Controls::default());
+        let file_capture = Capture::open(file_controls.clone(), false)
+            .expect("Open private audio-file preview monitor");
+        std::thread::sleep(Duration::from_millis(150));
+        crate::media_player::tests::private_device_playback()
+            .expect("Actual owned media player play/pause/seek/rate proof");
+        std::thread::sleep(Duration::from_millis(200));
+        file_controls.stop.store(true, Ordering::Release);
+        file_capture.wait_stopped().unwrap();
+        let pcm = file_capture.pcm_drain().unwrap();
+        let peak = pcm.iter().map(|s| i32::from(*s).abs()).max().unwrap_or(0);
+        assert!(
+            peak > 2000,
+            "Audio-file preview did not reach private monitor: {peak}"
+        );
+        let energy = |hz: f64| {
+            let (mut real, mut imaginary) = (0., 0.);
+            for (i, sample) in pcm.iter().enumerate() {
+                let phase = std::f64::consts::TAU * hz * i as f64 / file_capture.rate as f64;
+                real += f64::from(*sample) * phase.cos();
+                imaginary += f64::from(*sample) * phase.sin();
+            }
+            real * real + imaginary * imaginary
+        };
+        assert!(
+            energy(220.) > energy(440.) * 10.,
+            "2x playback changed audio pitch"
+        );
+        assert!(!file_controls.failed.load(Ordering::Acquire));
+        eprintln!(
+            "Private actual media-player 2x pitch/play/pause/seek: {} samples @{}Hz, peak={peak}",
+            pcm.len(),
+            file_capture.rate
+        );
         return;
     }
     let directory = PathBuf::from(format!("/tmp/hermes-rune-virtual-{}", uuid::Uuid::new_v4()));

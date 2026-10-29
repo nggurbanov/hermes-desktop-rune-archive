@@ -1,0 +1,28 @@
+{
+  "crate": "symphonia-format-riff",
+  "version": "0.5.5",
+  "registry": "https://crates.io",
+  "upstream_archive_sha256": "c2d7c3df0e7d94efb68401d81906eae73c02b40d5ec1a141962c592d0f11a96f",
+  "license": "MPL-2.0",
+  "license_source": "https://www.mozilla.org/media/MPL/2.0/index.txt",
+  "license_sha256": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04",
+  "modified": {
+    "src/wave/chunks.rs": {
+      "upstream_sha256": "45f6db6456300e02b35e5cc3cb44eedcb5c44f38db1f2b9723c48aebcb963b7d",
+      "patched_sha256": "383301df93e7077b062cb276295c165bed28c1ed313bf3529bc029e7a562edce"
+    }
+  },
+  "rationale": "Bound untrusted metadata and table allocations before capacity reservation; preserve arbitrary large media data and millions of samples.",
+  "limits": {
+    "riff_info_field_bytes": 1048576,
+    "channels": 8,
+    "sample_rate": [
+      8000,
+      192000
+    ],
+    "bits_per_sample": 64,
+    "format_policy": "Validate PCM block alignment and ADPCM header bounds before packet arithmetic."
+  },
+  "schema": 1,
+  "license_file": "LICENSE-MPL-2.0.txt"
+}

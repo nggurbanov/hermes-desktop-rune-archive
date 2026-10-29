@@ -192,7 +192,7 @@ impl Viewer {
         if let Some(connection) = &self.connection {
             self.sidebar_state
                 .bind_connection(connection, self.composer_scope().connection);
-            if !self.fixture {
+            if !self.fixture && self.draft_storage_available {
                 if let Err(error) = self
                     .composer
                     .bind_storage(connection, self.composer_scope().connection)

@@ -43,6 +43,8 @@ struct BotOpen {
 }
 
 pub struct Viewer {
+    editors: editors::Editors,
+    retired_editor_input: TextEdit,
     pub notifications: crate::notifications::Notifications,
     pub sounds: crate::sounds::CompletionSounds,
     pub background: crate::background::Background,
@@ -58,6 +60,8 @@ pub struct Viewer {
     pub connections: crate::connections::Connections,
     pub files: crate::files::Files,
     pub preview: crate::preview::Service,
+    pub media_players: crate::media_player::MediaPlayers,
+    pub audio_preview: Option<crate::media_player::PlayerId>,
     preview_return: Option<crate::pages::Route>,
     pub identities: crate::identities::Identities,
     pub directories: crate::directories::Directories,
@@ -114,6 +118,7 @@ pub struct Viewer {
     page_owner: Option<(u64, String)>,
     page_connection: Option<Connection>,
     pub composer: Composer,
+    draft_storage_available: bool,
     pub voice: crate::voice::Voice,
     connection_epoch: u64,
     pub profiles: Vec<Profile>,
@@ -199,6 +204,8 @@ enum Update {
 impl Viewer {
     fn empty() -> Self {
         Self {
+            editors: Default::default(),
+            retired_editor_input: TextEdit::default(),
             notifications: crate::notifications::Notifications::new(),
             sounds: crate::sounds::CompletionSounds::new(),
             background: crate::background::Background::new(),
@@ -210,6 +217,8 @@ impl Viewer {
             connections: crate::connections::Connections::new(),
             files: crate::files::Files::new(),
             preview: crate::preview::Service::new(),
+            media_players: crate::media_player::MediaPlayers::new(),
+            audio_preview: None,
             preview_return: None,
             identities: Default::default(),
             directories: Default::default(),
@@ -270,6 +279,7 @@ impl Viewer {
             page_owner: None,
             page_connection: None,
             composer: Composer::new(),
+            draft_storage_available: true,
             voice: crate::voice::Voice::default(),
             connection_epoch: 0,
             profiles: vec![],
@@ -478,6 +488,8 @@ impl Viewer {
             return;
         }
         self.preview.close_connection(self.connection_epoch);
+        self.media_players.close_connection(self.connection_epoch);
+        self.audio_preview = None;
         self.preview_return = None;
         self.chat.close_connection(self.connection_epoch);
         self.subagents.close_connection(self.connection_epoch);
@@ -567,6 +579,7 @@ impl Viewer {
         self.pending_bot = None;
         self.bot_empty = false;
         self.selected_session = None;
+        self.ensure_editor();
         self.messages.clear();
         self.sessions.clear();
         self.history_loading = false;
@@ -699,6 +712,7 @@ impl Viewer {
             replace,
         );
         self.selected_session = Some(id.clone());
+        self.ensure_editor();
         self.messages.clear();
         self.history_loading = true;
         self.history_truncated = false;
@@ -953,6 +967,7 @@ impl Viewer {
                         intent.replace,
                     );
                     self.selected_session = Some(id);
+                    self.ensure_editor();
                     self.messages = history.messages;
                     self.history_truncated = history.has_more;
                     self.bot_empty = false;
@@ -1059,12 +1074,20 @@ impl Viewer {
 
 pub fn setup(s: &mut Viewer, waker: Waker) {
     if !s.fixture {
+        match Composer::primary() {
+            Ok(composer) => s.composer = composer,
+            Err(error) => {
+                s.client_error = Some(error);
+                s.draft_storage_available = false;
+            }
+        }
         s.sounds.load();
         s.sounds.init(waker.clone());
         s.notifications.muted = s.sounds.muted();
         s.background.init(waker.clone());
         s.notifications.start(waker.clone(), true);
     }
+    s.init_editors(waker.clone());
     s.composer.init_network(waker.clone());
     s.conversation.init(waker.clone());
     s.subagents.init(waker.clone());
@@ -1073,6 +1096,7 @@ pub fn setup(s: &mut Viewer, waker: Waker) {
     s.operations.init(waker.clone());
     s.files.init(waker.clone());
     s.preview.init(waker.clone());
+    s.media_players.init(waker.clone());
     s.identities.init(waker.clone());
     if !s.fixture {
         s.terminal.init(waker.clone());
@@ -1185,6 +1209,8 @@ pub fn setup(s: &mut Viewer, waker: Waker) {
 }
 
 pub fn poll(s: &mut Viewer, now: f64, tx: &mut Tx) -> bool {
+    s.ensure_editor();
+    let editors_changed = s.poll_editors(now, tx);
     s.sync_tool_gate();
     if !s.key_capture_visible() {
         s.client_settings.capture = None;
@@ -1244,7 +1270,8 @@ pub fn poll(s: &mut Viewer, now: f64, tx: &mut Tx) -> bool {
     }
     let sounds_changed = s.poll_sounds();
     let notification_changes = s.poll_notifications();
-    let pages_changed = sounds_changed
+    let pages_changed = editors_changed
+        | sounds_changed
         | notification_changes
         | s.poll_preview()
         | subagents_changed
@@ -1738,3 +1765,6 @@ pub fn background_scene(s: &mut Viewer) {
     reader_scene(s);
     s.background.fixture(s.composer_scope());
 }
+
+#[path = "app/editors.rs"]
+mod editors;

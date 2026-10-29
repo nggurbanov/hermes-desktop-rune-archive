@@ -153,6 +153,24 @@ impl Composer {
         }
         changed
     }
+    pub fn reconcile_profile_approval(
+        &mut self,
+        connection: u64,
+        profile: &str,
+        mode: &str,
+    ) -> bool {
+        let scopes: Vec<_> = self
+            .drafts
+            .keys()
+            .filter(|s| s.connection == connection && s.profile == profile)
+            .cloned()
+            .collect();
+        let mut changed = false;
+        for scope in scopes {
+            changed |= self.reconcile_approval(&scope, mode);
+        }
+        changed
+    }
     pub fn effective_model_key<'a>(&'a self, scope: &DraftScope) -> Option<&'a ModelKey> {
         let draft = self.draft(scope)?;
         if draft.model_changed

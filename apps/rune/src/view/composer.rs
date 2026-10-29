@@ -37,6 +37,12 @@ fn draft(s: &Viewer) -> Draft {
 pub fn dock(s: &Viewer, p: &Pal, k: &Kit, layer: &mut Vec<El>) -> El {
     let scope = s.composer_scope();
     let draft = draft(s);
+    let edit_id = s.composer.editor_id().clone();
+    let key_id = edit_id.clone();
+    let submit_id = edit_id.clone();
+    let edit_scope = scope.clone();
+    let key_scope = scope.clone();
+    let submit_scope = scope.clone();
     let field = text_input(&draft.text, TextStyle::new(15.0, 400.0).lh(24.0))
         .key("composer-input")
         .label("Message draft")
@@ -44,12 +50,16 @@ pub fn dock(s: &Viewer, p: &Pal, k: &Kit, layer: &mut Vec<El>) -> El {
         .color(k.c.text_base)
         .placeholder("Start with a goal", k.c.text_faint)
         .caret(k.c.text_base, k.selection())
-        .on_edit(|s: &mut Viewer| {
-            let scope = s.composer_scope();
-            &mut s.composer.draft_mut(scope).text
+        .on_edit(move |s: &mut Viewer| s.edit_editor_text(&edit_id, &edit_scope))
+        .on_input_key(move |s: &mut Viewer, event, tx| {
+            s.composer.editor_id() == &key_id
+                && s.composer_scope() == key_scope
+                && s.chat_completion_key(event, tx)
         })
-        .on_input_key(|s: &mut Viewer, event, tx| s.chat_completion_key(event, tx))
-        .on_submit(|s: &mut Viewer, tx| {
+        .on_submit(move |s: &mut Viewer, tx| {
+            if s.composer.editor_id() != &submit_id || s.composer_scope() != submit_scope {
+                return;
+            }
             if !s.chat_complete_submit() {
                 s.send_draft();
             }
@@ -165,21 +175,19 @@ pub fn dock(s: &Viewer, p: &Pal, k: &Kit, layer: &mut Vec<El>) -> El {
         .help("Add a local file to this draft")
         .on_press_tx(|s: &mut Viewer, tx| {
             let owner = s.composer_scope();
+            let editor = s.composer.editor_id().clone();
             s.composer.close();
             tx.open_file(
                 FileDialogOptions {
                     title: "Attach a file".into(),
                     ..Default::default()
                 },
-                move |s: &mut Viewer, result, _| match result {
-                    Ok(Some(path)) => {
-                        let _ = s.composer.add_attachment(owner, path);
-                    }
-                    Ok(None) => {}
-                    Err(_) => {
-                        s.composer.attachment_error =
-                            Some("The file chooser is unavailable on this desktop".into())
-                    }
+                move |s: &mut Viewer, result, _| {
+                    s.finish_editor_attachment(
+                        editor,
+                        owner,
+                        result.map_err(|_| "The file chooser is unavailable".into()),
+                    )
                 },
             );
         })
@@ -224,6 +232,9 @@ pub fn dock(s: &Viewer, p: &Pal, k: &Kit, layer: &mut Vec<El>) -> El {
                 .color(k.c.danger.fg)
                 .wrap(),
         );
+    }
+    if !s.editor_ready() {
+        content = content.inert();
     }
     overlays(s, k, layer);
     col()

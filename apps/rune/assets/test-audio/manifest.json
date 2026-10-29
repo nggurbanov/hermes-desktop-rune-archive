@@ -1,0 +1,96 @@
+{
+  "source": "Generated 2-second 48kHz stereo sine: left220Hz amplitude.2;right330Hz amplitude.15; signed16PCM. No recordings.",
+  "generator": "apps/rune/scripts/build-audio-test-fixtures.py",
+  "generator_sha256": "25d2e8ae136c2a9bf36c97e9663e2ac5d86f77a8448ac7467a2e7fe2adb182e8",
+  "ffmpeg": "ffmpeg version 6.1.1-3ubuntu5 Copyright (c) 2000-2023 the FFmpeg developers",
+  "fixtures": [
+    {
+      "file": "tone.mp3",
+      "codec": "libmp3lame",
+      "sha256": "6ca638130bfff0d7faa2dadf2feb36b6a99430a8e44accad466cb5debd754880",
+      "bytes": 32852,
+      "command": [
+        "ffmpeg",
+        "-nostdin",
+        "-y",
+        "-i",
+        "tone.wav",
+        "-map_metadata",
+        "-1",
+        "-fflags",
+        "+bitexact",
+        "-flags:a",
+        "+bitexact",
+        "-c:a",
+        "libmp3lame",
+        "tone.mp3"
+      ]
+    },
+    {
+      "file": "tone.ogg",
+      "codec": "libvorbis",
+      "sha256": "aefa4835fda6edefee5f69f4b91eaf0360df2955c8a671d5ef9ed30c801c6a7d",
+      "bytes": 11955,
+      "command": [
+        "ffmpeg",
+        "-nostdin",
+        "-y",
+        "-i",
+        "tone.wav",
+        "-map_metadata",
+        "-1",
+        "-fflags",
+        "+bitexact",
+        "-flags:a",
+        "+bitexact",
+        "-c:a",
+        "libvorbis",
+        "tone.ogg"
+      ]
+    },
+    {
+      "file": "tone.flac",
+      "codec": "flac",
+      "sha256": "d95afd25f92ab1c0ad4f459d2b3779be45f9884eee3a8e7a731799a275f073e8",
+      "bytes": 66061,
+      "command": [
+        "ffmpeg",
+        "-nostdin",
+        "-y",
+        "-i",
+        "tone.wav",
+        "-map_metadata",
+        "-1",
+        "-fflags",
+        "+bitexact",
+        "-flags:a",
+        "+bitexact",
+        "-c:a",
+        "flac",
+        "tone.flac"
+      ]
+    },
+    {
+      "file": "tone.m4a",
+      "codec": "aac",
+      "sha256": "0539c076127d9cafc4a9f9416a58681816b2f2fa1cfe0e83c1d29dc49d66cda5",
+      "bytes": 33006,
+      "command": [
+        "ffmpeg",
+        "-nostdin",
+        "-y",
+        "-i",
+        "tone.wav",
+        "-map_metadata",
+        "-1",
+        "-fflags",
+        "+bitexact",
+        "-flags:a",
+        "+bitexact",
+        "-c:a",
+        "aac",
+        "tone.m4a"
+      ]
+    }
+  ]
+}

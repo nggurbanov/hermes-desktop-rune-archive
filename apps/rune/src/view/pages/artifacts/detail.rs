@@ -35,13 +35,23 @@ pub(super) fn panel(s: &Viewer, a: &Artifact, k: &Kit) -> El {
                 .on_press_tx(move |_: &mut Viewer, tx| tx.copy(copy.clone()))
                 .build(k),
         );
-    if a.kind == "image" {
+    if a.kind == "image"
+        || a.kind == "audio"
+        || crate::preview::Kind::for_source(&a.value) == Some(crate::preview::Kind::Audio)
+    {
         pane = pane.child(
             btn(
                 s,
-                "Open image viewer",
+                if a.kind == "image" {
+                    "Open image viewer"
+                } else {
+                    "Open audio player"
+                },
                 Action::Inspect,
-                state.preview_loading || a.value.starts_with("data:") && state.download.is_none(),
+                state.preview_loading
+                    || a.kind == "image"
+                        && a.value.starts_with("data:")
+                        && state.download.is_none(),
                 k,
             )
             .key("artifact-native-preview"),
