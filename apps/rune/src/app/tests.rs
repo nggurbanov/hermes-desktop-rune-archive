@@ -94,8 +94,10 @@ fn every_live_bot_open_refreshes_registry_and_hydrates_its_scoped_sessions() {
                         messages: vec![HistoryMessage {
                             role: "assistant".into(),
                             content: id.into(),
+                            raw: serde_json::Value::Null,
                         }],
                         has_more: false,
+                        cursor: 0,
                     },
                 )),
             }),
@@ -137,8 +139,10 @@ fn stale_history_cannot_replace_a_different_profile_or_session() {
                 messages: vec![HistoryMessage {
                     role: "assistant".into(),
                     content: "stale".into(),
+                    raw: serde_json::Value::Null,
                 }],
                 has_more: false,
+                cursor: 0,
             },
         }),
     });
@@ -153,8 +157,10 @@ fn stale_history_cannot_replace_a_different_profile_or_session() {
                 messages: vec![HistoryMessage {
                     role: "assistant".into(),
                     content: "wrong owner".into(),
+                    raw: serde_json::Value::Null,
                 }],
                 has_more: false,
+                cursor: 0,
             },
         }),
     });
@@ -253,6 +259,7 @@ fn reconnect_profile_fallback_does_not_adopt_an_old_session_id() {
     s.messages.push(HistoryMessage {
         role: "assistant".into(),
         content: "old owner".into(),
+        raw: serde_json::Value::Null,
     });
     s.apply(Reply {
         intent: 1,

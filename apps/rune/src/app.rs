@@ -43,6 +43,69 @@ struct BotOpen {
 }
 
 pub struct Viewer {
+    pub route: crate::pages::Route,
+    pub conversation: crate::conversation::Conversation,
+    pub chat: crate::chat::Chat,
+    pub subagents: crate::subagents::Subagents,
+    pub audio: crate::audio::Audio,
+    pub plugin_hosts: crate::plugin_host::PluginHosts,
+    plugin_dialogs: plugin_actions::NativeDialogs,
+    plugin_navigation: Vec<plugin_actions::PluginNavigation>,
+    pub connections: crate::connections::Connections,
+    pub files: crate::files::Files,
+    pub identities: crate::identities::Identities,
+    pub directories: crate::directories::Directories,
+    pub terminal: crate::terminal::Terminal,
+    pub review: crate::review::Review,
+    review_preferences: serde_json::Value,
+    review_completions: HashMap<DraftScope, u64>,
+    tool_owner: Option<(DraftScope, Option<String>)>,
+    workspace_cwds: HashMap<DraftScope, String>,
+    process_owner: Option<DraftScope>,
+    next_process: f64,
+    pub operations: crate::operations::Operations,
+    pub health_open: bool,
+    pub chrome: crate::client_status::ClientStatus,
+    pub show_statusbar: bool,
+    pub show_profile_rail: bool,
+    pub hidden_status_items: std::collections::BTreeSet<String>,
+    pub workspace_menu: bool,
+    retired_profiles: std::collections::HashSet<(u64, String)>,
+    audio_owner: Option<DraftScope>,
+    spoken_scope: Option<DraftScope>,
+    voice_interrupted: std::collections::HashSet<DraftScope>,
+    pub speak_replies: bool,
+    pub wake_enabled: bool,
+    voice_sends: HashMap<DraftScope, String>,
+    spoken_completion: HashMap<DraftScope, u64>,
+    pub compose_error: Option<String>,
+    pub show_reasoning: bool,
+    pub admission_mode: crate::conversation::AdmissionMode,
+    pub recoverable_sends: Vec<(String, String)>,
+    read_only_chats: HashMap<DraftScope, String>,
+    pub discard_send_confirm: Option<String>,
+    policy_sends: HashMap<String, crate::composer::Draft>,
+    recovery_scope: Option<DraftScope>,
+    pub prompt_responses: HashMap<(DraftScope, String), TextEdit>,
+    pub prompt_choices: HashMap<(DraftScope, String, String), std::collections::BTreeSet<String>>,
+    chat_attached: std::collections::HashSet<DraftScope>,
+    pub client_error: Option<String>,
+    pub client_notice: Option<String>,
+    preferences: crate::client::Preferences,
+    pub(crate) profile_preferences: crate::client::profiles::ProfilePreferences,
+    pub sidebar_state: crate::sidebar::SidebarState,
+    pub settings: crate::pages::settings::Settings,
+    pub bots: crate::pages::bots::Bots,
+    bots_revision: u64,
+    new_bot_launch: Option<(crate::pages::bots::NewBotChat, u64)>,
+    new_bot_intro: Option<(String, u64, u64)>,
+    pub capabilities: crate::pages::capabilities::Capabilities,
+    pub cron: crate::pages::cron::Cron,
+    pub messaging: crate::pages::messaging::Messaging,
+    pub artifacts: crate::pages::artifacts::Artifacts,
+    page_network: crate::pages::PageNetwork,
+    page_owner: Option<(u64, String)>,
+    page_connection: Option<Connection>,
     pub composer: Composer,
     pub voice: crate::voice::Voice,
     connection_epoch: u64,
@@ -61,6 +124,8 @@ pub struct Viewer {
     pub sidebar: PaneState,
     pub inspector: PaneState,
     pub theme: Option<bool>,
+    pub layout: crate::layout::Node,
+    pub arranging: bool,
     pub connection_form: bool,
     pub connection_url: TextEdit,
     pub connection_token: TextEdit,
@@ -125,6 +190,69 @@ enum Update {
 impl Viewer {
     fn empty() -> Self {
         Self {
+            route: crate::pages::Route::Chat,
+            conversation: crate::conversation::Conversation::new(),
+            chat: crate::chat::Chat::new(),
+            subagents: crate::subagents::Subagents::new(),
+            connections: crate::connections::Connections::new(),
+            files: crate::files::Files::new(),
+            identities: Default::default(),
+            directories: Default::default(),
+            terminal: crate::terminal::Terminal::new(),
+            review: crate::review::Review::new(),
+            review_preferences: serde_json::Value::Null,
+            review_completions: HashMap::new(),
+            tool_owner: None,
+            workspace_cwds: HashMap::new(),
+            process_owner: None,
+            next_process: 0.0,
+            operations: crate::operations::Operations::new(),
+            health_open: false,
+            chrome: Default::default(),
+            show_statusbar: true,
+            show_profile_rail: true,
+            hidden_status_items: crate::client::default_hidden_status(),
+            workspace_menu: false,
+            plugin_hosts: Default::default(),
+            plugin_dialogs: plugin_actions::NativeDialogs::new(),
+            plugin_navigation: vec![],
+            retired_profiles: Default::default(),
+            audio: Default::default(),
+            audio_owner: None,
+            spoken_scope: None,
+            voice_interrupted: Default::default(),
+            speak_replies: false,
+            wake_enabled: false,
+            voice_sends: HashMap::new(),
+            spoken_completion: HashMap::new(),
+            compose_error: None,
+            show_reasoning: false,
+            admission_mode: Default::default(),
+            recoverable_sends: vec![],
+            read_only_chats: HashMap::new(),
+            discard_send_confirm: None,
+            policy_sends: HashMap::new(),
+            recovery_scope: None,
+            prompt_responses: HashMap::new(),
+            prompt_choices: HashMap::new(),
+            chat_attached: Default::default(),
+            client_error: None,
+            client_notice: None,
+            preferences: crate::client::Preferences::default(),
+            profile_preferences: Default::default(),
+            sidebar_state: crate::sidebar::SidebarState::new(),
+            settings: crate::pages::settings::Settings::new(),
+            bots: crate::pages::bots::Bots::new(),
+            bots_revision: 0,
+            new_bot_launch: None,
+            new_bot_intro: None,
+            capabilities: crate::pages::capabilities::Capabilities::new(),
+            cron: crate::pages::cron::Cron::new(),
+            messaging: crate::pages::messaging::Messaging::new(),
+            artifacts: crate::pages::artifacts::Artifacts::new(),
+            page_network: crate::pages::PageNetwork::default(),
+            page_owner: None,
+            page_connection: None,
             composer: Composer::new(),
             voice: crate::voice::Voice::default(),
             connection_epoch: 0,
@@ -143,6 +271,8 @@ impl Viewer {
             sidebar: PaneState::new(237.0).range(190.0, 360.0),
             inspector: PaneState::new(300.0).range(240.0, 520.0).collapsed(),
             theme: None,
+            layout: Default::default(),
+            arranging: false,
             connection_form: true,
             connection_url: TextEdit::new(""),
             connection_token: TextEdit::new(""),
@@ -173,6 +303,40 @@ impl Viewer {
                 Err(_) => s.error = Some("Unable to read the selected fixture".into()),
             }
             return s;
+        }
+        s.sidebar_state.load_preferences();
+        match crate::client::profiles::ProfilePreferences::load() {
+            Ok(p) => s.profile_preferences = p,
+            Err(error) => s.client_error = Some(error),
+        }
+        match crate::client::Preferences::load() {
+            Ok(prefs) => {
+                s.speak_replies = prefs.speak_replies;
+                s.review_preferences = prefs.review.clone();
+                s.review.hydrate_preferences(&prefs.review);
+                s.show_statusbar = prefs.show_statusbar;
+                s.show_profile_rail = prefs.show_profile_rail;
+                s.hidden_status_items = prefs.hidden_status_items.clone();
+                s.theme = prefs.theme;
+                s.layout = prefs
+                    .layout
+                    .clone()
+                    .normalize()
+                    .filter(|t| t.panes().iter().any(|p| p == "workspace"))
+                    .unwrap_or_default();
+                s.simple_mode = prefs.simple_mode;
+                s.sidebar.set_width(prefs.sidebar_width);
+                s.inspector.set_width(prefs.inspector_width);
+                if !prefs.sidebar_open {
+                    s.sidebar.toggle();
+                }
+                if prefs.inspector_open {
+                    s.inspector.toggle();
+                    s.advanced_tools_open = true;
+                }
+                s.preferences = prefs;
+            }
+            Err(error) => s.client_error = Some(error),
         }
         if let Some(endpoint) = argument("--gateway") {
             let token = std::env::var("HERMES_GATEWAY_TOKEN")
@@ -260,7 +424,16 @@ impl Viewer {
         self.use_connection(Connection::Local { home });
     }
     fn use_connection(&mut self, connection: Connection) {
+        if !self.allow_owner_change("") {
+            return;
+        }
+        self.chat.close_connection(self.connection_epoch);
+        self.subagents.close_connection(self.connection_epoch);
+        self.conversation.close_connection(self.connection_epoch);
+        self.audio.close_connection(self.connection_epoch);
+        self.terminal.close_connection(self.connection_epoch);
         self.connection_epoch += 1;
+        self.page_network.invalidate();
         self.composer.close();
         self.connection = Some(connection);
         self.connection_form = false;
@@ -333,7 +506,12 @@ impl Viewer {
         if profile == self.profile {
             return;
         }
+        if !self.allow_owner_change(&profile) {
+            return;
+        }
+        self.remember_profile_appearance();
         self.profile = profile.clone();
+        self.restore_profile_appearance();
         self.pending_bot = None;
         self.bot_empty = false;
         self.selected_session = None;
@@ -352,6 +530,11 @@ impl Viewer {
         self.dispatch(Command::Sessions(profile));
     }
     pub fn open_session(&mut self, id: String) {
+        self.layout.open("workspace");
+        if self.route == crate::pages::Route::Settings {
+            self.settings.vault.dismiss();
+        }
+        self.route = crate::pages::Route::Chat;
         let title = self
             .sessions
             .iter()
@@ -362,6 +545,11 @@ impl Viewer {
     }
 
     pub fn open_bot(&mut self, profile: String) {
+        self.layout.open("workspace");
+        if self.route == crate::pages::Route::Settings {
+            self.settings.vault.dismiss();
+        }
+        self.route = crate::pages::Route::Chat;
         self.open_bot_with_intent(profile, false);
     }
 
@@ -376,6 +564,9 @@ impl Viewer {
     }
 
     fn open_bot_with_intent(&mut self, profile: String, new_tab: bool) {
+        if !self.allow_owner_change(&profile) {
+            return;
+        }
         let Some(bot) = self.profiles.iter().find(|p| p.name == profile).cloned() else {
             return;
         };
@@ -427,6 +618,9 @@ impl Viewer {
         bot: bool,
         new_tab: bool,
     ) {
+        if !self.allow_owner_change(&profile) {
+            return;
+        }
         let replace = self.foreground_slot();
         self.connection_form = false;
         self.pending_bot = None;
@@ -510,6 +704,11 @@ impl Viewer {
     }
 
     pub fn activate_tab(&mut self, index: usize) {
+        self.layout.open("workspace");
+        if self.route == crate::pages::Route::Settings {
+            self.settings.vault.dismiss();
+        }
+        self.route = crate::pages::Route::Chat;
         if let Some(tab) = self.tabs.get(index).cloned() {
             if tab.bot {
                 self.open_bot_with_intent(tab.profile, true);
@@ -630,7 +829,7 @@ impl Viewer {
                 self.selected_session = None;
                 self.messages.clear();
                 self.error = None;
-                self.status = "Connected · Read only".into();
+                self.status = "Connected".into();
                 if let Some(bot) = reopen_bot {
                     let profile = bot.profile.clone();
                     self.pending_bot = Some(bot);
@@ -661,7 +860,7 @@ impl Viewer {
             }
             Ok(Update::Sessions { profile, sessions }) if profile == self.profile => {
                 self.sessions = sessions;
-                self.status = "Connected · Read only".into();
+                self.status = "Connected".into();
             }
             Ok(Update::Opened {
                 profile,
@@ -672,7 +871,7 @@ impl Viewer {
                 self.sessions = sessions;
                 self.messages = history.messages;
                 self.history_truncated = history.has_more;
-                self.status = "Connected · Read only".into();
+                self.status = "Connected".into();
                 self.error = None;
             }
             Ok(Update::BotOpened {
@@ -689,7 +888,7 @@ impl Viewer {
                 let intent = self.pending_bot.take().expect("matching bot open");
                 self.profiles = profiles;
                 self.sessions = sessions;
-                self.status = "Connected · Read only".into();
+                self.status = "Connected".into();
                 self.error = None;
                 if let Some((id, history)) = chat {
                     let title = self
@@ -723,6 +922,7 @@ impl Viewer {
     }
     fn load_fixture(&mut self, v: serde_json::Value) {
         self.fixture = true;
+        self.chrome.fixture();
         self.connection_form = false;
         self.endpoint_label = "Sample agent · Fixture".into();
         self.status = "Fixture · Read only".into();
@@ -765,6 +965,7 @@ impl Viewer {
             .map(|p| HistoryMessage {
                 role: p["role"].as_str().unwrap_or("assistant").into(),
                 content: p["content"].as_str().unwrap_or("").into(),
+                raw: p.clone(),
             })
             .collect();
         if let Some(id) = &self.selected_session {
@@ -796,6 +997,7 @@ impl Viewer {
                         .map(|m| HistoryMessage {
                             role: m["role"].as_str().unwrap_or("assistant").into(),
                             content: m["content"].as_str().unwrap_or("").into(),
+                            raw: m.clone(),
                         })
                         .collect(),
                 );
@@ -812,10 +1014,28 @@ impl Viewer {
 
 pub fn setup(s: &mut Viewer, waker: Waker) {
     s.composer.init_network(waker.clone());
+    s.conversation.init(waker.clone());
+    s.subagents.init(waker.clone());
+    s.chat.init(waker.clone());
+    s.audio.init(waker.clone());
+    s.operations.init(waker.clone());
+    s.files.init(waker.clone());
+    s.identities.init(waker.clone());
+    if !s.fixture {
+        s.terminal.init(waker.clone());
+    }
+    s.review.init(waker.clone());
+    s.plugin_dialogs.init(waker.clone());
     s.voice.init(waker.clone());
+    s.page_network.init(waker.clone());
+    s.messaging.init(waker.clone());
+    s.bots.init(waker.clone());
+    s.artifacts.init(waker.clone());
     if s.fixture {
+        s.connections.fixture();
         return;
     }
+    s.connections.init(waker.clone());
     let (send, requests) = mpsc::channel::<Request>();
     let (replies, receive) = mpsc::channel();
     std::thread::spawn(move || {
@@ -911,9 +1131,117 @@ pub fn setup(s: &mut Viewer, waker: Waker) {
     s.network = Some(Network { send, receive });
 }
 
-pub fn poll(s: &mut Viewer, _: f64, tx: &mut Tx) -> bool {
+pub fn poll(s: &mut Viewer, now: f64, tx: &mut Tx) -> bool {
+    s.save_client_preferences();
+    if !s.fixture {
+        match s.composer.poll_storage(now) {
+            Ok(Some(delay)) => tx.wake_after(delay),
+            Err(error) => s.client_error = Some(error),
+            _ => {}
+        }
+    }
+    if s.sidebar.is_open() {
+        tx.wake_after(std::time::Duration::from_secs(15));
+    }
+    s.messaging
+        .observe(s.route == crate::pages::Route::Messaging && !s.connection_form);
+    s.operations
+        .observe(s.route == crate::pages::Route::CommandCenter, s.health_open);
+    if s.chrome.observe(s.composer_scope(), s.chat_running()) {
+        s.invalidate_page_requests("chrome.context");
+    }
+    s.poll_new_bot_intro();
+    s.settings_local_navigation();
+    let timers = s.show_statusbar && !s.simple_mode;
+    let timer_changed = s.chrome.timers_changed(
+        timers && s.status_item_visible("turn-timer"),
+        timers && s.status_item_visible("session-timer"),
+    );
     let scope = s.composer_scope();
-    let composer_changed = s.composer.poll(&scope)
+    let chat_visible = s.route == crate::pages::Route::Chat
+        && s.layout.shows("workspace", &|pane| match pane {
+            "workspace" => true,
+            "sessions" | "hermes-bots:pane" => s.sidebar.is_open(),
+            "files" | "review" | "terminal" => s.inspector.is_open(),
+            _ => false,
+        });
+    let subagents_changed = if !s.fixture && chat_visible {
+        if let Some(connection) = s.connection.as_ref() {
+            s.subagents.observe(
+                connection,
+                scope.clone(),
+                s.conversation.view(&scope),
+                s.theme,
+            )
+        } else {
+            s.subagents.poll(s.theme)
+        }
+    } else {
+        s.subagents.poll(s.theme)
+    };
+    if let Some(delay) = s.subagents.wake_after() {
+        tx.wake_after(delay);
+    }
+    let pages_changed = subagents_changed
+        | timer_changed
+        | s.poll_chat(tx)
+        | s.poll_pages(now)
+        | s.poll_conversations()
+        | s.poll_audio()
+        | s.poll_plugin_hosts(tx)
+        | s.poll_connections()
+        | s.poll_files(now)
+        | s.poll_tools(now, tx);
+    if s.inspector.is_open() || s.route == crate::pages::Route::FilePreview {
+        tx.wake_after(std::time::Duration::from_secs(4));
+    }
+    if s.plugin_hosts.is_open() {
+        tx.wake_after(std::time::Duration::from_millis(30));
+    }
+    if let Some(delay) = s.review.wake_after() {
+        tx.wake_after(delay);
+    }
+    if s.inspector.is_open() {
+        tx.wake_after(std::time::Duration::from_secs(2));
+    }
+    if let Some(delay) = s.messaging.wake_after() {
+        tx.wake_after(delay);
+    }
+    if let Some(delay) = s.operations.wake_after() {
+        tx.wake_after(delay);
+    }
+    if let Some(delay) = s.bots.wake_after() {
+        tx.wake_after(delay);
+    }
+    if let Some(delay) = s.settings.wake_after() {
+        tx.wake_after(delay);
+    }
+    if s.route == crate::pages::Route::Cron {
+        tx.wake_after(std::time::Duration::from_secs(15));
+    }
+    if s.route == crate::pages::Route::Capabilities && s.capabilities.needs_poll() {
+        tx.wake_after(std::time::Duration::from_secs(2));
+    }
+    if s.show_statusbar
+        && !s.simple_mode
+        && (s.status_item_visible("turn-timer") && s.chat_running()
+            || s.status_item_visible("session-timer"))
+    {
+        tx.wake_after(std::time::Duration::from_secs(1));
+    }
+    if s.chrome.resources_enabled
+        && s.show_statusbar
+        && !s.simple_mode
+        && s.status_item_visible("resources")
+    {
+        tx.wake_after(std::time::Duration::from_secs(5));
+    }
+    if s.audio_needs_tick() {
+        tx.wake_after(std::time::Duration::from_millis(50));
+    }
+    let scope = s.composer_scope();
+    let composer_changed = pages_changed
+        | s.composer.poll(&scope)
         | s.composer.dismiss_if_scope_changed(&scope)
         | s.voice.poll(&scope);
     let mut replies = vec![];
@@ -951,6 +1279,7 @@ fn default_agent_home() -> PathBuf {
 }
 fn connection_label(connection: &Connection) -> String {
     match connection {
+        Connection::Saved { inner, .. } => connection_label(inner),
         Connection::Local { .. } => "Local Hermes".into(),
         Connection::Url { endpoint, .. } => url::Url::parse(endpoint)
             .ok()
@@ -964,6 +1293,7 @@ pub fn reader_scene(s: &mut Viewer) {
         serde_json::from_str(include_str!("../fixtures/reader.json"))
             .expect("committed reader fixture"),
     );
+    s.ensure_page_owner();
 }
 pub fn bots_scene(s: &mut Viewer) {
     reader_scene(s);
@@ -973,6 +1303,14 @@ pub fn bots_scene(s: &mut Viewer) {
 pub fn layout_scene(s: &mut Viewer) {
     reader_scene(s);
     s.inspector.set_open(true);
+}
+pub fn subagents_scene(s: &mut Viewer) {
+    reader_scene(s);
+    s.subagents.fixture(s.composer_scope());
+}
+pub fn rich_chat_scene(s: &mut Viewer) {
+    reader_scene(s);
+    s.rich_chat_fixture();
 }
 pub fn composer_scene(s: &mut Viewer) {
     reader_scene(s);
@@ -1000,11 +1338,11 @@ pub fn models_scene(s: &mut Viewer) {
 }
 pub fn reasoning_scene(s: &mut Viewer) {
     composer_scene(s);
-    s.open_composer(Popup::Reasoning);
+    s.open_composer(Popup::Settings);
 }
 pub fn permissions_scene(s: &mut Viewer) {
     composer_scene(s);
-    s.open_composer(Popup::Permissions);
+    s.open_composer(Popup::Settings);
 }
 pub fn voice_scene(s: &mut Viewer) {
     composer_scene(s);
@@ -1037,6 +1375,22 @@ pub fn error_scene(s: &mut Viewer) {
 mod tests;
 
 pub fn on_key(s: &mut Viewer, event: &rune::KeyEvent, tx: &mut Tx) -> bool {
+    if crate::view::terminal::on_key(s, event, tx) {
+        return true;
+    }
+    if let rune::Key::Command(ch) = event.key {
+        match ch {
+            'n' => s.new_draft(),
+            ',' => s.open_route(crate::pages::Route::Settings),
+            'b' => s.sidebar.toggle(),
+            'j' => s.inspector.toggle(),
+            'k' => s.open_route(crate::pages::Route::CommandCenter),
+            's' if event.mods.shift => s.show_statusbar = !s.show_statusbar,
+            _ => return crate::view::composer::on_key(s, event, tx),
+        }
+        tx.instant();
+        return true;
+    }
     if crate::view::composer::on_key(s, event, tx) {
         return true;
     }
@@ -1098,4 +1452,167 @@ fn url_connection(endpoint: &str, token: Option<String>) -> Result<(Connection, 
         },
         visible,
     ))
+}
+
+#[path = "pages/integration.rs"]
+mod page_integration;
+
+pub fn settings_scene(s: &mut Viewer) {
+    reader_scene(s);
+    s.open_route(crate::pages::Route::Settings);
+}
+pub fn capabilities_scene(s: &mut Viewer) {
+    reader_scene(s);
+    s.open_route(crate::pages::Route::Capabilities);
+}
+pub fn messaging_scene(s: &mut Viewer) {
+    reader_scene(s);
+    s.open_route(crate::pages::Route::Messaging);
+}
+pub fn artifacts_scene(s: &mut Viewer) {
+    reader_scene(s);
+    s.open_route(crate::pages::Route::Artifacts);
+}
+pub fn cron_scene(s: &mut Viewer) {
+    reader_scene(s);
+    s.open_route(crate::pages::Route::Cron);
+}
+
+impl Viewer {
+    fn save_client_preferences(&mut self) {
+        if self.fixture {
+            return;
+        }
+        self.remember_profile_appearance();
+        let next = crate::client::Preferences {
+            layout: self.layout.clone(),
+            review: self.review_preferences.clone(),
+            show_statusbar: self.show_statusbar,
+            show_profile_rail: self.show_profile_rail,
+            hidden_status_items: self.hidden_status_items.clone(),
+            speak_replies: self.speak_replies,
+            theme: self.theme,
+            simple_mode: self.simple_mode,
+            sidebar_width: self.sidebar.width(),
+            sidebar_open: self.sidebar.is_open(),
+            inspector_width: self.inspector.width(),
+            inspector_open: if self.simple_mode {
+                self.advanced_tools_open
+            } else {
+                self.inspector.is_open()
+            },
+        };
+        if next != self.preferences {
+            self.preferences = next.clone();
+            match next.save() {
+                Ok(()) => self.client_error = None,
+                Err(error) => self.client_error = Some(error),
+            }
+        }
+    }
+}
+
+#[path = "app/conversation.rs"]
+mod conversation_actions;
+
+fn synthetic_conversation(s: &mut Viewer, value: serde_json::Value) {
+    let scope = s.composer_scope();
+    let mut value = value;
+    value["messages"] = serde_json::json!(
+        s.messages
+            .iter()
+            .map(|m| serde_json::json!({"role":m.role,"content":m.content}))
+            .collect::<Vec<_>>()
+    );
+    if let Err(error) = s.conversation.fixture(scope, &value) {
+        s.compose_error = Some(error);
+    }
+}
+pub fn working_scene(s: &mut Viewer) {
+    reader_scene(s);
+    synthetic_conversation(
+        s,
+        serde_json::json!({"running":true,"reasoning":"Checking the requested files and comparing the implementation.","tools":["Read source files","Run targeted checks"],"pending":[{"admission_id":"queued-example","input_id":"input-example","text":"Also check the light theme","status":"queued","controls":["cancel","steer"]}]}),
+    );
+}
+pub fn decisions_scene(s: &mut Viewer) {
+    reader_scene(s);
+    synthetic_conversation(
+        s,
+        serde_json::json!({"running":true,"prompts":[{"kind":"approval","prompt_id":"approval-example","execution_generation":1,"description":"Allow the agent to edit the selected project files?","command":"apply_patch src/view.rs","choices":["once","session","deny"]},{"kind":"clarify","prompt_id":"clarify-example","execution_generation":1,"server_request":true,"questions":[{"qid":"theme","question":"Which appearances should be checked?","choices":["Light","Dark"],"multi_select":true},{"qid":"device","question":"Which window size?","choices":["Compact","Desktop"],"multi_select":false}],"answers":{}}]}),
+    );
+}
+
+#[path = "app/audio.rs"]
+mod audio_actions;
+
+#[path = "app/plugins.rs"]
+mod plugin_actions;
+#[path = "app/profiles.rs"]
+mod profile_actions;
+
+pub fn bots_manager_scene(s: &mut Viewer) {
+    reader_scene(s);
+    s.open_route(crate::pages::Route::Bots);
+}
+pub fn connections_scene(s: &mut Viewer) {
+    reader_scene(s);
+    s.open_route(crate::pages::Route::Connections);
+}
+
+#[path = "app/files.rs"]
+mod file_actions;
+
+pub fn operations_scene(s: &mut Viewer) {
+    reader_scene(s);
+    s.open_route(crate::pages::Route::CommandCenter);
+    if let Some(section) = argument("--ops-section")
+        .filter(|s| ["sessions", "system", "usage", "maintenance"].contains(&s.as_str()))
+    {
+        s.operations_action(crate::operations::Action::Section(section));
+    }
+}
+
+impl Viewer {
+    pub fn toggle_health(&mut self) {
+        self.ensure_page_owner();
+        self.health_open = !self.health_open;
+        if self.fixture {
+            self.operations.fixture();
+        } else if self.health_open {
+            let e = self.operations.check_health();
+            self.page_requests(e);
+        }
+    }
+}
+
+#[path = "app/tools.rs"]
+mod tool_actions;
+pub fn terminal_scene(s: &mut Viewer) {
+    layout_scene(s);
+    s.terminal.fixture();
+}
+pub fn file_preview_scene(s: &mut Viewer) {
+    layout_scene(s);
+    s.files.fixture(s.composer_scope());
+    s.open_route(crate::pages::Route::FilePreview);
+}
+
+impl Viewer {
+    pub fn current_connection(&self) -> Option<&Connection> {
+        self.connection.as_ref()
+    }
+}
+
+impl Viewer {
+    pub fn can_remember_profile_preferences(&self) -> bool {
+        self.page_owner.as_ref().is_some_and(|(epoch, profile)| {
+            *epoch == self.connection_epoch && profile == &self.profile
+        })
+    }
+}
+
+pub fn review_scene(s: &mut Viewer) {
+    layout_scene(s);
+    s.review.fixture(s.composer_scope());
 }

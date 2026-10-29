@@ -42,9 +42,15 @@ pub struct DraftAttachment {
 pub struct Draft {
     pub text: TextEdit,
     pub model: Option<ModelKey>,
+    pub model_changed: bool,
+    pub reasoning_changed: bool,
+    pub service_tier_changed: bool,
+    pub approval_changed: bool,
     pub reasoning: Option<String>,
     pub service_tier: Option<String>,
     pub approval_mode: Option<String>,
+    pub cwd: Option<String>,
+    pub cwd_explicit: bool,
     pub attachments: Vec<DraftAttachment>,
 }
 
@@ -53,9 +59,15 @@ impl Default for Draft {
         Self {
             text: TextEdit::new(""),
             model: None,
+            model_changed: false,
+            reasoning_changed: false,
+            service_tier_changed: false,
+            approval_changed: false,
             reasoning: None,
             service_tier: None,
             approval_mode: None,
+            cwd: None,
+            cwd_explicit: false,
             attachments: vec![],
         }
     }
@@ -64,12 +76,13 @@ impl Default for Draft {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Popup {
     Models,
-    Reasoning,
-    Permissions,
+    Settings,
     VoiceEngine,
 }
 
+mod persistence;
 pub struct Composer {
+    persisted: Option<persistence::Persistence>,
     pub popup: Option<Popup>,
     pub popup_scope: Option<DraftScope>,
     pub search: TextEdit,
@@ -115,6 +128,7 @@ struct CatalogReply {
 impl Default for Composer {
     fn default() -> Self {
         Self {
+            persisted: None,
             popup: None,
             popup_scope: None,
             search: TextEdit::new(""),
@@ -204,6 +218,15 @@ impl Composer {
         }
     }
 
+    pub fn rehome(&mut self, origin: &DraftScope, destination: DraftScope) {
+        if origin == &destination {
+            return;
+        }
+        if let Some(draft) = self.drafts.remove(origin) {
+            self.drafts.entry(destination).or_insert(draft);
+        }
+        self.close();
+    }
     pub fn is_favorite(&self, connection: u64, provider: &str, id: &str) -> bool {
         self.favorites
             .contains(&(connection, provider.to_owned(), id.to_owned()))
@@ -230,6 +253,7 @@ impl Composer {
         let capabilities = model.capabilities.clone();
         let draft = self.draft_mut(scope);
         draft.model = Some(key);
+        draft.model_changed = true;
         if let Some(effort) = draft.reasoning.as_deref() {
             let supported = capabilities.as_ref().is_some_and(|caps| {
                 caps.reasoning == Some(true)
@@ -475,3 +499,31 @@ fn find_model<'a>(
 
 #[cfg(test)]
 mod tests;
+
+impl Composer {
+    pub fn rename_profile(&mut self, connection: u64, from: &str, to: &str) {
+        let keys: Vec<_> = self
+            .drafts
+            .keys()
+            .filter(|scope| scope.connection == connection && scope.profile == from)
+            .cloned()
+            .collect();
+        for key in keys {
+            if let Some(draft) = self.drafts.remove(&key) {
+                self.drafts.insert(
+                    DraftScope {
+                        profile: to.into(),
+                        ..key
+                    },
+                    draft,
+                );
+            }
+        }
+        self.close();
+    }
+    pub fn delete_profile(&mut self, connection: u64, name: &str) {
+        self.drafts
+            .retain(|scope, _| scope.connection != connection || scope.profile != name);
+        self.close();
+    }
+}

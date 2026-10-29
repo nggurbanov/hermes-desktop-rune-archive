@@ -1,7 +1,7 @@
 //! Hermes shell anatomy, from the retained Electron client:
 //! Sessions/Bots share the left zone; profile scope lives at its foot;
 //! conversations are workspace tabs. OpenCode supplies controls and tokens.
-use rune::{Color, Cursor, Cx, Drag, El, Phase, ScrollSpec, col, el, icon, row, text};
+use rune::{Color, Cx, El, ScrollSpec, col, el, icon, row, text};
 use rune_kit::{
     Button, ButtonVariant, ControlSize, IconButton, IconButtonVariant, Kit, Menu, MenuItem,
 };
@@ -12,7 +12,7 @@ use crate::app::{ConversationTarget, SidebarTab, Viewer};
 
 const BAND: f32 = 36.0;
 
-pub fn layout(s: &Viewer, cx: &mut Cx<Viewer>, main: El, sidebar: El, tools: El, k: &Kit) -> El {
+pub fn layout(s: &Viewer, cx: &mut Cx<Viewer>, main: El, sidebar: El, k: &Kit) -> El {
     let mut header = row()
         .key("hermes-titlebar")
         .w_full()
@@ -73,12 +73,19 @@ pub fn layout(s: &Viewer, cx: &mut Cx<Viewer>, main: El, sidebar: El, tools: El,
                 .child(
                     IconButton::new(&ic::SETTINGS_GEAR)
                         .variant(IconButtonVariant::GhostMuted)
-                        .label("Settings, not yet migrated")
-                        .help("Settings will be migrated in a later increment")
-                        .disabled(true)
+                        .label("Settings")
+                        .on_press(|s: &mut Viewer| s.open_route(crate::pages::Route::Settings))
                         .build(k)
                         .key("settings"),
                 )
+                .children(s.simple_mode.then(|| {
+                    Button::new(&s.profile)
+                        .variant(ButtonVariant::GhostMuted)
+                        .control_size(ControlSize::Small)
+                        .on_press(|s: &mut Viewer| s.profile_picker = !s.profile_picker)
+                        .build(k)
+                        .key("compact-profile")
+                }))
                 .children(s.simple_mode.then(|| {
                     IconButton::new(&ic::GLOBE)
                         .variant(IconButtonVariant::GhostMuted)
@@ -87,6 +94,14 @@ pub fn layout(s: &Viewer, cx: &mut Cx<Viewer>, main: El, sidebar: El, tools: El,
                         .build(k)
                         .key("change-connection")
                 }))
+                .child(
+                    Button::new("Layout")
+                        .variant(ButtonVariant::GhostMuted)
+                        .control_size(ControlSize::Small)
+                        .on_press(|s: &mut Viewer| s.arranging = !s.arranging)
+                        .build(k)
+                        .key("arrange-layout"),
+                )
                 .child(
                     IconButton::new(&ic::LAYOUT_LEFT)
                         .variant(IconButtonVariant::GhostMuted)
@@ -97,65 +112,56 @@ pub fn layout(s: &Viewer, cx: &mut Cx<Viewer>, main: El, sidebar: El, tools: El,
                         .key("tooling-toggle"),
                 ),
         );
-    let mut body = row().key("hermes-panes").w_full().grow(1.0).min_h(0.0);
-    if s.sidebar.is_open() {
-        body = body.child(
-            col()
-                .key("sessions-zone")
-                .w(s.sidebar.width())
-                .h_full()
-                .min_h(0.0)
-                .fill(k.c.bg_deep)
-                .child(
-                    row()
-                        .key("sidebar-tabs")
-                        .role("tablist")
-                        .label("Sessions and bots")
-                        .w_full()
-                        .h(32.0)
-                        .px(8.0)
-                        .gap(4.0)
-                        .center_y()
-                        .child(sidebar_tab(
-                            "Sessions",
-                            "sessions-tab",
-                            SidebarTab::Sessions,
-                            s,
-                            k,
-                        ))
-                        .child(sidebar_tab("Bots", "bots-tab", SidebarTab::Bots, s, k)),
-                )
-                .child(sidebar.grow(1.0).min_h(0.0))
-                .child(resize_grip(true, k)),
-        );
-    }
-    body = body.child(
-        col()
-            .key("workspace-zone")
-            .w(0.0)
-            .grow(1.0)
-            .min_w(0.0)
-            .h_full()
-            .fill(k.c.bg_base)
-            .child(main),
+    let sidebar = col()
+        .key("sessions-zone")
+        .w_full()
+        .h_full()
+        .min_h(0.0)
+        .fill(k.c.bg_deep)
+        .child(
+            row()
+                .key("sidebar-tabs")
+                .role("tablist")
+                .label("Sessions and bots")
+                .w_full()
+                .h(32.0)
+                .px(8.0)
+                .gap(4.0)
+                .center_y()
+                .child(sidebar_tab(
+                    "Sessions",
+                    "sessions-tab",
+                    SidebarTab::Sessions,
+                    s,
+                    k,
+                ))
+                .child(sidebar_tab("Bots", "bots-tab", SidebarTab::Bots, s, k)),
+        )
+        .child(sidebar.grow(1.0).min_h(0.0));
+    let mut panes = std::collections::HashMap::new();
+    panes.insert("sessions".into(), sidebar);
+    panes.insert("workspace".into(), main);
+    // Native tools are independently dockable; each feature owns its controls.
+    panes.insert("review".into(), super::review::panel(s, k, &mut Vec::new()));
+    panes.insert("files".into(), super::files::panel(s, k));
+    panes.insert(
+        "terminal".into(),
+        super::terminal::panel(s, k, &mut Vec::new()),
     );
-    if s.inspector.is_open() {
-        body = body.child(
-            col()
-                .key("tools-zone")
-                .w(s.inspector.width())
-                .h_full()
-                .min_h(0.0)
-                .child(tools)
-                .child(resize_grip(false, k)),
-        );
-    }
+    let body = row()
+        .key("hermes-panes")
+        .w_full()
+        .grow(1.0)
+        .min_h(0.0)
+        .child(super::layout::render(s, cx, panes, k));
+
     col()
         .w_full()
         .h_full()
         .min_h(0.0)
         .child(header)
         .child(el().h(1.0).w_full().fill(k.c.border_muted))
+        .children(s.arranging.then(|| super::layout::controls(s, k)))
         .child(body)
 }
 
@@ -198,6 +204,13 @@ fn workspace_tabs(s: &Viewer, k: &Kit) -> El {
     if s.connection_form {
         return tabs.child(
             text("Connect to Hermes")
+                .font(k.ty.ui_medium)
+                .color(k.c.text_base),
+        );
+    }
+    if s.route != crate::pages::Route::Chat {
+        return tabs.child(
+            text(s.route.title())
                 .font(k.ty.ui_medium)
                 .color(k.c.text_base),
         );
@@ -254,55 +267,6 @@ fn workspace_tabs(s: &Viewer, k: &Kit) -> El {
     tabs
 }
 
-fn resize_grip(leading: bool, k: &Kit) -> El {
-    el().key(if leading {
-        "sidebar-grip"
-    } else {
-        "inspector-grip"
-    })
-    .role("separator")
-    .label(if leading {
-        "Resize sidebar"
-    } else {
-        "Resize tools"
-    })
-    .w(5.0)
-    .pin(
-        if leading { None } else { Some(0.0) },
-        Some(0.0),
-        if leading { Some(0.0) } else { None },
-        Some(0.0),
-    )
-    .cursor(Cursor::ResizeColumn)
-    .hover(k.c.border_muted)
-    .on_drag(move |s: &mut Viewer, d: &mut Drag, tx: &mut rune::Tx| {
-        let pane = if leading {
-            &mut s.sidebar
-        } else {
-            &mut s.inspector
-        };
-        match d.phase {
-            Phase::Down => d.data = pane.width(),
-            Phase::Move => {
-                pane.set_width(d.data + if leading { d.dx } else { -d.dx });
-                tx.instant();
-            }
-            Phase::Up => {
-                if d.cancelled() {
-                    pane.set_width(d.data);
-                }
-            }
-        }
-    })
-    .on_double_press(move |s: &mut Viewer| {
-        if leading {
-            s.sidebar.reset_width();
-        } else {
-            s.inspector.reset_width();
-        }
-    })
-}
-
 pub fn sessions_nav(s: &Viewer, k: &Kit) -> El {
     let mut nav = col()
         .key("sessions-navigation")
@@ -324,8 +288,21 @@ pub fn sessions_nav(s: &Viewer, k: &Kit) -> El {
             Button::new(label)
                 .icon(glyph)
                 .variant(ButtonVariant::GhostMuted)
-                .disabled(true)
-                .help("This section will be migrated in a later increment")
+                .disabled(false)
+                .on_press(move |s: &mut Viewer| {
+                    if key == "new-session" {
+                        s.new_draft();
+                        return;
+                    }
+                    let route = match key {
+                        "capabilities" => crate::pages::Route::Capabilities,
+                        "messaging" => crate::pages::Route::Messaging,
+                        "artifacts" => crate::pages::Route::Artifacts,
+                        "cron" => crate::pages::Route::Cron,
+                        _ => crate::pages::Route::Chat,
+                    };
+                    s.open_route(route);
+                })
                 .build(k)
                 .w_full()
                 .h(30.0)
@@ -337,8 +314,11 @@ pub fn sessions_nav(s: &Viewer, k: &Kit) -> El {
 }
 
 pub fn profile_rail(s: &Viewer, p: &Pal, k: &Kit) -> El {
+    if !s.show_profile_rail || s.simple_mode {
+        return el().h(0.);
+    }
     let mut profiles = row().grow(1.0).min_w(0.0).gap(4.0).center_y().scroll_x();
-    for profile in s.profiles.iter().take(12) {
+    for profile in s.profiles.iter() {
         let name = profile.name.clone();
         profiles = profiles.child(
             el().key(format!("profile-{}", name))
@@ -357,7 +337,7 @@ pub fn profile_rail(s: &Viewer, p: &Pal, k: &Kit) -> El {
                 })
                 .hover(k.c.hover)
                 .on_press(move |s: &mut Viewer| s.select_profile(name.clone()))
-                .child(transcript::avatar(p, &profile.label)),
+                .child(identity_avatar(s, p, &profile.name, &profile.label, 16.)),
         );
     }
     let rail = row()
@@ -412,6 +392,13 @@ pub fn bots_sidebar(s: &Viewer, p: &Pal, k: &Kit) -> El {
         .w_full()
         .gap(4.0)
         .child(
+            Button::new("Manage bots")
+                .variant(ButtonVariant::GhostMuted)
+                .on_press(|s: &mut Viewer| s.open_route(crate::pages::Route::Bots))
+                .build(k)
+                .key("manage-bots"),
+        )
+        .child(
             row()
                 .w_full()
                 .h(40.0)
@@ -422,9 +409,11 @@ pub fn bots_sidebar(s: &Viewer, p: &Pal, k: &Kit) -> El {
                 .child(
                     IconButton::new(&ic::PLUS)
                         .variant(IconButtonVariant::GhostMuted)
-                        .disabled(true)
-                        .label("New bot, not yet migrated")
-                        .help("Creating bots will be migrated in a later increment")
+                        .label("New bot")
+                        .on_press(|s: &mut Viewer| {
+                            s.open_route(crate::pages::Route::Bots);
+                            s.bots_action(crate::pages::bots::Action::New);
+                        })
                         .build(k)
                         .key("new-bot"),
                 ),
@@ -464,7 +453,7 @@ pub fn bots_sidebar(s: &Viewer, p: &Pal, k: &Kit) -> El {
                 .on_secondary_press(move |s: &mut Viewer, point, _| {
                     s.row_menu = Some((menu_target.clone(), point))
                 })
-                .child(transcript::avatar(p, &bot.label).size(28.0, 28.0))
+                .child(identity_avatar(s, p, &bot.name, &bot.label, 28.))
                 .child(
                     col()
                         .grow(1.0)
@@ -547,7 +536,7 @@ pub fn conversation_context(s: &Viewer, p: &Pal, k: &Kit) -> El {
         .px(24.0)
         .gap(10.0)
         .center_y()
-        .child(transcript::avatar(p, label).size(24.0, 24.0))
+        .child(identity_avatar(s, p, &s.profile, label, 24.))
         .child(text(label).font(k.ty.ui_medium).color(k.c.text_base))
         .child(
             text(if bot { "Bot Chat" } else { "Session" })
@@ -555,7 +544,11 @@ pub fn conversation_context(s: &Viewer, p: &Pal, k: &Kit) -> El {
                 .color(k.c.text_faint),
         )
         .child(el().grow(1.0))
-        .child(text("Read only").font(k.ty.small).color(k.c.text_faint))
+        .child(
+            text(if s.chat_running() { "Working" } else { "Ready" })
+                .font(k.ty.small)
+                .color(k.c.text_faint),
+        )
 }
 
 pub fn context_menu(s: &Viewer, k: &Kit, layer: &mut Vec<El>) -> El {
@@ -578,45 +571,13 @@ pub fn context_menu(s: &Viewer, k: &Kit, layer: &mut Vec<El>) -> El {
         .build(k, layer)
 }
 
-pub fn status_bar(s: &Viewer, k: &Kit) -> El {
-    row()
-        .key("status-bar")
-        .role("status")
-        .label(&s.status)
-        .w_full()
-        .h(28.0)
-        .px(8.0)
-        .gap(10.0)
-        .center_y()
-        .fill(k.c.bg_deep)
-        .child(
-            Button::new(&s.endpoint_label)
-                .icon(&ic::GLOBE)
-                .variant(ButtonVariant::GhostMuted)
-                .control_size(ControlSize::Small)
-                .on_press(|s: &mut Viewer| s.change_connection())
-                .build(k)
-                .key("change-connection"),
-        )
-        .child(
-            Button::new("Reconnect")
-                .variant(ButtonVariant::GhostMuted)
-                .control_size(ControlSize::Small)
-                .disabled(s.loading)
-                .on_press(|s: &mut Viewer| s.reconnect())
-                .build(k)
-                .key("reconnect"),
-        )
-        .child(
-            text(&s.status)
-                .font(k.ty.small)
-                .color(k.c.text_muted)
-                .truncate(),
-        )
-        .child(el().grow(1.0))
-        .child(
-            text("Hermes · Read only")
-                .font(k.ty.small)
-                .color(k.c.text_faint),
-        )
+fn identity_avatar(s: &Viewer, p: &Pal, name: &str, label: &str, size: f32) -> El {
+    if let Some(image) = s.identities.image(name, size) {
+        if image.error().is_none() {
+            return el()
+                .size(size, size)
+                .pixels_fit(image.pixels(), rune::SurfaceFit::Fit);
+        }
+    }
+    transcript::avatar(p, label).size(size, size)
 }

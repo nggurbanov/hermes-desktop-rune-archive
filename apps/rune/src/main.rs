@@ -1,6 +1,26 @@
 mod app;
+mod audio;
+mod chat;
+mod client;
+mod client_status;
 mod composer;
+mod connections;
+mod conversation;
+mod directories;
+mod files;
 mod gateway;
+mod identities;
+mod layout;
+mod media;
+mod native_fs;
+mod oauth;
+mod operations;
+mod pages;
+mod plugin_host;
+mod review;
+mod sidebar;
+mod subagents;
+mod terminal;
 mod view;
 mod voice;
 
@@ -8,6 +28,12 @@ use app::Viewer;
 use rune::{AppSpec, Chrome};
 
 fn main() {
+    if subagents::run_if_window_mode() {
+        return;
+    }
+    if plugin_host::run_if_host_mode() {
+        return;
+    }
     if std::env::args().any(|arg| arg == "--check-connection") {
         if let Err(error) = check_connection() {
             eprintln!("{error}");
@@ -23,9 +49,24 @@ fn main() {
         on_key: Some(app::on_key),
         scenes: &[
             ("reader", app::reader_scene),
+            ("chat-working", app::working_scene),
+            ("chat-decisions", app::decisions_scene),
+            ("settings", app::settings_scene),
+            ("capabilities", app::capabilities_scene),
+            ("messaging", app::messaging_scene),
+            ("artifacts", app::artifacts_scene),
+            ("cron", app::cron_scene),
             ("bots", app::bots_scene),
+            ("bot-manager", app::bots_manager_scene),
+            ("connections", app::connections_scene),
+            ("command-center", app::operations_scene),
+            ("terminal", app::terminal_scene),
+            ("review", app::review_scene),
+            ("file-preview", app::file_preview_scene),
             ("layout", app::layout_scene),
             ("composer", app::composer_scene),
+            ("subagents", app::subagents_scene),
+            ("rich-chat", app::rich_chat_scene),
             ("models", app::models_scene),
             ("reasoning", app::reasoning_scene),
             ("permissions", app::permissions_scene),
@@ -36,18 +77,15 @@ fn main() {
             ("error", app::error_scene),
         ],
         min_size: Some((1024.0, 520.0)),
-        ..AppSpec::new(
-            "Hermes Desktop Rune",
-            (1440.0, 900.0),
-            Viewer::new,
-            view::app,
-        )
+        ..AppSpec::new("Hermes", (1440.0, 900.0), Viewer::new, view::app)
     };
-    let application = rune::App::new(spec).chrome(Chrome {
-        full_size_content: true,
-        traffic_lights: Some((16.0, 16.0)),
-        drag_regions: true,
-    });
+    let application = rune::App::new(spec)
+        .on_ime(view::terminal::on_ime)
+        .chrome(Chrome {
+            full_size_content: true,
+            traffic_lights: Some((16.0, 16.0)),
+            drag_regions: true,
+        });
     let handle = application.handle();
     application
         .on_ready(move |_| {
@@ -99,6 +137,20 @@ fn check_connection() -> Result<(), String> {
     } else {
         None
     };
+    let mut workspace_reads = serde_json::Map::new();
+    if args.iter().any(|arg| arg == "--check-pages") {
+        let profile = value("--profile").unwrap_or_else(|| "default".into());
+        for (name, path) in [
+            ("settings_schema", "/api/config/schema"),
+            ("settings_config", "/api/config"),
+            ("capabilities_toolsets", "/api/tools/toolsets"),
+            ("messaging_platforms", "/api/messaging/platforms"),
+            ("scheduled_jobs", "/api/cron/jobs"),
+        ] {
+            let response = gateway.page_request(&profile, &pages::PageRequest::get(path));
+            workspace_reads.insert(name.into(),serde_json::json!({"ok":response.is_ok(),"items":response.as_ref().ok().and_then(|v|v.get("fields").or(v.get("platforms")).or(v.get("jobs")).or(v.get("toolsets"))).map(|v|v.as_array().map(Vec::len).or_else(||v.as_object().map(serde_json::Map::len)))}));
+        }
+    }
     let profiles = gateway.profiles()?;
     let profile = value("--profile").unwrap_or_else(|| "default".into());
     let sessions = gateway.sessions(&profile)?;
@@ -125,7 +177,7 @@ fn check_connection() -> Result<(), String> {
         "model_providers": model_counts.map(|counts| counts.0),
         "models": model_counts.map(|counts| counts.1),
         "voice_chat_engine": voice_status.as_ref().map(|s| s.engine.label()),
-        "gpt_live_available": voice_status.as_ref().map(|s| s.live_available) })
+        "gpt_live_available": voice_status.as_ref().map(|s| s.live_available), "workspace_reads":workspace_reads })
     );
     Ok(())
 }

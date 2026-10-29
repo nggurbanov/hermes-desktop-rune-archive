@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hermes voice</title>
+<style>html{color-scheme:light dark;font:15px system-ui;background:Canvas;color:CanvasText}body{margin:0;padding:28px;max-width:600px}h1{font-size:20px;font-weight:600}p{line-height:1.5;color:GrayText}button{font:inherit;padding:9px 15px;border:1px solid GrayText;border-radius:7px;background:ButtonFace;color:ButtonText}#transcript{white-space:pre-wrap;font-size:17px;line-height:1.6;min-height:50px}#status{margin-bottom:24px}</style>
+<h1>Hermes voice</h1><p id="status">Connecting to the microphone…</p><div id="transcript"></div><p>This voice session belongs to the conversation you started it from.</p><button id="mute">Mute microphone</button> <button id="close">End voice chat</button>
+<script>
+// Adapted from Hermes Desktop's voice-live.ts. This trusted device page has
+// no gateway credentials, agent endpoints or local-file bridge.
+(() => {
+ let peer,channel,microphone,context,analyser,timer,closed=false,started=false,muted=false,count=0,sessionId=null;
+ const output=new Audio();output.autoplay=true;const status=document.querySelector('#status'),caption=document.querySelector('#transcript');
+ const emit=value=>window.ipc.postMessage(JSON.stringify(value));
+ const send=value=>{if(channel?.readyState!=='open')return false;channel.send(JSON.stringify(value));return true};
+ const eventId=prefix=>`${prefix}-${++count}`;
+ const finish=(reason='closed')=>{if(closed)return;closed=true;if(timer)clearInterval(timer);microphone?.getTracks().forEach(t=>t.stop());channel?.close();peer?.close();context?.close();output.pause();output.srcObject=null;status.textContent='Voice chat ended';emit({type:'closed',reason});};
+ const speak=(type,text,delegation_id)=>{
+  const normalized=String(text||'').replace(/\s+/g,' ').trim();
+  for(let i=0;i<normalized.length;i+=1400)send({type,content:normalized.slice(i,i+1400),delegation_id:delegation_id??null,event_id:eventId('append')});
+ };
+ const onVendor=value=>{
+  emit({type:"vendor",frame:value});
+  switch(value.type){
+   case 'session.started':started=true;sessionId=value.session?.id??sessionId;status.textContent='Listening';emit({type:'ready',session_id:sessionId});break;
+   case 'session.input_transcript.delta':case 'session.output_transcript.delta':{
+    const speaker=value.type==='session.input_transcript.delta'?'user':'assistant';const text=String(value.delta??'');caption.textContent=text;emit({type:'transcript',speaker,text,start_ms:value.start_ms??0,end_ms:value.end_ms??0});break;
+   }
+   case 'session.delegation.created':if(value.delegation?.id)emit({type:'delegation',id:value.delegation.id});break;
+   case 'session.closed':finish(value.reason??'closed');break;
+   case 'error':if(value.error?.code!=='context_injection_incomplete')emit({type:'warning',message:value.error?.message??'GPT-Live error'});break;
+  }
+ };
+ const open=async()=>{
+  if(!navigator.mediaDevices?.getUserMedia)throw Error('Microphone capture is unavailable in this system WebView');
+  peer=new RTCPeerConnection();
+  peer.addEventListener('track',event=>{
+   const stream=new MediaStream([event.track]);output.srcObject=stream;output.play().catch(error=>emit({type:'warning',message:`Audio playback needs permission: ${error.message}`}));
+   try{context=new AudioContext();const source=context.createMediaStreamSource(stream);analyser=context.createAnalyser();analyser.fftSize=512;source.connect(analyser);const data=new Uint8Array(analyser.frequencyBinCount);let previous=false,quiet=0;
+    timer=setInterval(()=>{analyser.getByteTimeDomainData(data);let peak=0;for(const sample of data)peak=Math.max(peak,Math.abs(sample-128));quiet=peak>6?0:quiet+1;const speaking=peak>6||quiet<4;if(speaking!==previous){previous=speaking;emit({type:'speaking',speaking});}},100);
+   }catch(error){emit({type:'warning',message:`Audio level meter: ${error.message}`});}
+  });
+  peer.addEventListener('connectionstatechange',()=>{if(['failed','disconnected'].includes(peer.connectionState))finish('connection_lost')});
+  microphone=await navigator.mediaDevices.getUserMedia({audio:{autoGainControl:true,echoCancellation:true,noiseSuppression:true}});
+  if(closed){microphone.getTracks().forEach(t=>t.stop());return;}
+  for(const track of microphone.getAudioTracks())peer.addTrack(track,microphone);
+  channel=peer.createDataChannel('oai-events');channel.onmessage=event=>{try{onVendor(JSON.parse(String(event.data)))}catch(error){emit({type:'warning',message:`Invalid voice event: ${error.message}`})}};channel.onclose=()=>finish('connection_lost');
+  const offer=await peer.createOffer();await peer.setLocalDescription(offer);
+  await new Promise(resolve=>{if(peer.iceGatheringState==='complete')return resolve();const timeout=setTimeout(resolve,10000);peer.addEventListener('icegatheringstatechange',()=>{if(peer.iceGatheringState==='complete'){clearTimeout(timeout);resolve()}},{once:false})});
+  if(closed)return;if(!peer.localDescription?.sdp)throw Error('The voice device did not produce an SDP offer');
+  status.textContent='Connecting to GPT-Live…';emit({type:'offer',sdp:peer.localDescription.sdp});
+ };
+ window.addEventListener('hermes-host-message',async({detail:value})=>{try{
+  switch(value.type){
+   case 'vendor':send(value.frame);break;
+   case 'answer':sessionId=value.session_id;await peer.setRemoteDescription({type:'answer',sdp:value.sdp});break;
+   case 'speak':speak('session.commentary.append',value.text,value.delegation_id);break;
+   case 'think':speak('session.thinking.append',value.text,value.delegation_id);break;
+   case 'stop-turn':speak('session.instructions.append','The user has finished speaking. Respond now to what they said.',null);break;
+   case 'mute':muted=!!value.muted;for(const track of microphone?.getAudioTracks()??[])track.enabled=!muted;send({type:muted?'session.input_audio.mute':'session.input_audio.unmute',event_id:eventId('mute')});document.querySelector('#mute').textContent=muted?'Unmute microphone':'Mute microphone';break;
+   case 'close':send({type:'session.close'});finish('close_requested');break;
+  }
+ }catch(error){emit({type:'error',message:error.message});finish('error')}});
+ document.querySelector('#mute').onclick=()=>{muted=!muted;window.dispatchEvent(new CustomEvent('hermes-host-message',{detail:{type:'mute',muted}}));emit({type:'muted',muted})};
+ document.querySelector('#close').onclick=()=>{send({type:'session.close'});finish('close_requested')};
+ window.addEventListener('beforeunload',()=>finish('window_closed'));
+ open().catch(error=>{status.textContent=error.message;emit({type:'error',message:error.message});finish('device_failed')});
+})();
+</script></html>

@@ -150,7 +150,7 @@ fn history_detects_earlier_rows_and_refuses_cross_profile_responses() {
             let messages = vec![json!({"role":"user","text":"fixture"}); HISTORY_LIMIT];
             http_answer(
                 &mut first,
-                json!({"profile":if mismatch {"other"} else {"work"},"session_id":"s", "messages":messages}),
+                json!({"profile":if mismatch {"other"} else {"work"},"session_id":"s", "messages":messages,"pagination":{"limit":HISTORY_LIMIT,"order":"latest","returned":HISTORY_LIMIT}}),
             );
             if !mismatch {
                 let (mut probe, _) = listener.accept().unwrap();

@@ -72,9 +72,12 @@ rendering when visible state changes. Long lists are virtualized.
 
 The user supplied T3 Code composer/model-picker screenshots and explicitly
 requested their composition. Use one rounded multiline editor, removable
-attachment tiles above the text, and a quiet bottom toolbar: model, reasoning
-and service tier, approval mode; attachment and voice controls and the primary
-action on the right. The picker has a narrow provider/favorites rail, search,
+attachment tiles above the text, and the updated 21:12 T3 toolbar: attachment
+action at bottom left, compact model and reasoning summary at bottom right,
+and one round settings button. Its single popover contains Reasoning, Service
+Tier and a segmented Permissions selector with the selected policy description.
+Hermes dictation, voice-engine and primary send/stop controls remain available.
+This supersedes the earlier three separate model/reasoning/access triggers. The picker has a narrow provider/favorites rail, search,
 selected rows with checkmarks, favorite toggles and provider sublabels.
 Keep the actual OpenCode light/dark palette and Rune controls. Do not copy T3's
 provider list or invent capabilities. Draft settings remain scoped to their

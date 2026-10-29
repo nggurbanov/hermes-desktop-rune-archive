@@ -1,5 +1,6 @@
 //! T3 Code composer composition requested by the user; Rune/OpenCode controls
 //! and palette, Hermes model capabilities and voice semantics.
+mod settings;
 mod voice;
 
 use rune::{
@@ -25,11 +26,6 @@ static CLIP: Icon = Icon {
     view: 24.0,
     body: r#"<path d="m21 11-9 9a6 6 0 0 1-8-8L14 2a4 4 0 0 1 6 6L10 18a2 2 0 0 1-3-3l9-9" stroke="currentColor" stroke-width="1.7" fill="none" stroke-linecap="round"/>"#,
 };
-static LOCK: Icon = Icon {
-    name: "approval-mode",
-    view: 24.0,
-    body: r#"<rect x="4" y="10" width="16" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M8 10V6a4 4 0 0 1 8 0" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>"#,
-};
 
 fn draft(s: &Viewer) -> Draft {
     s.composer
@@ -38,40 +34,9 @@ fn draft(s: &Viewer) -> Draft {
         .unwrap_or_default()
 }
 
-fn popup_button(key: &str, label: String, glyph: &'static Icon, popup: Popup, k: &Kit) -> El {
-    let title = label.clone();
-    Button::new(label)
-        .variant(ButtonVariant::GhostMuted)
-        .label_with(move |font, ink| {
-            row()
-                .min_w(0.0)
-                .gap(6.0)
-                .center_y()
-                .child(icon(glyph, 16.0).color(ink))
-                .child(text(title).font(font).color(ink).truncate().shrink())
-                .child(icon(&ic::CHEVRON_DOWN, 12.0).color(ink))
-        })
-        .on_press(move |s: &mut Viewer| s.open_composer(popup))
-        .build(k)
-        .key(key)
-        .min_w(0.0)
-        .justify_start()
-}
-
 pub fn dock(s: &Viewer, p: &Pal, k: &Kit, layer: &mut Vec<El>) -> El {
     let scope = s.composer_scope();
     let draft = draft(s);
-    let model = draft
-        .model
-        .as_ref()
-        .map(|m| m.id.as_str())
-        .unwrap_or("Select model");
-    let effort = draft
-        .reasoning
-        .as_deref()
-        .map(effort_label)
-        .unwrap_or("Reasoning");
-    let permissions = approval_label(draft.approval_mode.as_deref());
     let field = text_input(&draft.text, TextStyle::new(15.0, 400.0).lh(24.0))
         .key("composer-input")
         .label("Message draft")
@@ -84,8 +49,7 @@ pub fn dock(s: &Viewer, p: &Pal, k: &Kit, layer: &mut Vec<El>) -> El {
             &mut s.composer.draft_mut(scope).text
         })
         .on_submit(|s: &mut Viewer, tx| {
-            let scope = s.composer_scope();
-            s.composer.draft_mut(scope).text.insert("\n");
+            s.send_draft();
             tx.instant();
         });
     let mut content = col()
@@ -98,7 +62,7 @@ pub fn dock(s: &Viewer, p: &Pal, k: &Kit, layer: &mut Vec<El>) -> El {
         .pt(16.0)
         .pb(10.0)
         .gap(12.0)
-        .radius(16.0)
+        .radius(20.0)
         .fill(if p.dark { p.layer1 } else { p.bg_base })
         .border(1.0, k.c.border_base)
         .shadow(1.0, 3.0, p.shadow);
@@ -154,66 +118,57 @@ pub fn dock(s: &Viewer, p: &Pal, k: &Kit, layer: &mut Vec<El>) -> El {
         }
         content = content.child(attachments);
     }
-    let model_button = popup_button(
-        "model-picker-trigger",
-        model.to_owned(),
-        &ic::BRAIN,
-        Popup::Models,
-        k,
+    let mode = Button::new(
+        if s.admission_mode == crate::conversation::AdmissionMode::Queue {
+            "Queue"
+        } else {
+            "Steer"
+        },
     )
-    .max_w(280.0)
-    .shrink()
-    .help("Model for the next message; existing history is unchanged");
-    let reasoning = popup_button(
-        "reasoning-trigger",
-        effort.to_owned(),
-        &ic::STATUS,
-        Popup::Reasoning,
-        k,
-    )
-    .max_w(125.0)
-    .shrink();
-    let access = popup_button(
-        "permissions-trigger",
-        permissions.to_owned(),
-        &LOCK,
-        Popup::Permissions,
-        k,
-    )
-    .max_w(148.0)
-    .shrink();
+    .variant(ButtonVariant::GhostMuted)
+    .on_press(|s: &mut Viewer| {
+        s.admission_mode = if s.admission_mode == crate::conversation::AdmissionMode::Queue {
+            crate::conversation::AdmissionMode::Steer
+        } else {
+            crate::conversation::AdmissionMode::Queue
+        };
+    })
+    .build(k)
+    .key("admission-mode");
+    let attachment = IconButton::new(&CLIP)
+        .variant(IconButtonVariant::GhostMuted)
+        .label("Attach file")
+        .help("Add a local file to this draft")
+        .on_press_tx(|s: &mut Viewer, tx| {
+            let owner = s.composer_scope();
+            s.composer.close();
+            tx.open_file(
+                FileDialogOptions {
+                    title: "Attach a file".into(),
+                    ..Default::default()
+                },
+                move |s: &mut Viewer, result, _| match result {
+                    Ok(Some(path)) => {
+                        let _ = s.composer.add_attachment(owner, path);
+                    }
+                    Ok(None) => {}
+                    Err(_) => {
+                        s.composer.attachment_error =
+                            Some("The file chooser is unavailable on this desktop".into())
+                    }
+                },
+            );
+        })
+        .build(k)
+        .key("attach-file");
     let actions = row()
         .key("composer-actions")
+        .min_w(0.0)
         .center_y()
         .gap(6.0)
-        .child(
-            IconButton::new(&CLIP)
-                .variant(IconButtonVariant::GhostMuted)
-                .label("Attach file")
-                .help("Add a local file to this draft")
-                .on_press_tx(|s: &mut Viewer, tx| {
-                    let owner = s.composer_scope();
-                    s.composer.close();
-                    tx.open_file(
-                        FileDialogOptions {
-                            title: "Attach a file".into(),
-                            ..Default::default()
-                        },
-                        move |s: &mut Viewer, result, _| match result {
-                            Ok(Some(path)) => {
-                                let _ = s.composer.add_attachment(owner, path);
-                            }
-                            Ok(None) => {}
-                            Err(_) => {
-                                s.composer.attachment_error =
-                                    Some("The file chooser is unavailable on this desktop".into())
-                            }
-                        },
-                    );
-                })
-                .build(k)
-                .key("attach-file"),
-        )
+        .child(settings::model_trigger(s, k))
+        .child(settings::trigger(k))
+        .children(s.chat_running().then_some(mode))
         .child(voice::fan(s, k))
         .child(voice::primary(
             s,
@@ -227,10 +182,8 @@ pub fn dock(s: &Viewer, p: &Pal, k: &Kit, layer: &mut Vec<El>) -> El {
             .min_w(0.0)
             .gap(4.0)
             .center_y()
-            .child(model_button)
-            .child(reasoning)
-            .child(access)
-            .child(el().grow(1.0))
+            .child(attachment)
+            .child(el().min_w(0.0).grow(1.0))
             .child(actions),
     );
     if let Some(error) = &s.composer.attachment_error {
@@ -252,11 +205,17 @@ pub fn dock(s: &Viewer, p: &Pal, k: &Kit, layer: &mut Vec<El>) -> El {
         .gap(5.0)
         .child(content)
         .child(
-            text("Draft only · Sending is not available yet")
-                .key("draft-only-status")
-                .font(k.ty.small)
-                .color(k.c.text_faint)
-                .px(4.0),
+            text(if s.is_fixture() {
+                "Synthetic scene"
+            } else if s.can_send() {
+                "Enter to send · Shift+Enter for a new line"
+            } else {
+                "Connect an agent to send messages"
+            })
+            .key("draft-only-status")
+            .font(k.ty.small)
+            .color(k.c.text_faint)
+            .px(4.0),
         )
 }
 
@@ -274,15 +233,10 @@ fn overlays(s: &Viewer, k: &Kit, layer: &mut Vec<El>) {
             "model-picker-trigger",
             model_picker(s, &scope, k),
         ),
-        Popup::Reasoning => (
-            "reasoning-menu",
-            "reasoning-trigger",
-            reasoning_menu(s, &scope, k),
-        ),
-        Popup::Permissions => (
-            "permissions-menu",
-            "permissions-trigger",
-            permissions_menu(s, &scope, k),
+        Popup::Settings => (
+            "model-settings-menu",
+            "model-settings-trigger",
+            settings::menu(s, &scope, k),
         ),
         Popup::VoiceEngine => (
             "voice-engine-menu",
@@ -308,7 +262,7 @@ fn overlays(s: &Viewer, k: &Kit, layer: &mut Vec<El>) {
                 .fill(k.c.layer_01)
                 .border(1.0, k.c.border_base)
                 .radius(12.0)
-                .anchored_fit(anchor, Side::Top, Align::Start, 8.0),
+                .anchored_fit(anchor, Side::Top, Align::End, 8.0),
             &k.elevation.floating,
         ),
     );
@@ -647,204 +601,6 @@ fn model_picker(s: &Viewer, scope: &DraftScope, k: &Kit) -> El {
                 )
                 .child(reload),
         )
-}
-
-fn effort_label(value: &str) -> &str {
-    match value {
-        "minimal" => "Minimal",
-        "low" => "Low",
-        "medium" => "Medium",
-        "high" => "High",
-        "xhigh" => "Extra High",
-        "max" => "Max",
-        "ultra" => "Ultra",
-        "none" => "Thinking off",
-        _ => value,
-    }
-}
-fn approval_label(value: Option<&str>) -> &str {
-    match value {
-        Some("manual") => "Manual",
-        Some("smart") => "Smart",
-        Some("off") => "Full access",
-        _ => "Agent default",
-    }
-}
-
-fn choice(label: &str, key: String, selected: bool, k: &Kit) -> El {
-    Button::new(label)
-        .variant(ButtonVariant::GhostMuted)
-        .build(k)
-        .key(key)
-        .w_full()
-        .justify_start()
-        .role("option")
-        .focus_selected(selected)
-        .fill(if selected {
-            k.c.bg_base
-        } else {
-            Color::TRANSPARENT
-        })
-}
-
-fn reasoning_menu(s: &Viewer, scope: &DraftScope, k: &Kit) -> El {
-    let draft = draft(s);
-    let caps: Option<&crate::gateway::ModelCapabilities> = s
-        .composer
-        .selected_model(scope)
-        .and_then(|(_, model)| model.capabilities.as_ref());
-    let mut menu = col()
-        .w(260.0)
-        .padding(8.0)
-        .gap(3.0)
-        .min_h(0.0)
-        .shrink()
-        .scroll(ScrollSpec {
-            stick_bottom: false,
-        })
-        .child(
-            text("Reasoning")
-                .font(k.ty.small_medium)
-                .color(k.c.text_muted)
-                .px(8.0)
-                .py(6.0),
-        );
-    for value in [
-        None,
-        Some("minimal"),
-        Some("low"),
-        Some("medium"),
-        Some("high"),
-        Some("xhigh"),
-        Some("max"),
-        Some("ultra"),
-        Some("none"),
-    ] {
-        let supported = value.is_none()
-            || caps.is_some_and(|c| {
-                c.reasoning == Some(true)
-                    && (value != Some("none") || c.can_disable_reasoning == Some(true))
-            });
-        if !supported {
-            continue;
-        }
-        let owner = scope.clone();
-        menu = menu.child(
-            choice(
-                value.map(effort_label).unwrap_or("Agent default"),
-                format!("effort-{}", value.unwrap_or("default")),
-                draft.reasoning.as_deref() == value,
-                k,
-            )
-            .on_press(move |s: &mut Viewer| {
-                s.composer.draft_mut(owner.clone()).reasoning = value.map(String::from);
-            }),
-        );
-    }
-    menu = menu
-        .child(el().w_full().h(1.0).my(6.0).fill(k.c.border_muted))
-        .child(
-            text("Service tier")
-                .font(k.ty.small_medium)
-                .color(k.c.text_muted)
-                .px(8.0)
-                .py(6.0),
-        );
-    for (value, label) in [
-        (None, "Agent default"),
-        (Some("normal"), "Standard"),
-        (Some("priority"), "Fast"),
-        (Some("ultrafast"), "Ultra Fast"),
-    ] {
-        let supported = value.is_none()
-            || value == Some("normal")
-            || caps.is_some_and(|c| {
-                if value == Some("priority") {
-                    c.fast == Some(true)
-                } else {
-                    c.ultrafast == Some(true)
-                }
-            });
-        if !supported {
-            continue;
-        }
-        let owner = scope.clone();
-        menu = menu.child(
-            choice(
-                label,
-                format!("tier-{}", value.unwrap_or("default")),
-                draft.service_tier.as_deref() == value,
-                k,
-            )
-            .on_press(move |s: &mut Viewer| {
-                s.composer.draft_mut(owner.clone()).service_tier = value.map(String::from);
-            }),
-        );
-    }
-    menu
-}
-
-fn permissions_menu(s: &Viewer, scope: &DraftScope, k: &Kit) -> El {
-    let draft = draft(s);
-    let mut menu = col().w(380.0).padding(8.0).gap(4.0).child(
-        text("Approval mode for the next message")
-            .font(k.ty.small_medium)
-            .color(k.c.text_muted)
-            .px(8.0)
-            .py(6.0),
-    );
-    for (value, label, detail) in [
-        (
-            None,
-            "Agent default",
-            "Use the connected agent's approval policy.",
-        ),
-        (
-            Some("manual"),
-            "Manual",
-            "Keep Hermes manual approval checks.",
-        ),
-        (
-            Some("smart"),
-            "Smart",
-            "Let Hermes evaluate which actions need approval.",
-        ),
-        (
-            Some("off"),
-            "Full access",
-            "Disable Hermes approval prompts.",
-        ),
-    ] {
-        let owner = scope.clone();
-        menu = menu.child(
-            col()
-                .key(format!("approval-{}", value.unwrap_or("default")))
-                .role("option")
-                .label(label)
-                .focusable(true)
-                .focus_selected(draft.approval_mode.as_deref() == value)
-                .focus_ring(2.0, 1.0, k.c.border_focus)
-                .w_full()
-                .px(10.0)
-                .py(10.0)
-                .gap(5.0)
-                .radius(7.0)
-                .fill(if draft.approval_mode.as_deref() == value {
-                    k.c.bg_base
-                } else {
-                    Color::TRANSPARENT
-                })
-                .hover(k.c.hover)
-                .child(text(label).font(k.ty.ui_medium).color(k.c.text_base))
-                .child(text(detail).font(k.ty.small).color(k.c.text_muted).wrap())
-                .on_press_tx(move |s: &mut Viewer, tx| {
-                    s.composer.draft_mut(owner.clone()).approval_mode = value.map(String::from);
-                    s.composer.close();
-                    tx.instant();
-                }),
-        );
-    }
-    menu
 }
 
 pub fn on_key(s: &mut Viewer, event: &KeyEvent, tx: &mut Tx) -> bool {

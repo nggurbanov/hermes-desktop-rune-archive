@@ -2,19 +2,30 @@
 //! Rune example at 3f70cd6b675c89a8a7b64fc09b1bf2b455e0ad1a; see the modules.
 //! Hermes owns the pane composition, connection/profile identities and actions.
 
+mod audio;
+pub(crate) mod client;
 pub(crate) mod composer;
+pub(crate) mod connections;
+mod conversation;
+mod directories;
+pub(crate) mod files;
+pub(crate) mod layout;
+pub(crate) mod operations;
+pub(crate) mod pages;
 mod palette;
+pub(crate) mod review;
 mod shell;
+mod sidebar;
+mod status;
+pub(crate) mod subagents;
+pub(crate) mod terminal;
 mod transcript;
 
-use std::borrow::Cow;
-use std::rc::Rc;
-
 use rune::{Cx, El, ScrollSpec, col, el, icon, row, text};
-use rune_kit::{Button, ButtonVariant, Kit, Sidebar, SidebarRow, TextInput};
+use rune_kit::{Button, ButtonVariant, Kit, TextInput};
 use rune_theme_opencode::icons as ic;
 
-use crate::app::{ConversationTarget, SidebarTab, Viewer};
+use crate::app::{SidebarTab, Viewer};
 use palette::{Pal, pal};
 
 pub fn app(s: &Viewer, cx: &mut Cx<Viewer>) -> El {
@@ -25,15 +36,43 @@ pub fn app(s: &Viewer, cx: &mut Cx<Viewer>) -> El {
     let mut layer = Vec::new();
     let main = if s.connection_form {
         connection_form(s, k)
+    } else if s.route != crate::pages::Route::Chat {
+        pages::page(s, k, &mut layer)
     } else {
         workspace(s, p, k, &mut layer)
     };
     let sidebar = match s.sidebar_tab {
-        SidebarTab::Sessions => sessions_sidebar(s, p, k),
+        SidebarTab::Sessions => sidebar::sessions(s, p, k, &mut layer),
         SidebarTab::Bots => shell::bots_sidebar(s, p, k),
     };
-    let split = shell::layout(s, cx, main, sidebar, tooling(k), k);
+    let split = shell::layout(s, cx, main, sidebar, k);
     let menu = shell::context_menu(s, k, &mut layer);
+    status::overlays(s, k, &mut layer);
+    if let Some(picker) = directories::panel(s, k) {
+        layer.push(picker);
+    }
+    if s.health_open {
+        layer.push(
+            col()
+                .key("health-popup")
+                .absolute(24.0, 64.0)
+                .w(580.0)
+                .max_h(640.0)
+                .fill(k.c.bg_deep)
+                .radius(10.0)
+                .border(1.0, k.c.border_muted)
+                .scroll(ScrollSpec {
+                    stick_bottom: false,
+                })
+                .child(
+                    Button::new("Close health")
+                        .variant(ButtonVariant::GhostMuted)
+                        .on_press(|s: &mut Viewer| s.health_open = false)
+                        .build(k),
+                )
+                .child(operations::health(s, k, &mut Vec::new())),
+        );
+    }
     col()
         .key("hermes-window")
         .role("window")
@@ -41,8 +80,50 @@ pub fn app(s: &Viewer, cx: &mut Cx<Viewer>) -> El {
         .w_full()
         .h_full()
         .fill(k.c.bg_deep)
+        .children(s.client_error.as_ref().map(|error| {
+            row()
+                .w_full()
+                .gap(12.0)
+                .px(16.0)
+                .py(8.0)
+                .fill(k.c.danger.bg)
+                .child(
+                    text(error)
+                        .role("alert")
+                        .font(k.ty.small)
+                        .color(k.c.danger.fg)
+                        .wrap()
+                        .grow(1.0),
+                )
+                .child(
+                    Button::new("Dismiss")
+                        .variant(ButtonVariant::Ghost)
+                        .on_press(|s: &mut Viewer| s.client_error = None)
+                        .build(k),
+                )
+        }))
+        .children(s.client_notice.as_ref().map(|notice| {
+            row()
+                .w_full()
+                .px(16.0)
+                .py(8.0)
+                .gap(12.0)
+                .child(
+                    text(notice)
+                        .font(k.ty.small)
+                        .color(k.c.text_muted)
+                        .wrap()
+                        .grow(1.0),
+                )
+                .child(
+                    Button::new("Dismiss")
+                        .variant(ButtonVariant::GhostMuted)
+                        .on_press(|s: &mut Viewer| s.client_notice = None)
+                        .build(k),
+                )
+        }))
         .child(split.grow(1.0).min_h(0.0))
-        .children((!s.simple_mode).then(|| shell::status_bar(s, k)))
+        .children((!s.simple_mode && s.show_statusbar).then(|| status::bar(s, k)))
         .child(menu)
         .child(
             el().key("overlay-layer")
@@ -53,122 +134,6 @@ pub fn app(s: &Viewer, cx: &mut Cx<Viewer>) -> El {
                 .instant_changes()
                 .children(layer),
         )
-}
-
-fn filtered_indices(s: &Viewer) -> Vec<usize> {
-    let query = s.search.text.trim().to_lowercase();
-    s.sessions
-        .iter()
-        .enumerate()
-        .filter(|(_, session)| query.is_empty() || session.title.to_lowercase().contains(&query))
-        .map(|(index, _)| index)
-        .collect()
-}
-
-/// The gateway also accepts numeric/legacy timestamps; only a known ISO date
-/// is useful as compact sidebar metadata without guessing its unit or timezone.
-fn session_date(value: &str) -> Option<&str> {
-    let date = value.get(..10)?;
-    date.bytes()
-        .enumerate()
-        .all(|(index, byte)| {
-            if index == 4 || index == 7 {
-                byte == b'-'
-            } else {
-                byte.is_ascii_digit()
-            }
-        })
-        .then_some(date)
-}
-
-fn sessions_sidebar(s: &Viewer, p: &Pal, k: &Kit) -> El {
-    let filtered_count = filtered_indices(s).len();
-    let header = col()
-        .w_full()
-        .gap(12.0)
-        .child(shell::sessions_nav(s, k))
-        .child(
-            TextInput::new(&s.search)
-                .placeholder("Search recent sessions")
-                .leading_icon(&ic::MAGNIFYING_GLASS)
-                .width(None)
-                .on_edit(|s: &mut Viewer| &mut s.search)
-                .build(k)
-                .key("session-search")
-                .label("Search recent sessions"),
-        )
-        .child(
-            row()
-                .w_full()
-                .px(8.0)
-                .center_y()
-                .child(
-                    text("Sessions")
-                        .font(k.ty.small_medium)
-                        .color(k.c.text_muted),
-                )
-                .child(el().grow(1.0))
-                .child(
-                    text(if s.search.text.trim().is_empty() {
-                        s.sessions.len().to_string()
-                    } else {
-                        format!("{filtered_count} of {}", s.sessions.len())
-                    })
-                    .font(k.ty.small)
-                    .color(k.c.text_faint),
-                ),
-        );
-    let indices = Rc::new(filtered_indices(s));
-    let inherited_dark = p.dark;
-    let keys = indices.clone();
-    let rows = indices.clone();
-    let mut sidebar = Sidebar::new()
-        .label("Conversation sessions")
-        .header_padding(8.0, 8.0)
-        .header(header)
-        .row_height(36.0)
-        .virtual_rows::<Viewer>(
-            indices.len(),
-            move |s, index| Cow::Owned(format!("session-{}", s.sessions[keys[index]].id)),
-            move |s, index| {
-                let session = &s.sessions[rows[index]];
-                let id = session.id.clone();
-                let menu_target = ConversationTarget::Session {
-                    profile: s.profile.clone(),
-                    id: id.clone(),
-                    title: session.title.clone(),
-                };
-                let dark = s.theme.unwrap_or(inherited_dark);
-                let k = rune_theme_opencode::kit(dark);
-                let mut row = SidebarRow::new(&session.title).height(36.0);
-                if let Some(date) = session_date(&session.updated) {
-                    row = row.detail(date);
-                }
-                row.selected(s.selected_session.as_deref() == Some(session.id.as_str()))
-                    .on_select(move |s: &mut Viewer, _| s.open_session(id.clone()))
-                    .build(k)
-                    .on_secondary_press(move |s: &mut Viewer, point, _| {
-                        s.row_menu = Some((menu_target.clone(), point))
-                    })
-                    .key(format!("session-{}", session.id))
-            },
-        );
-    if indices.is_empty() {
-        sidebar = sidebar.child(
-            text(if s.loading {
-                "Loading sessions…"
-            } else if !s.search.text.trim().is_empty() {
-                "No matching sessions"
-            } else {
-                "No sessions in this profile"
-            })
-            .font(k.ty.text_xsmall)
-            .color(k.c.text_faint)
-            .px(8.0)
-            .py(12.0),
-        );
-    }
-    sidebar.footer(shell::profile_rail(s, p, k)).build(k)
 }
 
 fn workspace(s: &Viewer, p: &Pal, k: &Kit, layer: &mut Vec<El>) -> El {
@@ -225,13 +190,13 @@ fn workspace(s: &Viewer, p: &Pal, k: &Kit, layer: &mut Vec<El>) -> El {
     } else if s.bot_empty {
         empty(
             "No Bot Chat yet",
-            "This bot has no existing Bot Chat. Starting its conversation will be available in the sending increment.",
+            "Send a message to start this bot’s own conversation.",
             k,
         )
     } else if s.selected_session.is_none() {
         empty(
             "Choose a conversation",
-            "Select a profile and a session to read its history.",
+            "Select an existing chat or write a message to start a new conversation.",
             k,
         )
     } else if s.messages.is_empty() {
@@ -254,6 +219,10 @@ fn workspace(s: &Viewer, p: &Pal, k: &Kit, layer: &mut Vec<El>) -> El {
         );
     }
     body.child(history.grow(1.0).min_h(0.0))
+        .child(conversation::pending(s, k))
+        .child(audio::panel(s, k))
+        .child(transcript::slash_panel(s, k))
+        .child(subagents::strip(s, k))
         .child(composer::dock(s, p, k, layer))
 }
 
@@ -274,100 +243,6 @@ fn empty(title: &str, detail: &str, k: &Kit) -> El {
                 .color(k.c.text_muted)
                 .max_w(330.0)
                 .wrap(),
-        )
-}
-
-fn tooling(k: &Kit) -> El {
-    col()
-        .key("tooling")
-        .w_full()
-        .h_full()
-        .min_h(0.0)
-        .gap(1.0)
-        .fill(k.c.border_muted)
-        .child(
-            row()
-                .key("upper-tools")
-                .w_full()
-                .h(0.0)
-                .grow(1.6)
-                .min_h(0.0)
-                .gap(1.0)
-                .child(
-                    tool_panel(
-                        "review",
-                        "Review",
-                        "Review is unavailable in this viewer.",
-                        &ic::BRANCH,
-                        k,
-                    )
-                    .w(0.0)
-                    .grow(1.0)
-                    .min_w(0.0),
-                )
-                .child(
-                    tool_panel(
-                        "files",
-                        "Files",
-                        "File browsing is unavailable in this viewer.",
-                        &ic::FOLDER,
-                        k,
-                    )
-                    .w(0.0)
-                    .grow(1.2)
-                    .min_w(0.0),
-                ),
-        )
-        .child(
-            tool_panel(
-                "terminal",
-                "Terminal",
-                "Terminal access is unavailable in this viewer.",
-                &ic::CONSOLE,
-                k,
-            )
-            .h(0.0)
-            .grow(1.0)
-            .min_h(0.0),
-        )
-}
-
-fn tool_panel(key: &str, label: &str, detail: &str, glyph: &'static rune::Icon, k: &Kit) -> El {
-    col()
-        .key(key)
-        .role("group")
-        .label(label)
-        .w_full()
-        .h_full()
-        .fill(k.c.bg_deep)
-        .child(
-            row()
-                .w_full()
-                .h(36.0)
-                .px(12.0)
-                .gap(6.0)
-                .center_y()
-                .child(icon(glyph, 14.0).color(k.c.icon_muted))
-                .child(
-                    text(label)
-                        .font(k.ty.text_xsmall_medium)
-                        .color(k.c.text_muted),
-                ),
-        )
-        .child(
-            col()
-                .w_full()
-                .grow(1.0)
-                .min_h(0.0)
-                .px(12.0)
-                .py(16.0)
-                .gap(8.0)
-                .child(
-                    text(detail)
-                        .font(k.ty.text_xsmall)
-                        .color(k.c.text_faint)
-                        .wrap(),
-                ),
         )
 }
 
@@ -414,6 +289,16 @@ fn connection_form(s: &Viewer, k: &Kit) -> El {
                 .font(k.ty.ui)
                 .color(k.c.text_muted)
                 .wrap(),
+        )
+        .child(
+            Button::new("Saved connections and SSH")
+                .variant(ButtonVariant::Ghost)
+                .on_press(|s: &mut Viewer| {
+                    s.connection_form = false;
+                    s.open_route(crate::pages::Route::Connections);
+                })
+                .build(k)
+                .key("saved-connections"),
         )
         .child(
             text("Gateway URL")

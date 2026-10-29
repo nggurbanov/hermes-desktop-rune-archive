@@ -51,12 +51,36 @@
     "verifiedAt": "2026-10-29"
   },
   "runeCheckpoint": {
-    "phase": "native-reader-and-staged-composer",
+    "phase": "full-functional-parity-in-progress",
     "verifiedAt": "2026-10-29",
     "frameworkRevision": "bfb8facae2e4665e5e6d17afe85561884a7fd402",
     "opencodeReferenceRevision": "3f70cd6b675c89a8a7b64fc09b1bf2b455e0ad1a",
-    "scope": "Partial read-only Hermes shell plus the user-selected T3 Code composer/model picker in native Rune. External agent model catalog; in-memory scoped drafts, favorites and local attachment staging. OpenCode supplies components and themes; sending, applied launch settings and native audio remain pending. Separate empty-composer waveform and voice-engine chevron read the owning agent status; voice mode changes and audio execution are disabled.",
+    "scope": "Standalone native Rune full functional transfer. Real scoped pages, conversations/admissions, native voice, original GUI SDK and saved connections implemented in development; complete acceptance still pending. No full-parity claim.",
     "verified": [
+      "Current frozen integration: 276 Rust tests passed; one optional private virtual-audio test ignored by default and passed separately in earlier isolated device acceptance",
+      "Native Linux WebRTC peer loopback, Opus and WebRTC AEC3 synthetic double-talk checks",
+      "10 native Hermes shell scenarios; 19 updated T3 composer scenarios; 24 feature-page checks; 8 rich-chat interaction scenarios",
+      "Actual separate native Rune subagent window: one lazy read-only attach, same PID/window reuse, focus and theme receipts, viewer socket detach with no gateway action",
+      "Canonical rewind socket contracts: restore without prompt submission and lost-ACK retry retaining exact UUID/payload/CAS fences",
+      "Native Files/Review/Terminal controllers; real isolated Git and PTY/remote replay contracts",
+      "Original Hermes React SDK native Wry proof: canonical and legacy peers, cross-source leases/routing, scoped RPC/events/storage/multipart/socket/native dialogs/disposal; bundled Bots groups and Petdex",
+      "Existing Chikibryak read-only workspace reads; no production sends/config changes/install/restart"
+    ],
+    "pending": [
+      "Remaining rich chat: multimodal edit/retry replay, complete slash/policy directives, provider sidecar presentations, reactions/search/minimap and media players",
+      "Concurrent session/preview/route tiles, all layout presets and full peer windows",
+      "All fleet/client skins/fonts/keybindings/notifications and multiple-window storage reconciliation",
+      "Remaining GUI SDK pane geometry/data engines/preview contributions and parent-window acceptance",
+      "Complete Files/Artifacts media/PDF/HTML preview and OS watcher behavior",
+      "Cloud/OAuth connection workflow and native macOS/Windows discovery/device/packaging acceptance"
+    ],
+    "parityInventory": "apps/rune/docs/shell-parity.md",
+    "correction": "6001795 proved native transport but its UI was rejected as an OpenCode shell; no full Hermes parity claim.",
+    "screenshotInventory": "apps/rune/docs/screenshot-parity.md",
+    "voiceInventory": "apps/rune/docs/voice-parity.md",
+    "lowerLeftInventory": "apps/rune/docs/lower-left-parity.md",
+    "currentLedger": "apps/rune/docs/functional-parity.md",
+    "checkpointHistory": [
       "Linux native build and formatting",
       "39 Rust transport/controller/composer/voice tests",
       "10 native scene/interaction checks",
@@ -71,21 +95,6 @@
       "17 native composer scenarios: field, conditional voice primary, read-only/unknown engine menu, autofocus/filter/provider/favorites, physical Enter and shortcuts, staged settings, voice/Escape, scripted file choice and short windows",
       "Read-only Chikibryak voice status: chained selected and GPT-Live available; no microphone, call, transcription or configuration write",
       "Regression contract: synthetic scenes with a preconfigured live route cannot request voice/model reads"
-    ],
-    "pending": [
-      "Send, stream, stop, durable admission/replay and approval/clarify",
-      "Full Bot Mode: creation, custom identity assets, groups/routines and concurrent live conversations",
-      "Full pane tree/presets/persistence and narrow-window behavior",
-      "Terminal, files, review, rich previews and remaining routes",
-      "SSH, OAuth, settings persistence, localization and native platform acceptance",
-      "OS accessibility bridge and existing JS GUI-plugin compatibility",
-      "Pinned/date/source/cron sidebar groups, filter menu, status states, full profile/fleet rail and prompt timeline; see screenshot-parity.md",
-      "Draft/favorite persistence, attachment upload, applied launch settings and real dictation/spoken replies/wake audio"
-    ],
-    "parityInventory": "apps/rune/docs/shell-parity.md",
-    "correction": "6001795 proved native transport but its UI was rejected as an OpenCode shell; no full Hermes parity claim.",
-    "screenshotInventory": "apps/rune/docs/screenshot-parity.md",
-    "voiceInventory": "apps/rune/docs/voice-parity.md",
-    "lowerLeftInventory": "apps/rune/docs/lower-left-parity.md"
+    ]
   }
 }

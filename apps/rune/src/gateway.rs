@@ -1,4 +1,4 @@
-//! Read-only Hermes transport. This viewer never restores, creates or mutates a session.
+//! Authenticated external Hermes transport; probe and mutation lanes have separate contracts.
 use std::{
     collections::HashMap,
     fmt,
@@ -13,12 +13,20 @@ use serde_json::{Value, json};
 use tungstenite::{Message, WebSocket, client::IntoClientRequest, stream::MaybeTlsStream};
 use url::Url;
 
+pub(crate) mod audio;
 mod catalog;
+pub(crate) mod conversation;
 #[cfg(target_os = "linux")]
 mod local;
+mod pages;
+pub(crate) mod plugin;
+pub(crate) mod sidebar;
+pub(crate) mod terminal;
 mod voice;
 pub use catalog::{CatalogModel, ModelCapabilities, ModelCatalog, ModelProvider};
 pub use voice::{VoiceEngine, VoiceStatus};
+#[cfg(test)]
+mod pages_tests;
 #[cfg(test)]
 mod tests;
 
@@ -28,6 +36,11 @@ const HISTORY_LIMIT: usize = 500;
 
 #[derive(Clone)]
 pub enum Connection {
+    Saved {
+        id: String,
+        revision: String,
+        inner: Box<Connection>,
+    },
     Url {
         endpoint: String,
         token: Option<String>,
@@ -37,9 +50,23 @@ pub enum Connection {
     },
 }
 
+impl Connection {
+    pub fn transport(&self) -> &Self {
+        match self {
+            Self::Saved { inner, .. } => inner.transport(),
+            other => other,
+        }
+    }
+}
+
 impl fmt::Debug for Connection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Saved { id, inner, .. } => f
+                .debug_struct("Saved")
+                .field("id", id)
+                .field("transport", inner)
+                .finish(),
             Self::Url { token, .. } => f
                 .debug_struct("Url")
                 .field("endpoint", &"[redacted]")
@@ -70,15 +97,47 @@ pub struct Session {
     pub title: String,
     pub updated: String,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct HistoryMessage {
     pub role: String,
     pub content: String,
+    /// Original display projection, durable row IDs and attachment/tool metadata.
+    /// Private replay text is never substituted for the server's display fields.
+    pub raw: Value,
 }
-#[derive(Clone, Debug)]
+impl HistoryMessage {
+    pub fn from_row(row: &Value) -> Self {
+        Self {
+            role: row
+                .get("role")
+                .and_then(Value::as_str)
+                .unwrap_or("assistant")
+                .into(),
+            content: message_text(row),
+            raw: row.clone(),
+        }
+    }
+    pub fn text(role: &str, text: &str) -> Self {
+        Self {
+            role: role.into(),
+            content: text.into(),
+            raw: json!({"role":role,"content":text}),
+        }
+    }
+    pub fn row_id(&self) -> Option<u64> {
+        self.raw
+            .get("row_id")
+            .or_else(|| self.raw.get("id"))
+            .and_then(Value::as_u64)
+            .filter(|id| *id > 0)
+    }
+}
+#[derive(Clone, Debug, Default)]
 pub struct History {
     pub messages: Vec<HistoryMessage>,
     pub has_more: bool,
+    /// Number of source rows consumed, including hidden rows.
+    pub cursor: usize,
 }
 
 enum Auth {
@@ -102,6 +161,7 @@ pub struct Gateway {
 impl Gateway {
     pub fn connect(connection: &Connection) -> Result<Self, String> {
         let (base, auth, initial_profile, native_ticket) = match connection {
+            Connection::Saved { inner, .. } => return Self::connect(inner),
             Connection::Url { endpoint, token } => {
                 let (base, url_token) = endpoint_url(endpoint)?;
                 (
@@ -317,11 +377,62 @@ impl Gateway {
         valid_scope(profile)?;
         valid_scope(session)?;
         let deadline = Instant::now() + TIMEOUT;
-        let page = self.history_page(profile, session, HISTORY_LIMIT, 0, deadline)?;
+        self.history_window(profile, session, 0, deadline)
+    }
+
+    fn history_window(
+        &self,
+        profile: &str,
+        session: &str,
+        offset: usize,
+        deadline: Instant,
+    ) -> Result<History, String> {
+        let mut page = self.history_page(profile, session, HISTORY_LIMIT, offset, deadline)?;
+        // Older runtimes ignore `order=latest`. A full orderless first page
+        // cannot be trusted as the tail, so hydrate their actual full response.
+        if offset == 0
+            && page.get("pagination").is_some_and(Value::is_object)
+            && rows(&page, "messages")?.len() >= HISTORY_LIMIT
+            && page.pointer("/pagination/order").and_then(Value::as_str) != Some("latest")
+        {
+            let mut complete = Vec::new();
+            let mut consumed = 0;
+            loop {
+                let earlier = self.history_page_order(
+                    profile,
+                    session,
+                    HISTORY_LIMIT,
+                    consumed,
+                    "oldest",
+                    deadline,
+                )?;
+                let rows = rows(&earlier, "messages")?;
+                complete.extend(rows.iter().cloned());
+                consumed += rows.len();
+                if rows.len() < HISTORY_LIMIT
+                    || !earlier.get("pagination").is_some_and(Value::is_object)
+                {
+                    break;
+                }
+                if serde_json::to_vec(&complete)
+                    .map_err(|_| "Invalid history")?
+                    .len()
+                    > (32 * 1024 * 1024)
+                {
+                    return Err("The complete transcript exceeds the native history limit".into());
+                }
+            }
+            page["messages"] = Value::Array(complete);
+            page.as_object_mut().unwrap().remove("pagination");
+        }
         let message_rows = rows(&page, "messages")?;
-        let has_more = if message_rows.len() == HISTORY_LIMIT {
+        let paginated = page.get("pagination").is_some_and(Value::is_object);
+        let has_more = if paginated
+            && message_rows.len() == HISTORY_LIMIT
+            && page.pointer("/pagination/order").and_then(Value::as_str) == Some("latest")
+        {
             !rows(
-                &self.history_page(profile, session, 1, HISTORY_LIMIT, deadline)?,
+                &self.history_page(profile, session, 1, offset + message_rows.len(), deadline)?,
                 "messages",
             )?
             .is_empty()
@@ -332,13 +443,15 @@ impl Gateway {
             .iter()
             .filter(|row| row.get("display_kind").and_then(Value::as_str) != Some("hidden"))
             .map(|row| {
-                Ok(HistoryMessage {
-                    role: required_str(row, "role")?.into(),
-                    content: message_text(row),
-                })
+                required_str(row, "role")?;
+                Ok(HistoryMessage::from_row(row))
             })
             .collect::<Result<Vec<_>, String>>()?;
-        Ok(History { messages, has_more })
+        Ok(History {
+            messages,
+            has_more,
+            cursor: offset + message_rows.len(),
+        })
     }
 
     fn history_page(
@@ -347,6 +460,17 @@ impl Gateway {
         session: &str,
         limit: usize,
         offset: usize,
+        deadline: Instant,
+    ) -> Result<Value, String> {
+        self.history_page_order(profile, session, limit, offset, "latest", deadline)
+    }
+    fn history_page_order(
+        &self,
+        profile: &str,
+        session: &str,
+        limit: usize,
+        offset: usize,
+        order: &str,
         deadline: Instant,
     ) -> Result<Value, String> {
         let mut url = self
@@ -362,7 +486,7 @@ impl Gateway {
             .append_pair("profile", profile)
             .append_pair("limit", &limit.to_string())
             .append_pair("offset", &offset.to_string())
-            .append_pair("order", "latest")
+            .append_pair("order", order)
             .append_pair("include_compacted", "true")
             .append_pair("inline_images", "false");
         let value = self.get_json(profile, url, deadline, "History")?;
@@ -507,7 +631,7 @@ impl Gateway {
     }
 }
 
-fn endpoint_url(endpoint: &str) -> Result<(Url, Option<String>), String> {
+pub(crate) fn endpoint_url(endpoint: &str) -> Result<(Url, Option<String>), String> {
     let mut url =
         Url::parse(endpoint).map_err(|_| "Enter a valid gateway HTTP(S) or WebSocket URL")?;
     if !matches!(url.scheme(), "http" | "https" | "ws" | "wss")
@@ -642,7 +766,7 @@ fn nonempty_string<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
 
 /// Native rows follow Bot Mode's backend title/display-name ladder. Client-side
 /// aliases and local metadata belong to a future connection registry, not here.
-fn profile_label(row: &Value, bot_meta: Option<&Value>, name: &str) -> String {
+pub(crate) fn profile_label(row: &Value, bot_meta: Option<&Value>, name: &str) -> String {
     if let Some(label) = bot_meta
         .and_then(|meta| nonempty_string(meta, "title"))
         .or_else(|| nonempty_string(row, "title"))
