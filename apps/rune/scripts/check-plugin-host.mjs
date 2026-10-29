@@ -35,6 +35,7 @@ function finishIfReady() {
   send({ type: 'close' })
 }
 function onEvent(event) {
+  if(event.type==='host-web-message') event=event.message
   if (args.includes('--debug')) console.error(JSON.stringify(event))
   switch (event.type) {
     case 'plugin-bootstrap-ready':

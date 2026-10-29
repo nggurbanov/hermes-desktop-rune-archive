@@ -29,6 +29,7 @@ function thumbnail(slug) {
 function answer(id,value){send({type:'plugin-response',id,value})}
 function capture(){if(!snapshot)return;execFileSync('/usr/bin/python3',['-c',`import gi,os,sys;gi.require_version('Gdk','3.0');from gi.repository import Gdk;d=Gdk.Display.open(os.environ['DISPLAY']);w=d.get_default_screen().get_root_window();Gdk.pixbuf_get_from_window(w,0,0,w.get_width(),w.get_height()).savev(sys.argv[1],'png',[],[])`,path.resolve(snapshot)],{env:process.env,stdio:'pipe'})}
 function handle(event){
+  if(event.type==='host-web-message') event=event.message
   if(args.includes('--debug'))console.error(JSON.stringify(event, (key,value)=> typeof value==='string' && value.length>1000 ? value.slice(0,300)+'… [synthetic payload omitted]' : value))
   if(event.type==='plugin-bootstrap-ready')send({type:'plugin-load',source:'builtin:hermes-bots',origin:'builtin:hermes-bots',owner})
   if(event.type==='plugin-loaded'){require(event.id==='hermes-bots','The bundled original Bots module did not register');setTimeout(()=>send({type:'inspect-bots'}),1800)}

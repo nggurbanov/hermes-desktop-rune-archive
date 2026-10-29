@@ -110,8 +110,6 @@ impl Viewer {
                 {
                     self.client_error = Some(error);
                 }
-                self.invalidate_page_requests("terminal.processes");
-                self.process_owner = None;
                 let effects =
                     self.review
                         .bind(scope.clone(), self.is_local_connection(), cwd.clone());
@@ -129,15 +127,6 @@ impl Viewer {
             let effects = self.review.bind(scope, self.is_local_connection(), cwd);
             changed |= !effects.is_empty();
             self.page_requests(effects);
-        }
-        if self.pane_shown("terminal") && self.process_owner.is_none() && now >= self.next_process {
-            let scope = self.composer_scope();
-            if let Some(request) = self.conversation.process_request(&scope) {
-                self.process_owner = Some(scope);
-                self.next_process = now + 2.;
-                self.page_request("terminal.processes", request);
-                changed = true;
-            }
         }
         changed
     }

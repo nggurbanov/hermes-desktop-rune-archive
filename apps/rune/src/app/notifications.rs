@@ -30,6 +30,9 @@ impl Viewer {
         {
             return;
         }
+        if !replay && kind == "message.complete" {
+            self.sounds.complete(scope, runtime);
+        }
         self.notifications.set_active(self.composer_scope());
         let title = self
             .conversation
@@ -60,6 +63,33 @@ impl Viewer {
         changed
     }
     fn activate_notification(&mut self, activation: Activation) {
+        self.activate_notification_with(activation, |s, plugin, token| {
+            s.activate_plugin_notification(plugin, token)
+        });
+    }
+    fn activate_notification_with(
+        &mut self,
+        activation: Activation,
+        mut plugin_activate: impl FnMut(
+            &mut Self,
+            &crate::notifications::PluginActivation,
+            Option<&str>,
+        ) -> bool,
+    ) {
+        if let Some(plugin) = activation.plugin.as_ref() {
+            if activation.principal != plugin.target.lifecycle_key {
+                return;
+            }
+            if plugin_activate(self, plugin, activation.token.as_deref()) {
+                return;
+            }
+            if plugin.action_id.is_none() {
+                if let Some(window) = &self.native_window {
+                    window.activate(activation.token.unwrap_or_default());
+                }
+            }
+            return;
+        }
         let Some(connection) = self.connection.clone() else {
             return;
         };
@@ -166,6 +196,7 @@ mod tests {
     }
     fn body(s: &Viewer) -> Activation {
         Activation {
+            plugin: None,
             principal: crate::client::connection_key(s.connection.as_ref().unwrap()).unwrap(),
             scope: DraftScope {
                 connection: 123,
@@ -185,6 +216,82 @@ mod tests {
         assert!(s.tabs.iter().any(|t| t.session == "foreground" && !t.bot));
         assert!(s.tabs.iter().any(|t| t.session == "bot-chat" && t.bot));
         assert_eq!(s.tabs.len(), 2);
+    }
+    #[test]
+    fn a_live_secondary_plugin_uses_its_captured_source_without_main_profile_navigation() {
+        let mut s = viewer();
+        let primary = crate::client::connection_key(s.connection.as_ref().unwrap()).unwrap();
+        let mut activation = body(&s);
+        let retained_principal = "retained-plugin-parent".to_string();
+        assert_ne!(primary, retained_principal);
+        activation.principal = retained_principal.clone();
+        activation.scope.profile = "secondary-only".into();
+        activation.plugin = Some(crate::notifications::PluginActivation {
+            target: crate::notifications::PluginTarget {
+                lease: None,
+                window_token: "live-child".into(),
+                lifecycle_key: retained_principal,
+                source_id: "secondary-source".into(),
+                source_principal: "secondary-verified-principal".into(),
+                profile: "secondary-only".into(),
+                request_id: "ask".into(),
+                notify_id: Some("closure".into()),
+                tag: "plugin".into(),
+                activate: Some("/plugin/item".into()),
+                actions: vec![],
+                icon: None,
+                background: true,
+            },
+            action_id: None,
+        });
+        let mut received = vec![];
+        // The production host performs the exact live token/source/lease check;
+        // this transport seam proves the main foreground cannot preempt it.
+        s.activate_notification_with(activation.clone(), |_, plugin, _| {
+            received.push((
+                plugin.target.source_id.clone(),
+                plugin.target.profile.clone(),
+            ));
+            true
+        });
+        assert_eq!(
+            received,
+            vec![("secondary-source".into(), "secondary-only".into())]
+        );
+        assert_eq!(s.selected_session.as_deref(), Some("foreground"));
+        assert_eq!(s.tabs.len(), 1);
+        activation.principal = "wrong-envelope".into();
+        s.activate_notification_with(activation, |_, _, _| {
+            panic!("foreign envelope reached the host")
+        });
+    }
+    #[test]
+    fn retired_plugin_body_or_button_cannot_execute_a_chat_action_or_navigation() {
+        let mut s = viewer();
+        for action_id in [None, Some("run".to_string())] {
+            let mut activation = body(&s);
+            activation.plugin = Some(crate::notifications::PluginActivation {
+                target: crate::notifications::PluginTarget {
+                    lease: None,
+                    window_token: "retired-window".into(),
+                    lifecycle_key: activation.principal.clone(),
+                    source_id: "retired-source".into(),
+                    source_principal: activation.principal.clone(),
+                    profile: "default".into(),
+                    request_id: "old-request".into(),
+                    notify_id: Some("old-callback".into()),
+                    tag: "plugin".into(),
+                    activate: Some("/plugin/home".into()),
+                    actions: vec![],
+                    icon: None,
+                    background: true,
+                },
+                action_id,
+            });
+            s.activate_notification(activation);
+            assert_eq!(s.selected_session.as_deref(), Some("foreground"));
+            assert_eq!(s.tabs.len(), 1);
+        }
     }
     #[test]
     fn a_notification_cannot_cross_a_new_connection_principal_or_retired_profile() {

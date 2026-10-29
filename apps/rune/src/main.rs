@@ -1,5 +1,6 @@
 mod app;
 mod audio;
+mod background;
 mod chat;
 mod client;
 mod client_settings;
@@ -12,6 +13,7 @@ mod directories;
 mod files;
 mod gateway;
 mod identities;
+mod image_previews;
 mod layout;
 mod media;
 mod native_fs;
@@ -23,6 +25,7 @@ mod plugin_host;
 mod preview;
 mod review;
 mod sidebar;
+mod sounds;
 mod subagents;
 mod terminal;
 mod view;
@@ -75,6 +78,8 @@ fn main() {
             ("subagents", app::subagents_scene),
             ("rich-chat", app::rich_chat_scene),
             ("rich-replay", app::rich_replay_scene),
+            ("safe-images", app::safe_images_scene),
+            ("background-processes", app::background_scene),
             ("models", app::models_scene),
             ("reasoning", app::reasoning_scene),
             ("permissions", app::permissions_scene),

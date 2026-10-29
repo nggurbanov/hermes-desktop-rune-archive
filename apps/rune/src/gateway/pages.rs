@@ -254,6 +254,8 @@ impl Gateway {
                     | "mcp.catalog"
                     | "config.get"
                     | "config.set"
+                    | "process.list"
+                    | "process.kill"
             )
             || ["vault.", "billing.", "connectors.", "mcp.servers."]
                 .iter()
@@ -300,6 +302,23 @@ impl Gateway {
                     }
                     if let Some(error) = value.get("error") {
                         let code = error["code"].as_i64().unwrap_or(-1);
+                        if matches!(method, "process.list" | "process.kill") {
+                            if let Some(reason) = error.pointer("/data/reason") {
+                                let token = reason
+                                    .as_str()
+                                    .filter(|s| {
+                                        !s.is_empty()
+                                            && s.len() <= 64
+                                            && s.chars().all(|c| {
+                                                c.is_ascii_alphanumeric() || matches!(c, '_' | '-')
+                                            })
+                                    })
+                                    .unwrap_or("other");
+                                return Err(format!(
+                                    "Process RPC refused ({code}; reason={token})"
+                                ));
+                            }
+                        }
                         return Err(format!("Workspace RPC refused ({code})"));
                     }
                     return value

@@ -65,7 +65,8 @@ pub struct Files {
     clock: f64,
     ignore_files: BTreeMap<String, String>,
     ignore_next: BTreeMap<String, f64>,
-    cache: Option<rune::ImageCache>,
+    safe_images: Option<crate::image_previews::SafeImages>,
+    image_job: Option<(u64, DraftScope, String)>,
     pub preview: Option<rune::Image>,
 }
 #[derive(Clone)]
@@ -112,17 +113,52 @@ impl Files {
             clock: 0.,
             ignore_files: Default::default(),
             ignore_next: Default::default(),
-            cache: None,
+            safe_images: None,
+            image_job: None,
             preview: None,
         }
     }
     pub fn init(&mut self, waker: rune::Waker) {
-        self.cache = Some(rune::ImageCache::new(waker));
+        self.safe_images = Some(crate::image_previews::SafeImages::new(waker));
     }
     pub fn reset(&mut self) {
-        let cache = self.cache.take();
+        if let Some(images) = &mut self.safe_images {
+            images.cancel_all();
+        }
+        let images = self.safe_images.take();
         *self = Self::new();
-        self.cache = cache;
+        self.safe_images = images;
+    }
+    pub fn poll_images(&mut self) -> bool {
+        let results = self
+            .safe_images
+            .as_mut()
+            .map(|images| images.poll())
+            .unwrap_or_default();
+        let mut changed = false;
+        for decoded in results {
+            if !self
+                .image_job
+                .as_ref()
+                .is_some_and(|job| job.0 == decoded.id)
+            {
+                continue;
+            }
+            let (_, owner, path) = self.image_job.take().unwrap();
+            if let Some(editor) = self
+                .editor
+                .as_mut()
+                .filter(|e| e.owner == owner && e.path == path)
+            {
+                editor.loading = false;
+                changed = true;
+                match decoded.result {
+                    Ok(image) => self.preview = Some(image),
+                    Err(error) => editor.error = Some(error),
+                }
+            }
+        }
+        changed
     }
     pub fn blocks_owner_change(&self) -> bool {
         self.mutating
@@ -237,6 +273,10 @@ impl Files {
                     return vec![];
                 };
                 self.preview = None;
+                self.image_job = None;
+                if let Some(images) = &mut self.safe_images {
+                    images.cancel_all();
+                }
                 let image = std::path::Path::new(&path)
                     .extension()
                     .and_then(|s| s.to_str())
@@ -438,6 +478,7 @@ impl Files {
                 return self.folder(cwd.into());
             }
             "files.editor.media" => {
+                self.image_job = None;
                 if let Some(editor) = &mut self.editor {
                     editor.loading = false;
                     editor.binary = true;
@@ -445,38 +486,34 @@ impl Files {
                 let data = value
                     .as_str()
                     .or(value["dataUrl"].as_str())
-                    .or(value["data_url"].as_str());
-                let decoded = data
-                    .and_then(|s| s.split_once(','))
-                    .and_then(|(meta, data)| {
-                        if !meta.starts_with("data:image/") || !meta.ends_with(";base64") {
-                            return None;
+                    .or(value["data_url"].as_str())
+                    .ok_or("The agent returned no image preview".to_owned())
+                    .and_then(crate::chat::media::decode_data_url);
+                match data {
+                    Ok((mime, bytes)) => {
+                        if let Some(editor) = &mut self.editor {
+                            editor.size = bytes.len() as u64;
+                            match self
+                                .safe_images
+                                .as_mut()
+                                .ok_or("The image decoder is unavailable".into())
+                                .and_then(|images| {
+                                    images.request(&mime, std::sync::Arc::from(bytes), 1400)
+                                }) {
+                                Ok(id) => {
+                                    editor.loading = true;
+                                    self.image_job =
+                                        Some((id, editor.owner.clone(), editor.path.clone()));
+                                }
+                                Err(error) => editor.error = Some(error),
+                            }
                         }
-                        use base64::Engine;
-                        base64::engine::general_purpose::STANDARD
-                            .decode(data)
-                            .ok()
-                            .map(|bytes| {
-                                (
-                                    meta.trim_start_matches("data:").trim_end_matches(";base64"),
-                                    bytes,
-                                )
-                            })
-                    });
-                if let Some((mime, bytes)) = decoded {
-                    if let Some(editor) = &mut self.editor {
-                        editor.size = bytes.len() as u64;
                     }
-                    if let Some(cache) = &self.cache {
-                        self.preview = Some(cache.load_mime(
-                            std::sync::Arc::<[u8]>::from(bytes),
-                            mime,
-                            1400.,
-                            1.,
-                        ));
+                    Err(error) => {
+                        if let Some(editor) = &mut self.editor {
+                            editor.error = Some(error);
+                        }
                     }
-                } else if let Some(editor) = &mut self.editor {
-                    editor.error = Some("The agent returned an invalid image preview".into());
                 }
             }
             "files.editor.read" => {
@@ -636,6 +673,40 @@ mod tests {
             profile: "work".into(),
             session: Some("stored".into()),
         }
+    }
+    #[test]
+    fn asynchronous_images_keep_exact_editor_owner_path_and_cancel_retired_scope() {
+        use base64::Engine;
+        let mut files = Files::new();
+        files.init(std::sync::Arc::new(|| {}));
+        files.bind(scope(), false, Some("/work".into()));
+        let first=br##"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><rect width="200" height="100" fill="#a52323"/></svg>"##;
+        let second=br##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect width="100" height="100" fill="#239a82"/></svg>"##;
+        files.action(Action::Open("/work/old.png".into()));
+        files.apply("files.editor.media",Ok(json!({"data_url":format!("data:image/png;base64,{}",base64::engine::general_purpose::STANDARD.encode(first))})));
+        files.action(Action::Open("/work/new.png".into()));
+        files.apply("files.editor.media",Ok(json!({"data_url":format!("data:image/png;base64,{}",base64::engine::general_purpose::STANDARD.encode(second))})));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while files.preview.is_none() && std::time::Instant::now() < deadline {
+            files.poll_images();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(
+            files.preview.as_ref().unwrap().wait().unwrap(),
+            [1400, 1400]
+        );
+        assert_eq!(files.editor.as_ref().unwrap().path, "/work/new.png");
+        assert_eq!(files.editor.as_ref().unwrap().owner, scope());
+        files.action(Action::Open("/work/retired.png".into()));
+        files.apply("files.editor.media",Ok(json!({"data_url":format!("data:image/svg+xml;base64,{}",base64::engine::general_purpose::STANDARD.encode(first))})));
+        files.reset();
+        for _ in 0..100 {
+            files.poll_images();
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert!(files.preview.is_none());
+        assert!(files.editor.is_none());
+        assert!(files.image_job.is_none());
     }
     #[test]
     fn remote_save_keeps_read_owner_and_refuses_stale_disk_without_erasing_edits() {

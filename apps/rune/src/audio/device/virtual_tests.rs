@@ -86,6 +86,50 @@ fn native_virtual_device_roundtrip() {
             samples.len(),
             capture.rate
         );
+        // The completion actor uses its production lazy output/mixer, independently
+        // of the voice playback path above. Its unsaved preferences never touch HOME.
+        let cue_controls = Arc::new(Controls::default());
+        let cue_capture = Capture::open(cue_controls.clone(), false)
+            .expect("Open private completion-sound monitor");
+        std::thread::sleep(Duration::from_millis(150));
+        let mut cues = crate::sounds::CompletionSounds::new();
+        cues.init(Arc::new(|| {}));
+        cues.act(crate::sounds::Action::Preset(14), false);
+        cues.act(crate::sounds::Action::Preview, false);
+        std::thread::sleep(Duration::from_secs(3));
+        cues.poll();
+        assert!(
+            cues.error.is_none(),
+            "Native completion output failed: {:?}",
+            cues.error
+        );
+        assert!(
+            !cues.previewing,
+            "The completion worker did not acknowledge playback"
+        );
+        cue_controls.stop.store(true, Ordering::Release);
+        cue_capture.wait_stopped().unwrap();
+        let pcm = cue_capture.pcm_drain().unwrap();
+        let cue_peak = pcm
+            .iter()
+            .map(|sample| i32::from(*sample).abs())
+            .max()
+            .unwrap_or(0);
+        let cue_power = pcm
+            .iter()
+            .map(|sample| (f64::from(*sample) / 32768.).powi(2))
+            .sum::<f64>()
+            / pcm.len().max(1) as f64;
+        assert!(
+            cue_peak > 200 && cue_power > 0.0000001,
+            "Production completion sound did not reach the private monitor: peak={cue_peak}, power={cue_power}"
+        );
+        assert!(!cue_controls.failed.load(Ordering::Acquire));
+        eprintln!(
+            "Private completion actor/Rodio output: {} samples @{}Hz, peak={cue_peak}, mean power={cue_power:.6}",
+            pcm.len(),
+            cue_capture.rate
+        );
         return;
     }
     let directory = PathBuf::from(format!("/tmp/hermes-rune-virtual-{}", uuid::Uuid::new_v4()));

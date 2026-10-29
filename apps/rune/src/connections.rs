@@ -9,7 +9,7 @@ use std::{
 };
 mod core;
 mod leases;
-pub use leases::{Lease, Resolver};
+pub use leases::{Lease, LeaseGuard, Resolver};
 pub(crate) mod plugin;
 mod ssh;
 

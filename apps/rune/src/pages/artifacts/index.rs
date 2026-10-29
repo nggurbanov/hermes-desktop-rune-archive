@@ -4,6 +4,7 @@ impl Artifacts {
         if self.demo || self.loading || self.saving {
             return vec![];
         }
+        self.cancel_images();
         self.rows.clear();
         self.seen.clear();
         self.page_keys.clear();
@@ -211,6 +212,7 @@ impl Artifacts {
             Action::FilePage(p) => self.file_page = p,
             Action::Page(p) => self.page = p,
             Action::ClosePreview => {
+                self.cancel_detail_image();
                 self.selected = None;
                 self.preview = None;
                 self.preview_error = None;
@@ -224,6 +226,7 @@ impl Artifacts {
                 if self.rows.get(i).is_none() {
                     return vec![];
                 }
+                self.cancel_detail_image();
                 self.selected = Some(i);
                 self.preview = None;
                 self.download = None;

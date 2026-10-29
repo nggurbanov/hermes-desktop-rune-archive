@@ -231,8 +231,14 @@ pub(super) async fn deliver(
         let mut buttons = vec![];
         if actions {
             buttons.extend(["default".to_string(), "View".into()]);
-            for (index, button) in request.notice.buttons.iter().enumerate() {
-                buttons.extend([index.to_string(), button.label.clone()]);
+            if let Some(plugin) = &request.notice.plugin {
+                for (index, button) in plugin.actions.iter().enumerate() {
+                    buttons.extend([index.to_string(), button.label.clone()]);
+                }
+            } else {
+                for (index, button) in request.notice.buttons.iter().enumerate() {
+                    buttons.extend([index.to_string(), button.label.clone()]);
+                }
             }
         }
         let hints: HashMap<&str, Value<'_>> = HashMap::from([

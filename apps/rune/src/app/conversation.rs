@@ -164,12 +164,18 @@ impl Viewer {
         let mut changed = !updates.is_empty();
         for update in updates {
             match update {
+                Update::BackgroundRefresh { scope, runtime } => {
+                    self.trigger_background(scope, runtime)
+                }
                 Update::ProfileApprovalSet { scope, mode } => {
                     self.client_settings.confirm_approval_mode(&scope, &mode);
                     let effects = self.client_settings.refresh();
                     self.page_requests(effects);
                 }
-                Update::StreamOpened { scope } => self.notifications.stream_opened(&scope),
+                Update::StreamOpened { scope } => {
+                    self.notifications.stream_opened(&scope);
+                    self.background.stream_opened(&scope);
+                }
                 Update::NoticeEvent {
                     scope,
                     kind,
@@ -539,7 +545,7 @@ impl Viewer {
             match event{
    crate::connections::Event::Ready(connection)=>self.use_connection(connection),
    crate::connections::Event::Changed=>{},
-   crate::connections::Event::Lost{id,revision,message}=>{if self.connection.as_ref().is_some_and(|connection|matches!(connection,Connection::Saved{id:current,revision:current_revision,..}if current==&id&&current_revision==&revision)){self.conversation.close_connection(self.connection_epoch);self.chat.close_connection(self.connection_epoch);self.subagents.close_connection(self.connection_epoch);self.audio.close_connection(self.connection_epoch);self.error=Some(message);self.loading=false;}}
+   crate::connections::Event::Lost{id,revision,message}=>{if self.connection.as_ref().is_some_and(|connection|matches!(connection,Connection::Saved{id:current,revision:current_revision,..}if current==&id&&current_revision==&revision)){self.conversation.close_connection(self.connection_epoch);self.chat.close_connection(self.connection_epoch);self.subagents.close_connection(self.connection_epoch);self.audio.close_connection(self.connection_epoch);self.background.retire_connection(self.connection_epoch);self.preview.close_connection(self.connection_epoch);self.error=Some(message);self.status="Disconnected".into();self.loading=false;self.history_loading=false;}}
   }
         }
         changed

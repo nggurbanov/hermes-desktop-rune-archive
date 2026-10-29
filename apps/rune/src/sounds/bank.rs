@@ -1,0 +1,36 @@
+pub const PRESETS: [(u8, &str); 15] = [
+    (0, "None"),
+    (1, "Two-note comfort"),
+    (2, "Glass ping"),
+    (3, "Soft marimba"),
+    (4, "Tri-tone message"),
+    (5, "Airy whoosh"),
+    (6, "Discovery cluster"),
+    (7, "Systems online"),
+    (8, "IBM terminal"),
+    (9, "Modem chirp"),
+    (10, "Wind chimes"),
+    (11, "Singing bowl"),
+    (12, "Harp lift"),
+    (13, "Sonar ping"),
+    (14, "Music box"),
+];
+pub(super) fn bytes(preset: u8) -> Option<&'static [u8]> {
+    Some(match preset {
+        1 => include_bytes!("../../assets/completion-sounds/01.wav"),
+        2 => include_bytes!("../../assets/completion-sounds/02.wav"),
+        3 => include_bytes!("../../assets/completion-sounds/03.wav"),
+        4 => include_bytes!("../../assets/completion-sounds/04.wav"),
+        5 => include_bytes!("../../assets/completion-sounds/05.wav"),
+        6 => include_bytes!("../../assets/completion-sounds/06.wav"),
+        7 => include_bytes!("../../assets/completion-sounds/07.wav"),
+        8 => include_bytes!("../../assets/completion-sounds/08.wav"),
+        9 => include_bytes!("../../assets/completion-sounds/09.wav"),
+        10 => include_bytes!("../../assets/completion-sounds/10.wav"),
+        11 => include_bytes!("../../assets/completion-sounds/11.wav"),
+        12 => include_bytes!("../../assets/completion-sounds/12.wav"),
+        13 => include_bytes!("../../assets/completion-sounds/13.wav"),
+        14 => include_bytes!("../../assets/completion-sounds/14.wav"),
+        _ => return None,
+    })
+}

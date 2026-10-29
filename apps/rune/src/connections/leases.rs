@@ -14,7 +14,27 @@ struct State {
 }
 #[derive(Clone)]
 pub struct Lease(Arc<State>);
+#[derive(Clone)]
+pub struct LeaseGuard(Weak<State>);
+impl LeaseGuard {
+    pub fn is_valid(&self) -> bool {
+        self.0
+            .upgrade()
+            .is_some_and(|state| state.alive.load(Ordering::Acquire))
+    }
+}
+impl std::fmt::Debug for LeaseGuard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SourceLeaseGuard")
+            .field("valid", &self.is_valid())
+            .finish()
+    }
+}
+
 impl Lease {
+    pub fn guard(&self) -> LeaseGuard {
+        LeaseGuard(Arc::downgrade(&self.0))
+    }
     pub fn connection(&self) -> &Connection {
         &self.0.connection
     }
@@ -122,5 +142,35 @@ impl Resolver {
             })
             .map_err(|_| "The saved connection service is unavailable")?;
         Ok(receive)
+    }
+}
+
+#[cfg(test)]
+mod guard_tests {
+    use super::*;
+    #[test]
+    fn notification_guard_does_not_retain_source_and_cannot_revive_on_replacement() {
+        let connection = Connection::Url {
+            endpoint: "http://127.0.0.1:49191".into(),
+            token: None,
+        };
+        let (mut entry, lease) = Entry::new(
+            "source".into(),
+            "revision".into(),
+            connection.clone(),
+            vec![],
+            None,
+        );
+        let guard = lease.guard();
+        assert!(guard.is_valid());
+        entry.fail("retired");
+        assert!(!guard.is_valid());
+        let (_replacement, new_lease) =
+            Entry::new("source".into(), "revision".into(), connection, vec![], None);
+        assert!(new_lease.guard().is_valid());
+        assert!(!guard.is_valid());
+        let guard = new_lease.guard();
+        drop(new_lease);
+        assert!(!guard.is_valid());
     }
 }

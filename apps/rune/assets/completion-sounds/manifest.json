@@ -1,0 +1,189 @@
+{
+  "version": 1,
+  "source": {
+    "file": "apps/desktop/src/lib/completion-sound.ts",
+    "sha256": "fdf82282a7a681e60822550b041b6691fc42aeec1dfbc8410435dd19dec896f9",
+    "pure_synthesis_sha256": "8262f07dfdaa6edc386e8a2695f76ff0fdba0b301221e9a1c78a60983c1e3144",
+    "repository": "https://github.com/NousResearch/hermes-agent",
+    "baseline_commit": "ef75bc708867e3884cb40a91363be6dc6fddc034"
+  },
+  "generator": {
+    "file": "apps/rune/scripts/build-completion-sounds.mjs",
+    "sha256": "faa7212b374db13bb4c470c971c62d6763642af871fd0e54a1b830f6eb51a240",
+    "browser": "148.0.7778.96",
+    "offline": true,
+    "random_seed": 1212502605,
+    "encoding": "PCM signed 16-bit stereo WAV, silence trimmed after last half-LSB + 256 frames",
+    "signal_path": "original playVariant: gain .48, lowpass 3800Hz Q .32, dry .88, stereo 1.6s convolver wet .34, starts at 10ms"
+  },
+  "presets": [
+    {
+      "id": 1,
+      "name": "Two-note comfort",
+      "frames": 73894,
+      "sample_rate": 48000,
+      "channels": 2,
+      "bits": 16,
+      "peak": 0.032479431480169296,
+      "file": "01.wav",
+      "bytes": 295620,
+      "sha256": "7e8cf1bcd47ae730c58f454d98f1fc06bfa516bb2d5868edcb7783f612200dcf"
+    },
+    {
+      "id": 2,
+      "name": "Glass ping",
+      "frames": 68468,
+      "sample_rate": 48000,
+      "channels": 2,
+      "bits": 16,
+      "peak": 0.019683483988046646,
+      "file": "02.wav",
+      "bytes": 273916,
+      "sha256": "106d5a84d3a9eb4ddf9a07cd0d02205f42a6a91a0d51551d616d688c29239bf0"
+    },
+    {
+      "id": 3,
+      "name": "Soft marimba",
+      "frames": 75798,
+      "sample_rate": 48000,
+      "channels": 2,
+      "bits": 16,
+      "peak": 0.015789266675710678,
+      "file": "03.wav",
+      "bytes": 303236,
+      "sha256": "1e34e27d6b512ee17a81a1a1e580fb5137ab18fe4afe3bba37557c60722940c9"
+    },
+    {
+      "id": 4,
+      "name": "Tri-tone message",
+      "frames": 71331,
+      "sample_rate": 48000,
+      "channels": 2,
+      "bits": 16,
+      "peak": 0.019452136009931564,
+      "file": "04.wav",
+      "bytes": 285368,
+      "sha256": "d0e793cb66fbc18568d492c7fef51e8bf26755dd5ef521d6f76a94358fc89b85"
+    },
+    {
+      "id": 5,
+      "name": "Airy whoosh",
+      "frames": 67601,
+      "sample_rate": 48000,
+      "channels": 2,
+      "bits": 16,
+      "peak": 0.008674603886902332,
+      "file": "05.wav",
+      "bytes": 270448,
+      "sha256": "766b65d5de94b85f503f5ec014018eff01de005e8989d0de9a0266c61f0b2bcd"
+    },
+    {
+      "id": 6,
+      "name": "Discovery cluster",
+      "frames": 103456,
+      "sample_rate": 48000,
+      "channels": 2,
+      "bits": 16,
+      "peak": 0.015535200946033001,
+      "file": "06.wav",
+      "bytes": 413868,
+      "sha256": "287a42803b5eb4f0c50dfb4a35fd7e51a8c8afb4c490172414c9c58d4e04fa7b"
+    },
+    {
+      "id": 7,
+      "name": "Systems online",
+      "frames": 66870,
+      "sample_rate": 48000,
+      "channels": 2,
+      "bits": 16,
+      "peak": 0.021009277552366257,
+      "file": "07.wav",
+      "bytes": 267524,
+      "sha256": "e072764851d0f8ebf5f554b1e11f93c892af100d4cab5dbf53df43fdab693b37"
+    },
+    {
+      "id": 8,
+      "name": "IBM terminal",
+      "frames": 66287,
+      "sample_rate": 48000,
+      "channels": 2,
+      "bits": 16,
+      "peak": 0.018325353041291237,
+      "file": "08.wav",
+      "bytes": 265192,
+      "sha256": "f59139fc590a5b4aa017e2be8990f6c61ff68ff8020320b54aed0b595758a665"
+    },
+    {
+      "id": 9,
+      "name": "Modem chirp",
+      "frames": 60807,
+      "sample_rate": 48000,
+      "channels": 2,
+      "bits": 16,
+      "peak": 0.009874150156974792,
+      "file": "09.wav",
+      "bytes": 243272,
+      "sha256": "8a886ec36d7b9278954a01c7c61c0318a9cbf5b1f910388039897c9019fe9c75"
+    },
+    {
+      "id": 10,
+      "name": "Wind chimes",
+      "frames": 84311,
+      "sample_rate": 48000,
+      "channels": 2,
+      "bits": 16,
+      "peak": 0.015676358714699745,
+      "file": "10.wav",
+      "bytes": 337288,
+      "sha256": "bf657ca3172ab02b4c14e87923ed95b89659ef6598c5a3c45768808868109648"
+    },
+    {
+      "id": 11,
+      "name": "Singing bowl",
+      "frames": 121452,
+      "sample_rate": 48000,
+      "channels": 2,
+      "bits": 16,
+      "peak": 0.014459064230322838,
+      "file": "11.wav",
+      "bytes": 485852,
+      "sha256": "ce8d85f0102188a4b09c8528dfd4a9fe4a052fef2606e5e5dd6c1f20b9e8e038"
+    },
+    {
+      "id": 12,
+      "name": "Harp lift",
+      "frames": 81581,
+      "sample_rate": 48000,
+      "channels": 2,
+      "bits": 16,
+      "peak": 0.016560379415750504,
+      "file": "12.wav",
+      "bytes": 326368,
+      "sha256": "00ee38e68f03db4e8942ef71e058a5fd29651ef2b8b01472b579994908f2b3d9"
+    },
+    {
+      "id": 13,
+      "name": "Sonar ping",
+      "frames": 81062,
+      "sample_rate": 48000,
+      "channels": 2,
+      "bits": 16,
+      "peak": 0.015257027931511402,
+      "file": "13.wav",
+      "bytes": 324292,
+      "sha256": "193f8c1061afaac95fc1d8cdc0ffd9f3f2bbb0a214e35c7ff1190d5206497130"
+    },
+    {
+      "id": 14,
+      "name": "Music box",
+      "frames": 67727,
+      "sample_rate": 48000,
+      "channels": 2,
+      "bits": 16,
+      "peak": 0.008151965215802193,
+      "file": "14.wav",
+      "bytes": 270952,
+      "sha256": "dfb046bb34292e3329f20bb9986ba122f648500ade4a877f2c24ed5eb0c52f89"
+    }
+  ]
+}

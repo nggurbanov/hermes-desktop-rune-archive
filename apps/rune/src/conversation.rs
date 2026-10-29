@@ -166,6 +166,10 @@ pub struct ConversationView {
 
 #[derive(Clone, Debug)]
 pub enum Update {
+    BackgroundRefresh {
+        scope: DraftScope,
+        runtime: String,
+    },
     ProfileApprovalSet {
         scope: DraftScope,
         mode: String,
@@ -366,20 +370,6 @@ impl Conversation {
     }
     pub fn profile_readback(&mut self, connection: u64, profile: &str) {
         self.retired_profiles.remove(&(connection, profile.into()));
-    }
-    pub fn process_request(&self, scope: &DraftScope) -> Option<crate::pages::PageRequest> {
-        let view = self.view(scope)?;
-        if view.runtime.is_empty() {
-            return None;
-        }
-        Some(
-            crate::pages::PageRequest::rpc(
-                "process.list",
-                serde_json::json!({"session_id":view.runtime}),
-            )
-            .profile(&scope.profile)
-            .timeout_secs(10),
-        )
     }
     pub fn reconnect(&mut self, connection: Connection, scope: &DraftScope) -> Result<(), String> {
         self.retired_profiles
@@ -1043,6 +1033,20 @@ impl Conversation {
                                 payload,
                                 runtime: view.runtime.clone(),
                                 replay,
+                            });
+                        }
+                        if !replay
+                            && ((event.kind == "tool.complete"
+                                && matches!(
+                                    event.payload["name"].as_str(),
+                                    Some("terminal" | "process")
+                                ))
+                                || (event.kind == "status.update"
+                                    && event.payload["kind"] == "process"))
+                        {
+                            updates.push(Update::BackgroundRefresh {
+                                scope: scope.clone(),
+                                runtime: view.runtime.clone(),
                             });
                         }
                         updates.push(Update::Changed { scope });

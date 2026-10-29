@@ -3,6 +3,7 @@
 //! Hermes owns the pane composition, connection/profile identities and actions.
 
 mod audio;
+pub(crate) mod background;
 pub(crate) mod client;
 pub(crate) mod client_settings;
 pub(crate) mod composer;
@@ -20,6 +21,7 @@ pub(crate) mod preview;
 pub(crate) mod review;
 mod shell;
 mod sidebar;
+pub(crate) mod sounds;
 mod status;
 pub(crate) mod subagents;
 pub(crate) mod terminal;
@@ -229,6 +231,7 @@ fn workspace(s: &Viewer, p: &Pal, k: &Kit, layer: &mut Vec<El>) -> El {
         .child(audio::panel(s, k))
         .child(transcript::slash_panel(s, k))
         .child(subagents::strip(s, k))
+        .child(background::strip(s, k))
         .child(composer::dock(s, p, k, layer))
 }
 

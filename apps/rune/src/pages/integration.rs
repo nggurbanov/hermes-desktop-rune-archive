@@ -81,13 +81,6 @@ impl Viewer {
             vec![]
         } else if operation.starts_with("chrome.") {
             self.chrome.apply(operation, result)
-        } else if operation == "terminal.processes" {
-            if let Some(owner) = self.process_owner.take() {
-                if let Ok(value) = result {
-                    self.terminal.sync_processes(&owner, &value);
-                }
-            }
-            vec![]
         } else if operation.starts_with("ops.") {
             self.operations.apply(operation, result)
         } else if operation.starts_with("identities.") {

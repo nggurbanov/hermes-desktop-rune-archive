@@ -77,7 +77,7 @@ pub(super) fn run() -> Result<(), String> {
                 && request.body().len() <= MAX_FRAME
             {
                 if let Ok(value) = serde_json::from_str::<Value>(request.body()) {
-                    emit(value);
+                    emit(json!({"type":"host-web-message","message":value}));
                 }
             }
         });
@@ -102,6 +102,9 @@ pub(super) fn run() -> Result<(), String> {
         .load_url(&root_url)
         .map_err(|_| "The native host document could not be loaded")?;
     emit(json!({"type":"host-ready"}));
+    emit(
+        json!({"type":"host-window-state","focused":window.is_focused(),"visible":window.is_visible()}),
+    );
     let mut closing: Option<(std::time::Instant, &'static str)> = None;
     event_loop.run(move |event, _, control_flow| {
         if matches!(event, Event::LoopDestroyed) { server.stop.store(true, Ordering::Release); return; }
@@ -114,6 +117,14 @@ pub(super) fn run() -> Result<(), String> {
             *control_flow = ControlFlow::WaitUntil(deadline);
         } else { *control_flow = ControlFlow::Wait; }
         match event {
+            Event::UserEvent(value) if value["type"] == "visibility" && closing.is_none() => {
+                if let Some(visible)=value["visible"].as_bool() {window.set_visible(visible);}
+                emit(json!({"type":"host-window-state","focused":window.is_focused(),"visible":window.is_visible()}));
+            }
+            Event::UserEvent(value) if value["type"] == "focus" && closing.is_none() => {
+                window.set_visible(true); window.set_focus();
+                emit(json!({"type":"host-window-state","focused":window.is_focused(),"visible":window.is_visible()}));
+            }
             Event::UserEvent(value) if value["type"] == "close" => {
                 if closing.is_none() {
                     let _ = webview.evaluate_script("window.dispatchEvent(new CustomEvent('hermes-host-message',{detail:{type:'close'}}));");
@@ -135,6 +146,7 @@ pub(super) fn run() -> Result<(), String> {
                     *control_flow = ControlFlow::WaitUntil(deadline);
                 }
             }
+            Event::WindowEvent { .. } => { emit(json!({"type":"host-window-state","focused":window.is_focused(),"visible":window.is_visible()})); }
             Event::LoopDestroyed => { server.stop.store(true, Ordering::Release); }
             _ => {}
         }

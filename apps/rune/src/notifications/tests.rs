@@ -14,6 +14,7 @@ fn scope(id: &str) -> DraftScope {
 }
 fn sample(kind: Kind, id: &str) -> Notice {
     Notice {
+        plugin: None,
         kind,
         scope: scope(id),
         runtime: format!("runtime-{id}"),
@@ -405,4 +406,49 @@ fn same_batch_actions_and_daemon_restart_cannot_reuse_an_old_handler() {
     assert_ne!(a.key(), b.key());
     a.notice.scope.profile = "other".into();
     assert_ne!(a.key(), request(1, Kind::TurnDone, "one").key());
+}
+
+#[test]
+fn every_closed_plugin_id_survives_daemon_retirement_and_bounded_cleanup_polls() {
+    let mut notifications = Notifications::new();
+    let wakes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let wake_count = wakes.clone();
+    notifications.waker = Some(Arc::new(move || {
+        wake_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }));
+    for id in 0..140 {
+        notifications
+            .sender
+            .send(Reply::PluginClosed(PluginTarget {
+                lease: None,
+                window_token: "exact-window".into(),
+                lifecycle_key: "parent".into(),
+                source_id: "source".into(),
+                source_principal: "principal".into(),
+                profile: "profile".into(),
+                request_id: format!("request-{id}"),
+                notify_id: Some(format!("callback-{id}")),
+                tag: "plugin".into(),
+                activate: None,
+                actions: vec![],
+                icon: None,
+                background: true,
+            }))
+            .unwrap();
+    }
+    notifications.poll();
+    let mut closed = notifications.take_plugin_closed();
+    assert_eq!(closed.len(), 128);
+    assert_eq!(wakes.load(std::sync::atomic::Ordering::Relaxed), 1);
+    closed.extend(notifications.take_plugin_closed());
+    assert_eq!(
+        closed
+            .iter()
+            .map(|t| t.notify_id.as_deref().unwrap())
+            .collect::<Vec<_>>(),
+        (0..140)
+            .map(|id| format!("callback-{id}"))
+            .collect::<Vec<_>>()
+    );
+    assert!(notifications.take_plugin_closed().is_empty());
 }

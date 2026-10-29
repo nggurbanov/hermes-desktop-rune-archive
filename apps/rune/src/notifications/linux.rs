@@ -336,7 +336,7 @@ impl Broker {
             return;
         };
         if id == 0 {
-            self.registry.retire_owner(&owner);
+            self.registry.retire_owner_notify(&owner, &self.clients);
             return;
         }
         // The registry matches the sender AND numeric id. A different peer cannot invoke an action.
@@ -367,7 +367,7 @@ impl Broker {
             return;
         }
         if let Some(session) = &self.session {
-            for (owner, id) in self.registry.expired(Instant::now()) {
+            for (owner, id) in self.registry.expired_notify(Instant::now(), &self.clients) {
                 transport::close(&session.connection, owner, id, self.config.timeout);
             }
         }

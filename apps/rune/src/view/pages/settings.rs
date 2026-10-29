@@ -102,7 +102,11 @@ pub fn page(s: &Viewer, k: &Kit, layer: &mut Vec<El>) -> El {
             .h_full()
             .min_h(0.0)
             .child(nav)
-            .child(crate::view::notifications::page(s, k).grow(1.0).min_w(0.0));
+            .child(
+                crate::view::notifications::page(s, k, layer)
+                    .grow(1.0)
+                    .min_w(0.0),
+            );
     }
     if matches!(
         state.section.as_str(),

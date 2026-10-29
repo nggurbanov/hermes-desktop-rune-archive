@@ -18,6 +18,7 @@ const sockets=new Map(),events=new Set();let creates=0,sequence=0,output='',stde
 const require=(condition,message)=>{if(!condition)throw new Error(message)}
 function finish(){if(retained&&active&&adopted&&events.size===2&&!closing){closing=true;send({type:'close'})}}
 function handle(event){
+  if(event.type==='host-web-message') event=event.message
  if(process.argv.includes('--debug'))console.error(JSON.stringify(event))
  if(event.type==='plugin-bootstrap-ready')send({type:'plugin-load',source,origin:'/synthetic/route/plugin.js',owner})
  if(event.type==='plugin-request'){

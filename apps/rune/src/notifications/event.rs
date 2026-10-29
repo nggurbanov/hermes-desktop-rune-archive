@@ -127,6 +127,7 @@ pub(super) fn notice(
         body
     };
     Some(Notice {
+        plugin: None,
         kind,
         scope: if global {
             DraftScope {

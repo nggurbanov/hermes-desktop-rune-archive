@@ -79,7 +79,41 @@ pub struct Button {
     pub action: PromptAction,
 }
 #[derive(Clone, Debug)]
+pub struct PluginButton {
+    pub id: String,
+    pub label: String,
+    pub activate: Option<String>,
+}
+#[derive(Clone, Debug)]
+pub struct PluginTarget {
+    pub lease: Option<crate::connections::LeaseGuard>,
+    pub window_token: String,
+    pub lifecycle_key: String,
+    pub source_id: String,
+    pub source_principal: String,
+    pub profile: String,
+    pub request_id: String,
+    pub notify_id: Option<String>,
+    pub tag: String,
+    pub activate: Option<String>,
+    pub actions: Vec<PluginButton>,
+    pub icon: Option<String>,
+    pub background: bool,
+}
+#[derive(Clone, Debug)]
+pub struct PluginActivation {
+    pub target: PluginTarget,
+    pub action_id: Option<String>,
+}
+#[derive(Clone, Debug)]
+pub struct PluginDelivery {
+    pub request_id: String,
+    pub target: PluginTarget,
+    pub result: Result<bool, String>,
+}
+#[derive(Clone, Debug)]
 pub struct Notice {
+    pub plugin: Option<PluginTarget>,
     pub kind: Kind,
     pub scope: DraftScope,
     pub runtime: String,
@@ -92,6 +126,7 @@ pub struct Notice {
 }
 #[derive(Clone, Debug)]
 pub struct Activation {
+    pub plugin: Option<PluginActivation>,
     pub principal: String,
     pub scope: DraftScope,
     pub runtime: String,
@@ -143,11 +178,16 @@ impl Request {
             self.notice.kind.id(),
             &self.notice.runtime,
             &self.notice.tag,
+            self.notice
+                .plugin
+                .as_ref()
+                .map(|p| (&p.window_token, &p.lifecycle_key, &p.notify_id)),
         ))
         .expect("notification key")
     }
 }
 pub(super) enum Reply {
+    PluginClosed(PluginTarget),
     Availability(Availability),
     Delivered { id: u64, result: Result<(), String> },
     Activated(Activation),

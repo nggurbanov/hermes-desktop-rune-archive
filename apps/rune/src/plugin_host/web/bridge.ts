@@ -1,3 +1,4 @@
+import { clearPluginNotifyHandlers } from '@/store/native-notifications'
 import { createBrowserDesktopPluginsBridge } from '@/lib/browser-desktop-plugins'
 // The child never receives a gateway URL, token, cookie or native ticket.
 export const pending = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void }>()
@@ -84,7 +85,9 @@ Object.assign(window, {
     watchDirectory: (path: string) => watch(path, true),
     stopPreviewFileWatch: stopWatch,
     onPreviewFileChanged: (listener: (event: { id: string }) => void) => { changes.add(listener); return () => changes.delete(listener) },
-    nativeNotify: (input: unknown) => ask('notify', input),
+    claimAmbientCue: (key: string) => ask('claim-ambient-cue', { key }).then(value => value === true, () => false),
+    notify: nativeNotify,
+    nativeNotify,
   },
 })
 const storedKey = (key: string) => key.startsWith('hermes.plugin.') || ['hermes.desktop.pluginDecisions.v2', 'hermes.desktop.disabledPlugins.v1'].includes(key)
@@ -126,3 +129,11 @@ async function watch(path: string, directory: boolean) {
 }
 async function stopWatch(id: string) { const timer = watches.get(id); if (timer !== undefined) clearInterval(timer); watches.delete(id) }
 window.addEventListener('hermes-host-message', ((event: CustomEvent) => { if (event.detail.type === 'close') { for (const timer of watches.values()) clearInterval(timer); watches.clear(); changes.clear() } }) as EventListener)
+
+async function nativeNotify(input: any): Promise<boolean> {
+  try {
+    const accepted = await ask('native-notify', input)
+    if (accepted !== true && typeof input?.notifyId === 'string' && input.notifyId) clearPluginNotifyHandlers(input.notifyId)
+    return accepted === true
+  } catch (error) { if (typeof input?.notifyId === 'string' && input.notifyId) clearPluginNotifyHandlers(input.notifyId); throw error }
+}

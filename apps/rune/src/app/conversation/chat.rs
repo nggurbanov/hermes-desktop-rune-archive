@@ -344,6 +344,7 @@ impl Viewer {
             approval_changed: draft.approval_changed,
             ..Default::default()
         };
+        self.rewind_background(&owner);
         match self.conversation.send(connection, owner.clone(), input) {
             Ok(id) => {
                 if !restore_only {

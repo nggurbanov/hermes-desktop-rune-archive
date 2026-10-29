@@ -3,7 +3,7 @@ mod manager;
 mod native;
 mod sources;
 mod uploads;
-pub use manager::{HostAction, NavigationTarget, PluginHosts};
+pub use manager::{AmbientTarget, HostAction, NavigationTarget, PluginHosts};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -53,7 +53,9 @@ impl HostProcess {
         if !self.closed {
             if let Ok(Some(_)) = self.child.try_wait() {
                 self.closed = true;
-                events.push(Ok(json!({"type":"closed","reason":"host-exited"})));
+                events.push(Ok(host_frame(
+                    json!({"type":"closed","reason":"host-exited"}),
+                )));
             }
         }
         events
@@ -109,7 +111,7 @@ pub fn spawn_document(
         loop {
             match read_frame(&mut reader) {
                 Ok(Some(value)) => {
-                    if send.send(Ok(value)).is_err() {
+                    if send.send(Ok(host_frame(value))).is_err() {
                         break;
                     }
                 }
@@ -160,4 +162,31 @@ fn read_frame(reader: &mut impl BufRead) -> Result<Option<Value>, String> {
     serde_json::from_slice(&bytes)
         .map(Some)
         .map_err(|_| "The host IPC frame is invalid".into())
+}
+
+fn host_frame(mut value: Value) -> Value {
+    if value["type"] == "host-web-message" {
+        value = value["message"].take();
+        if let Some(object) = value.as_object_mut() {
+            object.insert("_native_host".into(), false.into());
+        }
+    } else if let Some(object) = value.as_object_mut() {
+        object.insert("_native_host".into(), true.into());
+    }
+    value
+}
+#[cfg(test)]
+mod origin_tests {
+    use super::*;
+    #[test]
+    fn renderer_cannot_forge_native_window_facts_or_lifecycle() {
+        let value = host_frame(
+            json!({"type":"host-web-message","message":{"type":"host-window-state","focused":false,"visible":false,"_native_host":true}}),
+        );
+        assert_eq!(value["_native_host"], false);
+        assert_eq!(
+            host_frame(json!({"type":"host-window-state","focused":true,"visible":true}))["_native_host"],
+            true
+        );
+    }
 }

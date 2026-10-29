@@ -124,7 +124,21 @@ pub(crate) fn rasterize_svg(bytes: &[u8], maximum: u32) -> Result<(u32, u32, Vec
             "The SVG exceeds the safe preview limit or uses unsupported compression".into(),
         );
     }
+    static FONTS: std::sync::OnceLock<std::sync::Arc<usvg::fontdb::Database>> =
+        std::sync::OnceLock::new();
+    let fonts = FONTS.get_or_init(|| {
+        let mut database = usvg::fontdb::Database::new();
+        for font in rune_theme_opencode::FONTS {
+            database.load_font_data(font.to_vec());
+        }
+        database.set_sans_serif_family("Inter");
+        database.set_serif_family("Inter");
+        database.set_monospace_family("IBM Plex Mono");
+        std::sync::Arc::new(database)
+    });
     let mut options = usvg::Options::default();
+    options.fontdb = fonts.clone();
+    options.font_family = "Inter".into();
     options.image_href_resolver.resolve_string = Box::new(|_, _| None);
     let embedded = usvg::ImageHrefResolver::default_data_resolver();
     // All resources retained in this document share one decoded budget. Per-image bounds alone

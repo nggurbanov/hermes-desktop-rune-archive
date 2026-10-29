@@ -58,7 +58,11 @@ pub struct Artifacts {
     seen: HashSet<String>,
     page_keys: HashSet<String>,
     cache: Option<ImageCache>,
+    safe_images: Option<crate::image_previews::SafeImages>,
+    image_jobs: HashMap<u64, (String, bool)>,
+    image_latest: HashMap<String, u64>,
     fixture_images: Vec<(String, Vec<u8>)>,
+    safe_fixture: Option<HashMap<String, String>>,
 }
 #[derive(Clone)]
 pub enum Action {
@@ -363,22 +367,33 @@ impl Artifacts {
             seen: HashSet::new(),
             page_keys: HashSet::new(),
             cache: None,
+            safe_images: None,
+            image_jobs: HashMap::new(),
+            image_latest: HashMap::new(),
             fixture_images: vec![],
+            safe_fixture: None,
         }
     }
     pub fn reset(&mut self) {
+        self.cancel_images();
+        let images = self.safe_images.take();
         let cache = self.cache.take();
         let writer = self.writer.take();
         let temp = std::mem::replace(&mut self.temp, crate::media::TempMedia::new());
         *self = Self::new();
         self.cache = cache;
+        self.safe_images = images;
         self.writer = writer;
         self.temp = temp;
     }
     pub fn init(&mut self, waker: Waker) {
+        self.safe_images = Some(crate::image_previews::SafeImages::new(waker.clone()));
         self.cache = Some(ImageCache::new(waker.clone()));
         self.writer = Some(crate::media::FileWriter::new(waker));
         self.load_fixture_images();
+        if self.safe_fixture.is_some() {
+            self.ensure_thumbnails();
+        }
     }
     pub fn visible(&self) -> Vec<usize> {
         let q = self.search.text.to_lowercase();
@@ -434,6 +449,46 @@ impl Artifacts {
         self.rows.retain(|a| seen.insert(a.key()));
         self.demo = true;
         self.load_fixture_images();
+    }
+    /// Production gallery acceptance: source-like paths with deferred synthetic transport replies.
+    /// Scene construction precedes init; no image decode runs while building the scene.
+    pub fn fixture_safe_images(&mut self) {
+        self.cancel_images();
+        self.rows.clear();
+        self.thumbnails.clear();
+        self.fixture_images.clear();
+        self.selected = None;
+        self.preview = None;
+        self.download = None;
+        self.demo = false;
+        self.loading = false;
+        self.notice = None;
+        let mut data = HashMap::new();
+        for i in 0..24 {
+            let artifact = Artifact {
+                kind: "image".into(),
+                value: format!("/fixtures/diagram-{:02}.svg", i + 1),
+                label: format!("Diagram {:02}.svg", i + 1),
+                session: "sample".into(),
+                profile: "default".into(),
+                title: "Image preview fixtures".into(),
+                timestamp: 1793278800000,
+            };
+            let svg = format!(
+                r##"<svg xmlns="http://www.w3.org/2000/svg" width="480" height="180"><rect width="480" height="180" fill="#d7eee8"/><rect x="16" y="16" width="120" height="148" rx="8" fill="#509985"/><rect x="152" y="20" width="310" height="62" rx="8" fill="#91baae"/><rect x="152" y="100" width="250" height="60" rx="8" fill="#bd9984"/><text x="168" y="59" font-family="Inter" font-size="24" fill="#223c34">Hermes diagram {:02}</text><text x="168" y="138" font-family="monospace" font-size="20" fill="#223c34">bot-{:02}: connected</text></svg>"##,
+                i + 1,
+                i + 1
+            );
+            data.insert(
+                artifact.key(),
+                format!(
+                    "data:image/png;base64,{}",
+                    base64::engine::general_purpose::STANDARD.encode(svg)
+                ),
+            );
+            self.rows.push(artifact);
+        }
+        self.safe_fixture = Some(data);
     }
     fn load_fixture_images(&mut self) {
         if let Some(cache) = &self.cache {

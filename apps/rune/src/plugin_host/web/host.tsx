@@ -1,6 +1,7 @@
 import './bridge'
 import './socket'
 import './actions'
+import { consumeActivationHash } from './notifications'
 import { emit, hydrateBridgeOwner } from './bridge'
 import { gateway, feedEvent, feedRequest, connectPrimary, updateGatewayOwner, closeGateways } from './gateway'
 import * as React from 'react'
@@ -25,6 +26,8 @@ import { $profiles, $activeGatewayProfile } from '@/store/profile'
 import { $gateway, setPrimaryGateway, setPrimaryGatewayConnectionId } from '@/store/gateway'
 import { $gatewayState, $connection, $currentCwd, $currentModel, $activeSessionId, $selectedStoredSessionId, $busy } from '@/store/session'
 import { emitGatewayEvent } from '@/contrib/events'
+import { $hapticsMuted } from '@/store/haptics'
+import { $completionSoundVariantId, resolveCompletionSoundVariantId } from '@/store/completion-sound'
 import '@/styles.css'
 
 const areas = new Set<string>()
@@ -40,6 +43,8 @@ function hydrate(snapshot: any) {
   if (!snapshot?.profile) throw new Error('The native owner profile is missing')
   boot = snapshot
   hydrateBridgeOwner(snapshot)
+  if (typeof snapshot.sound_muted === 'boolean') $hapticsMuted.set(snapshot.sound_muted)
+  if (typeof snapshot.sound_preset === 'number') $completionSoundVariantId.set(resolveCompletionSoundVariantId(snapshot.sound_preset))
   updateGatewayOwner(snapshot)
   setApiRequestProfile(snapshot.profile)
   setApiRequestConnection(snapshot.connection_id)
@@ -114,4 +119,4 @@ window.addEventListener('hermes-host-message', ((event: CustomEvent) => {
 }) as EventListener)
 emit({ type: 'plugin-bootstrap-ready' })
 
-window.addEventListener('hashchange', () => emit({ type: 'plugin-navigate', path: window.location.hash.replace(/^#/, '') }))
+window.addEventListener('hashchange', () => { const path=window.location.hash.replace(/^#/, ''); if (!consumeActivationHash(path)) emit({ type: 'plugin-navigate', path }) })

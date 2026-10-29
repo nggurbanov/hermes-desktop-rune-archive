@@ -92,7 +92,9 @@ impl Registry {
             return false;
         }
         if matches!(signal, Signal::Closed) {
-            self.live.remove(&key);
+            if let Some(live) = self.live.remove(&key) {
+                Self::closed(&live, clients);
+            }
             return false;
         }
         let Signal::Action(action) = signal else {
@@ -101,7 +103,31 @@ impl Registry {
         let Some(live) = self.live.get(&key) else {
             return false;
         };
-        let selected = if action == "default" {
+        let mut plugin_activation = None;
+        let selected = if let Some(target) = &live.request.notice.plugin {
+            let action_id = if action == "default" {
+                None
+            } else {
+                if !live.actions {
+                    return false;
+                }
+                let Ok(index) = action.parse::<usize>() else {
+                    return false;
+                };
+                if index.to_string() != action {
+                    return false;
+                }
+                let Some(button) = target.actions.get(index) else {
+                    return false;
+                };
+                Some(button.id.clone())
+            };
+            plugin_activation = Some(super::PluginActivation {
+                target: target.clone(),
+                action_id,
+            });
+            None
+        } else if action == "default" {
             None
         } else {
             if !live.actions {
@@ -120,6 +146,7 @@ impl Registry {
         };
         let live = self.live.remove(&key).unwrap();
         let mut activation = Activation {
+            plugin: plugin_activation,
             principal: live.request.principal,
             scope: live.request.notice.scope,
             runtime: live.request.notice.runtime,
@@ -132,13 +159,41 @@ impl Registry {
             }
         }
         // A missing source never lends its runtime action to a different window.
-        if activation.action.is_none() {
+        if activation.action.is_none()
+            && activation
+                .plugin
+                .as_ref()
+                .is_none_or(|p| p.action_id.is_none())
+        {
+            // A fallback receives only a safe body-focus hint; the origin token
+            // remains typed so a different plugin window can never run its JS.
             activation.action = None;
             if let Some((_, primary)) = clients.iter().find(|(_, client)| client.primary) {
                 primary.send(Reply::Activated(activation));
             }
         }
         true
+    }
+    fn closed(live: &Live, clients: &Clients) {
+        if let Some(plugin) = &live.request.notice.plugin {
+            if let Some(client) = clients.get(&live.request.client) {
+                client.send(Reply::PluginClosed(plugin.clone()));
+            }
+        }
+    }
+    pub fn retire_owner_notify(&mut self, owner: &str, clients: &Clients) {
+        for ((source, _), live) in &self.live {
+            if source == owner {
+                Self::closed(live, clients);
+            }
+        }
+        self.retire_owner(owner);
+    }
+    pub fn expired_notify(&mut self, now: Instant, clients: &Clients) -> Vec<(String, u32)> {
+        for live in self.live.values().filter(|live| now >= live.until) {
+            Self::closed(live, clients);
+        }
+        self.expired(now)
     }
     pub fn retire_owner(&mut self, owner: &str) {
         self.live.retain(|(sender, _), _| sender != owner);

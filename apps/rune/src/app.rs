@@ -44,6 +44,8 @@ struct BotOpen {
 
 pub struct Viewer {
     pub notifications: crate::notifications::Notifications,
+    pub sounds: crate::sounds::CompletionSounds,
+    pub background: crate::background::Background,
     pub(crate) native_window: Option<rune::AppHandle<Viewer>>,
     pub route: crate::pages::Route,
     pub conversation: crate::conversation::Conversation,
@@ -65,8 +67,6 @@ pub struct Viewer {
     review_completions: HashMap<DraftScope, u64>,
     tool_owner: Option<(DraftScope, Option<String>)>,
     workspace_cwds: HashMap<DraftScope, String>,
-    process_owner: Option<DraftScope>,
-    next_process: f64,
     pub operations: crate::operations::Operations,
     pub health_open: bool,
     pub chrome: crate::client_status::ClientStatus,
@@ -200,6 +200,8 @@ impl Viewer {
     fn empty() -> Self {
         Self {
             notifications: crate::notifications::Notifications::new(),
+            sounds: crate::sounds::CompletionSounds::new(),
+            background: crate::background::Background::new(),
             native_window: None,
             route: crate::pages::Route::Chat,
             conversation: crate::conversation::Conversation::new(),
@@ -217,8 +219,6 @@ impl Viewer {
             review_completions: HashMap::new(),
             tool_owner: None,
             workspace_cwds: HashMap::new(),
-            process_owner: None,
-            next_process: 0.0,
             operations: crate::operations::Operations::new(),
             health_open: false,
             chrome: Default::default(),
@@ -420,6 +420,7 @@ impl Viewer {
             return;
         };
         self.bind_notifications(&connection);
+        self.bind_sounds(&connection);
         self.endpoint_label = connection_label(&connection);
         self.loading = true;
         self.error = None;
@@ -1058,6 +1059,10 @@ impl Viewer {
 
 pub fn setup(s: &mut Viewer, waker: Waker) {
     if !s.fixture {
+        s.sounds.load();
+        s.sounds.init(waker.clone());
+        s.notifications.muted = s.sounds.muted();
+        s.background.init(waker.clone());
         s.notifications.start(waker.clone(), true);
     }
     s.composer.init_network(waker.clone());
@@ -1237,17 +1242,21 @@ pub fn poll(s: &mut Viewer, now: f64, tx: &mut Tx) -> bool {
     if let Some(delay) = s.subagents.wake_after() {
         tx.wake_after(delay);
     }
+    let sounds_changed = s.poll_sounds();
     let notification_changes = s.poll_notifications();
-    let pages_changed = notification_changes
+    let pages_changed = sounds_changed
+        | notification_changes
         | s.poll_preview()
         | subagents_changed
         | timer_changed
         | s.poll_chat(tx)
         | s.poll_pages(now)
         | s.poll_conversations()
+        | s.poll_background(now, tx)
         | s.poll_audio()
         | s.poll_plugin_hosts(tx)
         | s.poll_connections()
+        | s.files.poll_images()
         | s.poll_files(now)
         | s.poll_tools(now, tx);
     if s.pane_shown("files") || s.route == crate::pages::Route::FilePreview {
@@ -1714,4 +1723,18 @@ pub fn on_focus(s: &mut Viewer, focused: bool, tx: &mut Tx) {
         s.client_settings.capture = None;
     }
     tx.instant();
+}
+
+#[path = "app/background.rs"]
+mod background_actions;
+#[path = "app/sounds.rs"]
+mod sound_actions;
+pub fn safe_images_scene(s: &mut Viewer) {
+    artifacts_scene(s);
+    s.artifacts.fixture_safe_images();
+}
+
+pub fn background_scene(s: &mut Viewer) {
+    reader_scene(s);
+    s.background.fixture(s.composer_scope());
 }

@@ -16,6 +16,7 @@ if(process.platform==='linux'&&!process.env.DISPLAY)throw new Error('Run native 
 const home=fs.mkdtempSync(path.join(os.tmpdir(),'hermes-subagent-native-'))
 const out=path.resolve(option('--out')??home);fs.mkdirSync(out,{recursive:true})
 const rich=args.includes('--rich-media')
+const mislabeled=args.includes('--mislabeled-svg')
 const mediaRequests=[]
 const sourceSvg=`<svg xmlns="http://www.w3.org/2000/svg" width="480" height="180"><rect width="480" height="180" fill="#d7eee8"/><rect x="24" y="24" width="120" height="132" rx="8" fill="#509985"/><rect x="162" y="24" width="294" height="58" rx="8" fill="#91baae"/><rect x="162" y="100" width="180" height="56" rx="8" fill="#bd9984"/><text x="178" y="61" font-size="20" fill="#223c34">Synthetic source image</text></svg>`
 const httpServer=createServer((request,response)=>{
@@ -23,7 +24,7 @@ const httpServer=createServer((request,response)=>{
   const url=new URL(request.url,'http://127.0.0.1')
   assert.equal(request.method,'GET');assert.equal(url.pathname,'/api/fs/read-data-url');assert.equal(url.searchParams.get('profile'),'work');assert.equal(url.searchParams.get('session_id'),'child');assert.equal(url.searchParams.get('path'),'/agent/reference.svg')
   mediaRequests.push({path:url.pathname,profile:url.searchParams.get('profile'),session:url.searchParams.get('session_id')})
-  response.writeHead(200,{'Content-Type':'application/json'});response.end(JSON.stringify({data_url:'data:image/svg+xml;base64,'+Buffer.from(sourceSvg).toString('base64')}))
+  response.writeHead(200,{'Content-Type':'application/json'});response.end(JSON.stringify({data_url:`data:${mislabeled?'image/png':'image/svg+xml'};base64,`+Buffer.from(sourceSvg).toString('base64')}))
  }catch(error){failure=error;response.writeHead(400);response.end('{}')}
 })
 const server=new WebSocketServer({server:httpServer})
@@ -102,7 +103,7 @@ try{
  const closedDeadline=Date.now()+1000;while(closedSockets!==expectedSockets&&Date.now()<closedDeadline)await delay(10)
  assert.deepEqual(phases,['opened','reused','closed']);assert.equal(calls.length,1,'Focus/theme/reuse must keep the spectator attachment');assert.equal(closedSockets,expectedSockets,'Closing the window must detach its viewer sockets')
  if(rich){assert.equal(mediaRequests.length,1);assert.equal(mediaRequests[0].session,'child')}
- console.log(JSON.stringify({rich_media:rich,native_copy:rich,tool_output_disclosure:rich,scoped_image_reads:mediaRequests.length,native_rune:true,lazy_resume:true,read_only:true,window_reused:true,focus_receipt:true,theme_changed:true,detached:true,screenshots:out}))
+ console.log(JSON.stringify({mislabeled_svg:mislabeled,rich_media:rich,native_copy:rich,tool_output_disclosure:rich,scoped_image_reads:mediaRequests.length,native_rune:true,lazy_resume:true,read_only:true,window_reused:true,focus_receipt:true,theme_changed:true,detached:true,screenshots:out}))
 }finally{
  if(child.exitCode==null)child.kill('SIGKILL')
  for(const socket of sockets)socket.terminate()

@@ -1,56 +1,55 @@
 # Rune port slices
 
-The user approved a complete eventual native port, preserving placement,
-navigation and behavior while using the OpenCode Rune visual system. The first
-read-only increment is a starting slice, not a substitute for that migration.
+The approved target is full functional parity with the retained Hermes Desktop,
+using a standalone native Rune client and the OpenCode visual system. Preserve
+Hermes placement, navigation, identities and behavior. The updated 21:12 T3
+composer reference is the explicit layout exception. Full parity remains open;
+[functional-parity.md](functional-parity.md) records verified current evidence.
 
-1. **Native reader.** Real external gateway connection; profiles; recent visible
-   stored sessions; bounded Markdown history; search/reconnect; actual light/dark
-   OpenCode widgets. The first implementation was rejected as an OpenCode shell.
-   Its correction restores Hermes Sessions/Bots, navigation placement, bottom
-   profile scope and in-place versus explicit-tab opening; reads canonical Bot
-   Chat via fresh server registry lookups. Implemented subset on Linux, not full
-   shell parity; see shell-parity.md.
-2. **One complete conversation.** Draft/create with source gui, native tickets,
-   canonical attach and ownership, durable prepared input/admission receipts,
-   streaming/replay, stop generation, reconnect/history and approval/clarify.
-   Port the existing client behavior contracts; do not reuse OpenCode's fixture
-   send handler or silently lose explicit launch policy.
-   The user-selected T3 Code composer and model picker are now implemented as
-   local draft UI with a real scoped agent catalog, search/provider/favorite
-   filters, keyboard selection, capability-gated launch choices, native file
-   staging and the Hermes voice fan. Drafts/favorites are in memory; attachment
-   upload, settings application, send and audio execution remain pending.
-3. **Full Bot Mode and concurrent conversations.** Extend the read-only named
-   Bot Chat registry navigation with writes, custom identity assets, groups,
-   routines, connection/profile/session isolation, parallel live views, queue,
-   rewind, attachments and read markers. Never pin a stored ID or adopt recency.
-4. **The full pane tree.** All existing presets, nested groups/splits, tab stacks,
-   resize/drag/drop, persistence, focus routing, narrow windows and keep-alive.
-   Rune SplitView is a primitive, not the complete Hermes layout engine.
-5. **Working surfaces.** Real files/review/editors and a real PTY/VT terminal;
-   rich HTML/browser previews need an explicit embedded surface integration.
-   Static file trees or a painted terminal are not parity.
-6. **Remaining routes and platform capabilities.** Settings, skills, messaging,
-   artifacts, cron, plugins, secondary windows, voice, global shortcuts, native
-   dialogs and distribution. Preserve each feature's actual behavior contract.
+1. **Standalone reader and boundary.** Existing local, URL and SSH agents;
+   scoped profiles, canonical Bot Chat, recents, history and both appearances.
+   Implemented on Linux. The client contains no Python agent core and does not
+   start an agent as a side effect of connecting. OS distribution and additional
+   platform discovery still require acceptance.
+2. **Complete conversations.** Native prepared input, attachment upload,
+   canonical/legacy admissions, UUID receipts and unknown-outcome recovery,
+   streaming/replay/stop, queue/steer, approvals/clarification, workspace,
+   multimodal rewind/retry/restore and branch are implemented. Model, effort,
+   service tier, profile approval and independent session bypass follow actual
+   authority and retained user revisions. Provider-specific presentations and
+   remaining commands/interactions are tracked in native-chat-parity.md.
+3. **Bot Mode and concurrent conversations.** Profile/SOUL/model/assets,
+   archive/import/setup, canonical Bot Chat and bundled Bots SDK groups are
+   implemented. Complete fleet integration, simultaneous interactive tiles,
+   peer windows and multiple-window state reconciliation remain required.
+4. **Pane tree.** Original presets and named layouts, nested groups/splits,
+   native docking/tab stacks, divider resize, collapsed rails, visibility,
+   simple/advanced restoration and persistence are implemented. Dynamic
+   session/preview/route tiles, plugin geometry and their focus/ownership need
+   completion. A split primitive alone is insufficient.
+5. **Working surfaces.** Native Files/editing, Git Review and PTY/VT Terminal
+   controllers are implemented, with private repository/PTY contracts. Shared
+   image originals, fit/zoom/pan/save and authenticated streaming are present.
+   PDF, audio/video, interactive HTML, watcher behavior and remaining external
+   host/platform interactions still need implementation or acceptance.
+6. **Routes and platform capabilities.** Settings, Capabilities, Messaging,
+   Artifacts, Scheduled jobs, Command Center, rich child spectator windows,
+   voice, original React GUI SDK and client preferences have substantial native
+   implementations. The current increment finishes completion cues, background
+   process status and plugin notification callbacks. Remaining media, Cloud,
+   global shortcuts/HUD, haptics, OS accessibility and macOS/Windows packaging
+   stay on the complete parity checklist.
 
-The current adapter is Rust and read-only. The write slice must deliberately
-port canonical-protocol semantics from the retained TypeScript client; moving
-the widgets does not make those semantics automatic. Do not embed the old
-Electron renderer and call that a Rune port.
-
-## Explicit framework gaps
-
-The current Rune revision has no OS accessibility bridge, no terminal or browser
-host, no React GUI-plugin ABI, and platform-specific gaps in menus, recording and
-drag/drop. These require integrations or upstream work; do not silently remove
-the old feature or claim parity from a tree/screenshot. Native macOS and Windows
-acceptance remains separate from Linux headless tests.
+Native Rune owns the application shell. The separately owned WebView process
+hosts the original React GUI-plugin ABI; it does not turn the old Electron
+renderer into the main application. Rich browser/HTML surfaces need a distinct
+unprivileged lifecycle, not a raster substitute or the privileged plugin host.
 
 ## Proof per slice
 
-Use real production APIs against controlled fixtures, keep wire ownership and
-user intent, and inspect actual native renders. Real-agent smoke checks must not
-restart its canonical gateway or turn read-only testing into unsolicited prompts.
-Synthetic screenshots may be committed; private session contents must not be.
+Use production code against controlled peers, preserve exact wire ownership and
+user intent, and inspect actual native renders. Screenshots use synthetic data.
+Read-only checks against existing user agents never become unsolicited prompts,
+configuration changes, installations, restarts or microphone/provider calls.
+Linux tests do not establish macOS/Windows behavior. The functional ledger keeps
+these distinctions and the remaining framework/platform gaps explicit.

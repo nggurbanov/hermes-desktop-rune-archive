@@ -103,29 +103,16 @@ pub(super) fn request(chat: &mut Chat, connection: Connection, owner: DraftScope
 
 /// Raster previews have bounded decoded size; originals remain available for download.
 fn preview(mime: String, bytes: Vec<u8>) -> Result<(String, Vec<u8>), String> {
-    if mime.eq_ignore_ascii_case("image/svg+xml") {
-        return Ok((mime, bytes));
-    }
-    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
-        .with_guessed_format()
-        .map_err(|_| "This image format cannot be previewed")?;
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(8192);
-    limits.max_image_height = Some(8192);
-    limits.max_alloc = Some(64 * 1024 * 1024);
-    reader.limits(limits);
-    let image=reader.decode().map_err(|_|"Image could not be decoded within the safe preview limit; download the original instead")?;
-    let resized = if image.width() > 1000 || image.height() > 1000 {
-        image.resize(1000, 1000, image::imageops::FilterType::Triangle)
-    } else {
-        image
-    };
+    let prepared = crate::image_previews::prepare(&mime, &bytes, 1000)?;
+    let image = image::RgbaImage::from_raw(prepared.width, prepared.height, prepared.rgba)
+        .ok_or("The image preview could not be prepared")?;
     let mut output = std::io::Cursor::new(Vec::new());
-    resized
+    image::DynamicImage::ImageRgba8(image)
         .write_to(&mut output, image::ImageFormat::Png)
         .map_err(|_| "The image preview could not be prepared")?;
     Ok(("image/png".into(), output.into_inner()))
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -299,7 +286,20 @@ mod tests {
         };
         let mut chat = Chat::new();
         chat.init(Arc::new(|| {}));
-        let sources:Vec<_>=(0..100).map(|i|format!("data:image/svg+xml;base64,{}",base64::engine::general_purpose::STANDARD.encode(format!("<svg xmlns='http://www.w3.org/2000/svg' width='2' height='2'><rect width='2' height='2' fill='rgb({i},40,90)'/></svg>")))).collect();
+        let sources: Vec<_> = (0..100)
+            .map(|i| {
+                let pixels =
+                    image::RgbaImage::from_pixel(2, 2, image::Rgba([i as u8, 40, 90, 255]));
+                let mut bytes = std::io::Cursor::new(Vec::new());
+                image::DynamicImage::ImageRgba8(pixels)
+                    .write_to(&mut bytes, image::ImageFormat::Png)
+                    .unwrap();
+                format!(
+                    "data:image/png;base64,{}",
+                    base64::engine::general_purpose::STANDARD.encode(bytes.into_inner())
+                )
+            })
+            .collect();
         let deadline = Instant::now() + Duration::from_secs(3);
         while chat.media.len() < 24 && Instant::now() < deadline {
             chat.prepare_media(connection.clone(), owner.clone(), sources.clone());

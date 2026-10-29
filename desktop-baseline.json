@@ -57,9 +57,9 @@
     "opencodeReferenceRevision": "3f70cd6b675c89a8a7b64fc09b1bf2b455e0ad1a",
     "scope": "Standalone native Rune full functional transfer. Real scoped pages, conversations/admissions, native voice, original GUI SDK and saved connections implemented in development; complete acceptance still pending. No full-parity claim.",
     "verified": [
-      "Third frozen integration: 341 Rust tests passed; one optional private virtual-audio test ignored by default and passed separately in earlier isolated device acceptance",
+      "Fourth integration: 374 Rust tests passed; one private virtual-audio test ignored by default and passed explicitly with private Pulse/ALSA voice and actual completion actor playback",
       "Native Linux WebRTC peer loopback, Opus and WebRTC AEC3 synthetic double-talk checks",
-      "Immutable third binary: 10 shell, 19 updated T3 composer, 10 layouts, 15 client-settings, 13 rich-chat, 24 feature-pages and 5 notification-settings native checks (96 total)",
+      "Fourth pre-layout binary: 10 shell, 19 updated T3 composer, 13 rich-chat, 24 feature-pages and 5 notification-settings native checks (71 total); earlier third checkpoint also proves 10 layouts and 15 client-settings",
       "Actual separate native Rune rich subagent window: one lazy read-only attach, shared image/file/tool presentation, real clipboard copy, same PID/window reuse, focus/theme and viewer-only detach",
       "Canonical multimodal rewind contracts: immutable attachment freeze/upload before deletion, restore without prompt submission and lost-ACK UUID/payload/CAS retention; persisted replay drafts",
       "Native Files/Review/Terminal controllers; real isolated Git and PTY/remote replay contracts",
@@ -67,12 +67,17 @@
       "Existing Chikibryak read-only workspace reads; no production sends/config changes/install/restart",
       "Native image viewer: actual wheel/pinch/pan, both themes, original-byte save and scope retirement; authenticated ranged rawstream and bounded SVG decode contracts",
       "Authoritative per-field draft policy stamps, deferred journal receipts and separate profile approval/session bypass; exact canonical/legacy socket contracts",
-      "Linux notification broker: 10 contracts including 4 private D-Bus daemon integrations; origin/replay/quiet/delivery/action fences"
+      "Linux notification broker: 10 contracts including 4 private D-Bus daemon integrations; origin/replay/quiet/delivery/action fences",
+      "Original completion sound bank: all 14 original DSP presets plus None, device mute/preferences, bounded shared native/SDK ownership and actual private Rodio output",
+      "Event-driven scoped background process list/kill lifecycle: transition-only completions, output, linger, dismiss, rewind, runtime recovery and private WebSocket ownership/lost-ACK contracts",
+      "Actual original SDK native OS notification bridge: body/button/dismissal callbacks, focus, source/window/weak-lease fencing and exact handler retirement; 3 native Wry proof flows",
+      "Shared asynchronous safe image worker: Files, Artifacts and rich chat, SVG content sniffing/bundled fonts/no external resources, bounded admission/cancellation; actual 24-image and mislabeled-SVG acceptance",
+      "Post-layout binary: all 10 native feedback cases passed, including 1024x520 full composer dock/toolbar/scroll viewport and last background row with an 18-line draft; both themes and all sound settings"
     ],
     "pending": [
       "Remaining rich chat: complete slash directives, provider sidecars, reactions/search/minimap and media players; canonical snapshots cannot expose absent deferred slots after a fully settled restart",
       "Concurrent session/preview/route tiles, plugin pane geometry and full peer windows; original preset catalog and named saved layouts are now implemented",
-      "Remaining client skins/arbitrary fonts/global hotkeys, multiple-window state reconciliation, background/plugin notification producers, sounds/HUD and macOS/Windows notification adapters",
+      "Remaining client skins/arbitrary fonts/global hotkeys, multiple-window state reconciliation, native/SDK speech ownership, HUD/haptics and macOS/Windows notification adapters",
       "Remaining GUI SDK pane geometry/data engines/preview contributions and parent-window acceptance",
       "Complete Files/Artifacts media/PDF/HTML preview and OS watcher behavior",
       "Cloud/OAuth connection workflow and native macOS/Windows discovery/device/packaging acceptance"
@@ -99,6 +104,23 @@
       "Read-only Chikibryak voice status: chained selected and GPT-Live available; no microphone, call, transcription or configuration write",
       "Regression contract: synthetic scenes with a preconfigured live route cannot request voice/model reads"
     ],
-    "binarySha256": "1184780fb70e569a31d8bed1de4c69de31d03759fe99b81fac0caffeba0bc1f6"
+    "binarySha256": "056c315e07a355a98414199b844aca6567ba7ed2ff0c4cbc62662f213af68ff8",
+    "evidenceBinaries": [
+      {
+        "name": "third integration",
+        "sha256": "1184780fb70e569a31d8bed1de4c69de31d03759fe99b81fac0caffeba0bc1f6",
+        "evidence": "341 default Rust tests and 96 native scenarios; 104 published screenshots"
+      },
+      {
+        "name": "fourth pre-layout integration",
+        "sha256": "3c06534d7a645ee72f43e131d8a0c85de8eb149f77f42eccd82e36dd75056ed6",
+        "evidence": "374 default Rust tests, 71 native shell/composer/chat/pages/notification scenarios, shared-image/subagent and three original SDK proof flows; private audio passed separately"
+      },
+      {
+        "name": "fourth background minimum-height correction",
+        "sha256": "056c315e07a355a98414199b844aca6567ba7ed2ff0c4cbc62662f213af68ff8",
+        "evidence": "Sole production delta is shrinkable background stack; formatting/build, final 374 default Rust tests (one ignored) and all 10 native feedback cases pass, including complete composer dock in 1024x520; see native-background-processes-parity.md"
+      }
+    ]
   }
 }

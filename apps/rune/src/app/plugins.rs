@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 impl Viewer {
     fn plugin_snapshot(&self) -> Value {
         let view = self.conversation.view(&self.composer_scope());
-        json!({"profiles_loaded":!self.loading,"profile":self.profile,"profiles":self.profiles.iter().map(|p|json!({"name":p.name,"display_name":p.label,"description":p.description})).collect::<Vec<_>>(),"session":self.selected_session,"runtime_session":view.map(|v|v.runtime.clone()),"cwd":Value::Null,"model":self.composer.draft(&self.composer_scope()).and_then(|d|d.model.as_ref()).map(|m|m.id.clone()),"busy":self.chat_running()})
+        json!({"sound_muted":self.sounds.muted(),"sound_preset":self.sounds.prefs.preset,"profiles_loaded":!self.loading,"profile":self.profile,"profiles":self.profiles.iter().map(|p|json!({"name":p.name,"display_name":p.label,"description":p.description})).collect::<Vec<_>>(),"session":self.selected_session,"runtime_session":view.map(|v|v.runtime.clone()),"cwd":Value::Null,"model":self.composer.draft(&self.composer_scope()).and_then(|d|d.model.as_ref()).map(|m|m.id.clone()),"busy":self.chat_running()})
     }
     pub fn open_gui_plugin(&mut self, source: String, origin: String) {
         self.open_gui_plugin_for(None, source, origin);
@@ -48,6 +48,16 @@ impl Viewer {
             self.plugin_hosts
                 .reply_owned(&answer.token, &answer.id, answer.result);
         }
+        for (id, owned) in self.sounds.take_claims() {
+            self.plugin_hosts.ambient_reply(id, owned);
+        }
+        for delivery in self.notifications.take_plugin_deliveries() {
+            self.plugin_hosts
+                .reply_notification(&delivery.target, delivery.result);
+        }
+        for target in self.notifications.take_plugin_closed() {
+            self.plugin_hosts.clear_notification(&target);
+        }
         self.poll_plugin_navigation();
         self.plugin_hosts.sync(self.plugin_snapshot());
         let effects = self.plugin_hosts.poll(&self.composer_scope(), &connection);
@@ -73,6 +83,32 @@ impl Viewer {
                 "open-session" | "new-chat" | "ensure-agent"
             ) {
                 self.plugin_navigate(action);
+                continue;
+            }
+            if action.kind == "claim-ambient-cue" {
+                match self.plugin_hosts.ambient_target(&action) {
+                    Ok(target) => match self.sounds.claim_ambient(
+                        &target.principal,
+                        &target.profile,
+                        &target.key,
+                    ) {
+                        Ok(id) => self.plugin_hosts.queue_ambient(id, target),
+                        Err(_) => self.plugin_hosts.reply(&action.id, Ok(Value::Bool(false))),
+                    },
+                    Err(_) => self.plugin_hosts.reply(&action.id, Ok(Value::Bool(false))),
+                }
+                continue;
+            }
+            if action.kind == "native-notify" {
+                match self.plugin_hosts.prepare_native_notification(&action) {
+                    Ok(Some(notice)) => {
+                        if self.notifications.dispatch_plugin(notice).is_none() {
+                            self.plugin_hosts.reply(&action.id, Ok(Value::Bool(false)));
+                        }
+                    }
+                    Ok(None) => self.plugin_hosts.reply(&action.id, Ok(Value::Bool(false))),
+                    Err(error) => self.plugin_hosts.reply(&action.id, Err(error)),
+                }
                 continue;
             }
             let result = match action.kind.as_str() {
@@ -625,5 +661,15 @@ impl Viewer {
             }
         }
         self.plugin_navigation.extend(pending);
+    }
+}
+
+impl Viewer {
+    pub(super) fn activate_plugin_notification(
+        &mut self,
+        activation: &crate::notifications::PluginActivation,
+        token: Option<&str>,
+    ) -> bool {
+        self.plugin_hosts.activate_notification(activation, token)
     }
 }

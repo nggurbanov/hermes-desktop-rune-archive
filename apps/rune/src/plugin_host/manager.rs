@@ -1,10 +1,13 @@
 //! Every child request remains bound to the parent-selected gateway principal.
 use super::*;
+mod ambient;
+mod notifications;
 use crate::{
     composer::DraftScope,
     gateway::Connection,
     pages::{PageEffect, PageRequest},
 };
+pub use ambient::AmbientTarget;
 use std::collections::BTreeSet;
 #[derive(Clone)]
 pub struct HostAction {
@@ -20,6 +23,8 @@ pub struct NavigationTarget {
     pub lease: Option<crate::connections::Lease>,
 }
 struct Running {
+    window_facts: Option<(bool, bool)>,
+    opened_at: std::time::Instant,
     token: String,
     source_connection: Connection,
     request_source: String,
@@ -43,6 +48,7 @@ struct Running {
 }
 #[derive(Default)]
 pub struct PluginHosts {
+    ambient: BTreeMap<u64, AmbientTarget>,
     running: Option<Running>,
     resolver: Option<crate::connections::Resolver>,
     pending: BTreeMap<String, String>,
@@ -255,6 +261,8 @@ impl PluginHosts {
             source_id.clone(),
         );
         self.running = Some(Running {
+            window_facts: None,
+            opened_at: std::time::Instant::now(),
             token: uuid::Uuid::new_v4().to_string(),
             source_connection: connection.clone(),
             request_source: source_id,
@@ -294,6 +302,7 @@ impl PluginHosts {
         self.running = None;
         self.pending.clear();
         self.actions.clear();
+        self.ambient.clear();
     }
     pub fn sync(&mut self, mut snapshot: Value) {
         if let Some(running) = &mut self.running {
@@ -439,6 +448,13 @@ impl PluginHosts {
                 }
             };
             match value["type"].as_str().unwrap_or_default() {
+                "host-window-state" if value["_native_host"] == true => {
+                    if let (Some(focused), Some(visible)) =
+                        (value["focused"].as_bool(), value["visible"].as_bool())
+                    {
+                        self.running.as_mut().unwrap().window_facts = Some((focused, visible));
+                    }
+                }
                 "plugin-bootstrap-ready" => {
                     let running = self.running.as_mut().unwrap();
                     if !running.bootstrap_sent {
@@ -634,6 +650,8 @@ impl PluginHosts {
                             | "clipboard"
                             | "reveal-path"
                             | "notify"
+                            | "native-notify"
+                            | "claim-ambient-cue"
                             | "select-paths"
                             | "select-save-path"
                             | "open-session"
@@ -643,7 +661,7 @@ impl PluginHosts {
                         let running = self.running.as_ref().unwrap();
                         let mut payload = payload;
                         if let Some(object) = payload.as_object_mut() {
-                            object.insert("native_owner".into(),json!({"profile":running.request_profile,"connection_id":running.request_source,"lifecycle_key":running.key}));
+                            object.insert("native_owner".into(),json!({"profile":running.request_profile,"connection_id":running.request_source,"lifecycle_key":running.key,"window_token":running.token}));
                         }
                         self.actions.push(HostAction {
                             id,
@@ -670,6 +688,7 @@ impl PluginHosts {
                             .collect(),
                     )
                 }
+                "closed" if value["_native_host"] != true => {}
                 "plugin-loaded" => {
                     self.notice = Some(format!(
                         "Desktop plugin {} loaded",

@@ -353,3 +353,127 @@ async fn private_daemon_rejects_invalid_ids_and_shares_pending_failure() {
         "duplicates share failure rather than fabricated delivery success"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn private_plugin_delivery_waits_for_daemon_and_routes_typed_callback() {
+    let bus = Bus::new();
+    let (daemon, state) = server(&bus, true, 0).await;
+    let h = Harness::new(&bus).await;
+    let mut notifications = Notifications::new();
+    notifications.client = 37;
+    notifications.started = true;
+    notifications.test_service = Some(h.sender.clone());
+    notifications.bind_connection("private-fixture-principal".into());
+    h.sender
+        .send(Command::Register {
+            client: 37,
+            replies: notifications.sender.clone(),
+            waker: None,
+            primary: false,
+            alive: Arc::downgrade(&notifications.alive),
+        })
+        .await
+        .unwrap();
+    let mut notice = super::tests::request(37, Kind::Plugin, "ignored").notice;
+    notice.kind = Kind::Plugin;
+    notice.global = true;
+    notice.buttons.clear();
+    notice.plugin = Some(PluginTarget {
+        lease: None,
+        window_token: "window-one".into(),
+        lifecycle_key: "private-fixture-principal".into(),
+        source_id: "source".into(),
+        source_principal: "source-principal".into(),
+        profile: "default".into(),
+        request_id: "request-uuid".into(),
+        notify_id: Some("plugin:callback".into()),
+        tag: "plugin".into(),
+        activate: Some("/plugin/home".into()),
+        actions: vec![PluginButton {
+            id: "open".into(),
+            label: "Open item".into(),
+            activate: Some("/plugin/item/1".into()),
+        }],
+        icon: None,
+        background: true,
+    });
+    assert!(
+        notifications.focused,
+        "parent is focused; child background fact must still allow delivery"
+    );
+    assert!(notifications.dispatch_plugin(notice.clone()).is_some());
+    assert!(
+        notifications.take_plugin_deliveries().is_empty(),
+        "queued is not daemon accepted"
+    );
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let delivery = loop {
+        notifications.poll();
+        let deliveries = notifications.take_plugin_deliveries();
+        if let Some(delivery) = deliveries.into_iter().next() {
+            break delivery;
+        }
+        assert!(Instant::now() < deadline);
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    };
+    assert!(delivery.result.unwrap());
+    assert_eq!(delivery.request_id, "request-uuid");
+    assert_eq!(
+        state.seen.lock().unwrap()[0].actions,
+        ["default", "View", "0", "Open item"]
+    );
+    signal(&daemon, 1, "0").await;
+    let activation = loop {
+        let actions = notifications.poll();
+        if let Some(action) = actions.into_iter().next() {
+            break action;
+        }
+        assert!(Instant::now() < deadline);
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    };
+    assert!(activation.action.is_none());
+    let plugin = activation.plugin.unwrap();
+    assert_eq!(plugin.action_id.as_deref(), Some("open"));
+    assert_eq!(plugin.target.window_token, "window-one");
+    assert_eq!(plugin.target.notify_id.as_deref(), Some("plugin:callback"));
+    // The original SDK must receive false while a notice is suppressed, without retaining callbacks.
+    assert!(
+        notifications.dispatch_plugin(notice).is_none(),
+        "same child/plugin within1s is suppressed"
+    );
+    h.sender
+        .send(Command::Unregister { client: 37 })
+        .await
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn private_plugin_timeout_is_reported_as_failed_delivery() {
+    let bus = Bus::new();
+    let (_daemon, state) = server(&bus, true, 1).await;
+    let h = Harness::new(&bus).await;
+    let mut request = super::tests::request(2, Kind::Plugin, "plugin");
+    request.notice.buttons.clear();
+    request.notice.plugin = Some(PluginTarget {
+        lease: None,
+        window_token: "child".into(),
+        lifecycle_key: request.principal.clone(),
+        source_id: "source".into(),
+        source_principal: "route".into(),
+        profile: "default".into(),
+        request_id: "request".into(),
+        notify_id: Some("callbacks".into()),
+        tag: "plugin".into(),
+        activate: None,
+        actions: vec![],
+        icon: None,
+        background: true,
+    });
+    h.sender.send(Command::Show(request)).await.unwrap();
+    receive(&h.second, |reply| delivered(reply, 1, false)).await;
+    assert_eq!(
+        state.seen.lock().unwrap().len(),
+        1,
+        "no automatic native delivery retry"
+    );
+}

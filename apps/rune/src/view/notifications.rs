@@ -6,7 +6,7 @@ use crate::{
 use rune::{El, ScrollSpec, col, row, text};
 use rune_kit::{Button, ButtonVariant, Kit, Switch};
 
-pub fn page(s: &Viewer, k: &Kit) -> El {
+pub fn page(s: &Viewer, k: &Kit, layer: &mut Vec<El>) -> El {
     let state = &s.notifications;
     let mut body = col()
         .key("native-notifications-settings")
@@ -22,8 +22,7 @@ pub fn page(s: &Viewer, k: &Kit) -> El {
         .child(text(state.availability.label()).key("native-notifications-availability").font(k.ty.small).color(if matches!(state.availability, Availability::Unavailable(_)) { k.c.danger.fg } else { k.c.text_muted }).wrap())
         .child(Switch::new(state.prefs.enabled).label("Enable native notifications").on_toggle(|s: &mut Viewer| s.notification_action(Action::Enabled(!s.notifications.prefs.enabled))).build(k).key("native-notifications-enabled"));
     for kind in Kind::ALL {
-        let source_ready = !matches!(kind, Kind::BackgroundDone | Kind::Plugin);
-        let enabled = state.prefs.enabled && source_ready;
+        let enabled = state.prefs.enabled;
         body = body.child(
             col()
                 .w_full()
@@ -42,16 +41,10 @@ pub fn page(s: &Viewer, k: &Kit) -> El {
                         .key(format!("native-notifications-{}", kind.id())),
                 )
                 .child(
-                    text(if source_ready {
-                        kind.description()
-                    } else if kind == Kind::BackgroundDone {
-                        "Background-task alerts are unavailable in this build."
-                    } else {
-                        "Plugin alerts are unavailable in this build."
-                    })
-                    .font(k.ty.small)
-                    .color(k.c.text_muted)
-                    .wrap(),
+                    text(kind.description())
+                        .font(k.ty.small)
+                        .color(k.c.text_muted)
+                        .wrap(),
                 ),
         );
     }
@@ -102,5 +95,6 @@ pub fn page(s: &Viewer, k: &Kit) -> El {
                 .wrap(),
         );
     }
+    body = body.child(crate::view::sounds::rows(s, k, layer));
     body.child(text("Your desktop decides how banners appear, whether they make a sound, and whether notification buttons are available.").font(k.ty.small).color(k.c.text_faint).wrap())
 }

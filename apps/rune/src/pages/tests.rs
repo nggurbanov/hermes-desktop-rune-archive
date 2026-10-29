@@ -120,3 +120,20 @@ fn retired_reads_are_skipped_before_io_but_already_queued_writes_keep_their_owne
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "captured edit");
     std::fs::remove_dir_all(dir).unwrap();
 }
+#[test]
+fn background_process_snapshot_is_cancellable_but_stop_remains_a_mutation() {
+    assert!(
+        PageRequest::rpc(
+            "process.list",
+            serde_json::json!({"session_id":"runtime-fixture"})
+        )
+        .is_read_only()
+    );
+    assert!(
+        !PageRequest::rpc(
+            "process.kill",
+            serde_json::json!({"session_id":"runtime-fixture","process_id":"process-fixture"})
+        )
+        .is_read_only()
+    );
+}
