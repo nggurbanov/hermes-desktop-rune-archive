@@ -24,6 +24,8 @@ pub(crate) struct Input {
     pub display_text: Option<String>,
     #[serde(default)]
     pub rewind: Option<super::Rewrite>,
+    #[serde(default)]
+    pub replay: Option<super::ReplayBundle>,
     pub attachments: Vec<AttachmentInput>,
     pub model: Option<(String, String)>,
     pub reasoning: Option<String>,
@@ -56,6 +58,10 @@ pub(crate) struct Prepared {
     pub legacy_attempted: bool,
     #[serde(default)]
     pub attempted: bool,
+    #[serde(default)]
+    pub replay_attached: usize,
+    #[serde(default)]
+    pub replay_refs: Vec<String>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Mutation {
@@ -91,6 +97,7 @@ impl Prepared {
                 text: input.text,
                 display_text: input.display_text,
                 rewind: input.rewind,
+                replay: input.replay,
                 attachments: input.attachments,
                 model: input.model.map(|m| (m.provider, m.id)),
                 reasoning: input.reasoning,
@@ -113,6 +120,8 @@ impl Prepared {
             policy_done: false,
             legacy_attempted: false,
             attempted: false,
+            replay_attached: 0,
+            replay_refs: vec![],
         })
     }
     pub fn verify_owner(&self, connection: &Connection, scope: &DraftScope) -> Result<(), String> {

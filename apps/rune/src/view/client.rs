@@ -17,6 +17,7 @@ pub fn page(s: &Viewer, k: &Kit, layer: &mut Vec<El>) -> El {
         return crate::view::connections::panel(s, k, layer);
     }
     let mut body = col()
+        .key("client-preferences")
         .w_full()
         .h_full()
         .gap(20.0)
@@ -33,7 +34,7 @@ pub fn page(s: &Viewer, k: &Kit, layer: &mut Vec<El>) -> El {
                         .color(k.c.text_base),
                 )
                 .child(
-                    text("These preferences apply to this Hermes app on this device.")
+                    text("Appearance controls apply to this device. Font assignments below use the connected agent profile.")
                         .font(k.ty.ui)
                         .color(k.c.text_muted)
                         .wrap(),
@@ -81,42 +82,18 @@ pub fn page(s: &Viewer, k: &Kit, layer: &mut Vec<El>) -> El {
                 .child(
                     Switch::new(s.sidebar.is_open())
                         .label("Show sidebar")
-                        .on_toggle(|s: &mut Viewer| s.sidebar.toggle())
+                        .on_toggle(|s: &mut Viewer| s.toggle_sidebar())
                         .build(k),
                 )
                 .child(
                     Switch::new(s.inspector.is_open())
                         .label("Show tools panel")
-                        .on_toggle(|s: &mut Viewer| s.inspector.toggle())
+                        .on_toggle(|s: &mut Viewer| s.toggle_all_tools())
                         .build(k),
                 );
+            body = body.children(crate::view::client_settings::rows(s, k, layer));
         }
-        "shortcuts" => {
-            body = body.child(
-                text("Keyboard shortcuts")
-                    .font(k.ty.body_medium)
-                    .color(k.c.text_base),
-            );
-            for (command, keys) in [
-                ("New conversation", "⌘ / Ctrl + N"),
-                ("Settings", "⌘ / Ctrl + ,"),
-                ("Command Center", "⌘ / Ctrl + K"),
-                ("Toggle sidebar", "⌘ / Ctrl + B"),
-                ("Toggle tools panel", "⌘ / Ctrl + J"),
-                ("Send message", "Enter"),
-                ("New line", "Shift + Enter"),
-                ("Choose model", "⌘ / Ctrl + 1 … 9 while picker is open"),
-                ("Dismiss menu", "Escape"),
-            ] {
-                body = body.child(
-                    row()
-                        .w_full()
-                        .gap(20.0)
-                        .child(text(command).font(k.ty.ui).color(k.c.text_base).grow(1.0))
-                        .child(text(keys).font(k.ty.ui).color(k.c.text_muted)),
-                );
-            }
-        }
+        "shortcuts" => return crate::view::client_settings::shortcuts(s, k),
         _ => {
             body=body.child(text("Hermes").font(k.ty.body_medium).color(k.c.text_base))
     .child(text(format!("Standalone desktop · {}",env!("CARGO_PKG_VERSION"))).font(k.ty.ui).color(k.c.text_muted))

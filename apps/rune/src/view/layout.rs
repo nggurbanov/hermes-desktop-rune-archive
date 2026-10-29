@@ -7,12 +7,7 @@ use rune::{Cursor, Cx, Drag, El, Phase, Tx, col, el, row, text};
 use rune_kit::{Button, ButtonVariant, Kit};
 use std::collections::HashMap;
 fn visible(s: &Viewer, pane: &str) -> bool {
-    match pane {
-        "sessions" | "hermes-bots:pane" => s.sidebar.is_open(),
-        "review" | "files" | "terminal" => s.inspector.is_open(),
-        "workspace" => true,
-        _ => false,
-    }
+    s.pane_visible(pane)
 }
 fn title(pane: &str) -> &str {
     match pane {
@@ -133,6 +128,7 @@ fn node(
                                                 Position::Center
                                             };
                                             s.layout.move_pane(&drag_pane, target, position);
+                                            s.decks.active = "custom".into();
                                             tx.instant();
                                         }
                                     }
@@ -141,6 +137,20 @@ fn node(
                         );
                     }
                     header = header.child(tab.min_w(0.));
+                }
+                if s.arranging {
+                    let gid = id.clone();
+                    header = header.child(
+                        Button::new("Tabs")
+                            .variant(ButtonVariant::GhostMuted)
+                            .help("Cycle automatic, visible and hidden tab strips")
+                            .on_press(move |s: &mut Viewer| {
+                                s.layout.strip(&gid);
+                                s.decks.active = "custom".into();
+                            })
+                            .build(k)
+                            .key(format!("dock-strip-{id}")),
+                    );
                 }
                 let gid = id.clone();
                 header = header.child(el().grow(1.)).child(
@@ -322,52 +332,5 @@ fn node(
     }
 }
 pub fn controls(s: &Viewer, k: &Kit) -> El {
-    let mut panel = col()
-        .key("layout-controls")
-        .w_full()
-        .gap(6.)
-        .padding(12.)
-        .fill(k.c.layer_01);
-    panel = panel.child(
-        text("Arrange panes")
-            .font(k.ty.ui_medium)
-            .color(k.c.text_base),
-    );
-    panel=panel.child(text("Drag a pane tab to the center of a group to stack it, or to an edge to split. Drag dividers to resize.").font(k.ty.small).color(k.c.text_muted).wrap());
-    let mut buttons = row().w_full().gap(6.);
-    for pane in ["sessions", "workspace", "review", "files", "terminal"] {
-        let p = pane.to_owned();
-        buttons = buttons.child(
-            Button::new(format!("Show {}", title(pane)))
-                .variant(ButtonVariant::GhostMuted)
-                .disabled(s.layout.panes().iter().any(|v| v == pane))
-                .on_press(move |s: &mut Viewer| {
-                    s.layout.open(&p);
-                    if ["files", "review", "terminal"].contains(&p.as_str())
-                        && !s.inspector.is_open()
-                    {
-                        s.inspector.toggle();
-                    }
-                    if p == "sessions" && !s.sidebar.is_open() {
-                        s.sidebar.toggle();
-                    }
-                })
-                .build(k),
-        );
-    }
-    panel.child(buttons).child(
-        row()
-            .gap(8.)
-            .child(
-                Button::new("Reset layout")
-                    .variant(ButtonVariant::GhostMuted)
-                    .on_press(|s: &mut Viewer| s.layout = Node::default())
-                    .build(k),
-            )
-            .child(
-                Button::new("Done")
-                    .on_press(|s: &mut Viewer| s.arranging = false)
-                    .build(k),
-            ),
-    )
+    super::decks::controls(s, k)
 }

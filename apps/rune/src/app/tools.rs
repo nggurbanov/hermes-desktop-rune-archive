@@ -27,8 +27,7 @@ impl Viewer {
             .files
             .bind(owner, self.is_local_connection(), self.workspace_cwd());
         self.page_requests(effects);
-        self.inspector.set_open(true);
-        self.layout.open("files");
+        self.reveal_pane("files");
         self.files_action(crate::files::Action::Open(path));
     }
     pub fn reveal_chat_process(&mut self, owner: DraftScope, id: String) {
@@ -36,8 +35,7 @@ impl Viewer {
             self.client_error = Some("The process belongs to a different conversation".into());
             return;
         }
-        self.inspector.set_open(true);
-        self.layout.open("terminal");
+        self.reveal_pane("terminal");
         self.terminal.open_process(&owner, &id);
     }
     pub fn workspace_cwd(&self) -> Option<String> {
@@ -132,7 +130,7 @@ impl Viewer {
             changed |= !effects.is_empty();
             self.page_requests(effects);
         }
-        if self.inspector.is_open() && self.process_owner.is_none() && now >= self.next_process {
+        if self.pane_shown("terminal") && self.process_owner.is_none() && now >= self.next_process {
             let scope = self.composer_scope();
             if let Some(request) = self.conversation.process_request(&scope) {
                 self.process_owner = Some(scope);
@@ -179,8 +177,7 @@ impl Viewer {
                 if self.files.root != request.root {
                     self.files_action(crate::files::Action::Root(request.root.clone()));
                 }
-                self.inspector.set_open(true);
-                self.layout.open("files");
+                self.reveal_pane("files");
                 if request.in_tree {
                     let mut parents = vec![];
                     let mut dir = std::path::Path::new(&request.path).parent();

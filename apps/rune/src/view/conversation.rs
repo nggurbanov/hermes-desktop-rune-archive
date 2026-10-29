@@ -187,29 +187,6 @@ pub fn pending(s: &Viewer, k: &Kit) -> El {
         }
         box_ = box_.child(line);
     }
-    if !view.reasoning.is_empty() || !view.tools.is_empty() {
-        box_ = box_.child(button(
-            if s.show_reasoning {
-                "Hide activity"
-            } else {
-                "Show reasoning and tools"
-            },
-            |s| s.show_reasoning = !s.show_reasoning,
-            k,
-        ));
-        if s.show_reasoning {
-            box_ = box_.child(
-                text(&view.reasoning)
-                    .font(k.ty.small)
-                    .color(k.c.text_muted)
-                    .wrap()
-                    .selectable(true),
-            );
-            for tool in view.tools.iter().rev().take(5) {
-                box_ = box_.child(text(tool).font(k.ty.small).color(k.c.text_muted).wrap());
-            }
-        }
-    }
     if view.preparing {
         box_ = box_.child(
             text("Preparing durable input…")

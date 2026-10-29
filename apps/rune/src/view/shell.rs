@@ -107,7 +107,7 @@ pub fn layout(s: &Viewer, cx: &mut Cx<Viewer>, main: El, sidebar: El, k: &Kit) -
                         .variant(IconButtonVariant::GhostMuted)
                         .label("Toggle tool panes")
                         .help("Show or hide Review, Files and Terminal")
-                        .on_press(|s: &mut Viewer| s.inspector.toggle())
+                        .on_press(|s: &mut Viewer| s.toggle_right_side())
                         .build(k)
                         .key("tooling-toggle"),
                 ),
@@ -170,7 +170,7 @@ fn sidebar_toggle(k: &Kit) -> El {
         .variant(IconButtonVariant::GhostMuted)
         .label("Toggle sessions and bots")
         .help("Show or hide the left sidebar")
-        .on_press(|s: &mut Viewer| s.sidebar.toggle())
+        .on_press(|s: &mut Viewer| s.toggle_sidebar())
         .build(k)
         .key("sidebar-toggle")
 }

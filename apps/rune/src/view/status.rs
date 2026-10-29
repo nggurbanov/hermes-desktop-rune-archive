@@ -173,8 +173,7 @@ pub fn bar(s: &Viewer, k: &Kit) -> El {
         bar = bar.child(button(
             "Terminal",
             |s| {
-                s.layout.open("terminal");
-                s.inspector.set_open(true);
+                s.reveal_pane("terminal");
             },
             k,
         ));
@@ -271,8 +270,7 @@ pub fn overlays(s: &Viewer, k: &Kit, layer: &mut Vec<El>) {
             menu = menu.child(button(
                 "Reveal in Files",
                 move |s| {
-                    s.inspector.set_open(true);
-                    s.layout.open("files");
+                    s.reveal_pane("files");
                     s.files_action(crate::files::Action::Root(root.clone()));
                     s.workspace_menu = false;
                 },

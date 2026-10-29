@@ -81,6 +81,8 @@ node apps/rune/scripts/check-scenes.mjs
 node apps/rune/scripts/check-composer.mjs
 node apps/rune/scripts/check-pages.mjs
 node apps/rune/scripts/check-chat.mjs
+node apps/rune/scripts/check-decks.mjs
+node apps/rune/scripts/check-client-settings.mjs
 xvfb-run -a node apps/rune/scripts/check-subagent-windows.mjs
 xvfb-run -a node apps/rune/scripts/check-plugin-host.mjs --canonical
 xvfb-run -a node apps/rune/scripts/check-builtin-bots.mjs

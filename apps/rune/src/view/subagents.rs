@@ -1,7 +1,8 @@
 //! Subagent roster and native spectator content, using the same Rune theme.
+mod transcript;
 use crate::{app::Viewer, subagents::window::WindowState};
-use rune::{Cx, El, GrowthSpec, ScrollSpec, col, el, row, text};
-use rune_kit::{Button, ButtonVariant, Kit, Markdown};
+use rune::{Cx, El, ScrollSpec, col, el, row, text};
+use rune_kit::{Button, ButtonVariant, Kit};
 
 pub fn strip(state: &Viewer, kit: &Kit) -> El {
     let scope = state.composer_scope();
@@ -128,99 +129,7 @@ pub fn strip(state: &Viewer, kit: &Kit) -> El {
 
 pub fn window(state: &WindowState, cx: &mut Cx<WindowState>) -> El {
     let kit = rune_theme_opencode::kit(state.theme.unwrap_or(cx.system_dark()));
-    let mut stack = col()
-        .key("subagent-transcript-stack")
-        .w_full()
-        .gap(20.0)
-        .virtualize(80.0)
-        .growth(GrowthSpec::default())
-        .px(20.0)
-        .py(18.0);
-    for (index, message) in state.projection.messages.iter().enumerate() {
-        let mut body = col().w_full().gap(8.0);
-        if message.role == "user" {
-            body = body
-                .px(12.0)
-                .py(10.0)
-                .radius(8.0)
-                .fill(kit.c.layer_01)
-                .border(1.0, kit.c.border_muted)
-                .child(Markdown::new(&message.content).build(kit).selectable(true));
-        } else {
-            body = body
-                .child(
-                    text(if message.role == "assistant" {
-                        "Subagent"
-                    } else {
-                        &message.role
-                    })
-                    .font(kit.ty.small)
-                    .color(kit.c.text_muted),
-                )
-                .child(Markdown::new(&message.content).build(kit).selectable(true));
-        }
-        stack = stack.child(body.key(format!("subagent-message-{index}")));
-    }
-    if state.projection.messages.is_empty() {
-        stack = stack.child(
-            text(if state.projection.connected {
-                "No messages in this subagent session yet"
-            } else {
-                "Loading subagent history…"
-            })
-            .font(kit.ty.body)
-            .color(kit.c.text_muted)
-            .wrap(),
-        );
-    }
-    if !state.projection.reasoning.is_empty() {
-        stack = stack.child(
-            Button::new(if state.show_reasoning {
-                "⌄ Thought"
-            } else {
-                "› Thought"
-            })
-            .variant(ButtonVariant::GhostMuted)
-            .on_press(|s: &mut WindowState| s.show_reasoning = !s.show_reasoning)
-            .build(kit)
-            .key("subagent-reasoning-toggle")
-            .justify_start(),
-        );
-        if state.show_reasoning {
-            stack = stack.child(
-                Markdown::new(&state.projection.reasoning)
-                    .build(kit)
-                    .selectable(true)
-                    .key("subagent-reasoning"),
-            );
-        }
-    }
-    if !state.projection.tools.is_empty() {
-        stack = stack.child(
-            Button::new(format!(
-                "{} {} tool activities",
-                if state.show_tools { "⌄" } else { "›" },
-                state.projection.tools.len()
-            ))
-            .variant(ButtonVariant::GhostMuted)
-            .on_press(|s: &mut WindowState| s.show_tools = !s.show_tools)
-            .build(kit)
-            .key("subagent-tools-toggle")
-            .justify_start(),
-        );
-        if state.show_tools {
-            for (index, tool) in state.projection.tools.iter().enumerate() {
-                stack = stack.child(
-                    text(tool)
-                        .key(format!("subagent-tool-{index}"))
-                        .font(kit.ty.small)
-                        .color(kit.c.text_muted)
-                        .wrap()
-                        .selectable(true),
-                );
-            }
-        }
-    }
+    let stack = transcript::stack(state, kit);
     col()
         .key("subagent-window")
         .role("window")
@@ -270,6 +179,44 @@ pub fn window(state: &WindowState, cx: &mut Cx<WindowState>) -> El {
                         .key("subagent-retry"),
                 )
         }))
+        .children(state.files.error.as_ref().map(|error| {
+            row()
+                .key("subagent-media-error")
+                .w_full()
+                .px(18.0)
+                .py(8.0)
+                .gap(8.0)
+                .child(
+                    text(error)
+                        .role("alert")
+                        .font(kit.ty.small)
+                        .color(kit.c.danger.fg)
+                        .wrap()
+                        .grow(1.0),
+                )
+                .child(
+                    Button::new("Dismiss")
+                        .variant(ButtonVariant::GhostMuted)
+                        .on_press(|s: &mut WindowState| s.files.error = None)
+                        .build(kit),
+                )
+        }))
+        .children(state.files.notice.as_ref().map(|notice| {
+            text(notice)
+                .key("subagent-media-notice")
+                .font(kit.ty.small)
+                .color(kit.c.text_muted)
+                .px(18.0)
+                .py(8.0)
+        }))
+        .children(state.files.busy().then(|| {
+            text("Preparing file…")
+                .key("subagent-media-busy")
+                .font(kit.ty.small)
+                .color(kit.c.text_muted)
+                .px(18.0)
+                .py(8.0)
+        }))
         .child(
             col()
                 .key("subagent-history")
@@ -302,7 +249,7 @@ pub fn window(state: &WindowState, cx: &mut Cx<WindowState>) -> El {
                     text(if state.projection.running {
                         "Working"
                     } else if state.projection.connected {
-                        "Finished"
+                        "Connected"
                     } else {
                         "Disconnected"
                     })

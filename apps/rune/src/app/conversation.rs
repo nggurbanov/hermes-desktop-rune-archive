@@ -44,11 +44,30 @@ impl Viewer {
         let Some(draft) = self.composer.draft(&scope).cloned() else {
             return;
         };
-        if crate::chat::parse_slash(&draft.text.text).is_some() && draft.attachments.is_empty() {
+        if crate::chat::parse_slash(&draft.text.text).is_some()
+            && draft.attachments.is_empty()
+            && draft.replay.is_none()
+        {
             self.dispatch_chat_slash(scope, draft.text.text.clone());
             return;
         }
+        let replay = match draft
+            .replay
+            .as_ref()
+            .map(|r| {
+                r.verify(&connection, &scope)
+                    .and_then(|_| r.with_text(&draft.text.text))
+            })
+            .transpose()
+        {
+            Ok(r) => r,
+            Err(error) => {
+                self.compose_error = Some(error);
+                return;
+            }
+        };
         let input = SendInput {
+            replay,
             canonical_bot: self.bot_empty,
             mode: self.admission_mode,
             text: draft.text.text.clone(),
@@ -81,6 +100,7 @@ impl Viewer {
                 let draft = self.composer.draft_mut(scope);
                 draft.text.replace_text("");
                 draft.attachments.clear();
+                draft.replay = None;
             }
             Err(error) => self.compose_error = Some(error),
         }
@@ -237,8 +257,25 @@ impl Viewer {
                 Update::Admitted {
                     scope,
                     submission_id,
+                    restored_replay,
                     ..
                 } => {
+                    if let Some(replay) = restored_replay {
+                        let draft = self.composer.draft_mut(scope.clone());
+                        if draft.text.text.is_empty()
+                            && draft.attachments.is_empty()
+                            && draft.replay.is_none()
+                        {
+                            draft.text.replace_text(replay.visible.clone());
+                            draft.replay = Some(replay);
+                        } else {
+                            let view = self.chat.presentation(scope.clone());
+                            view.restored_candidate = Some(replay);
+                            view.notice = Some(
+                                "Restored input is saved. Your current draft was preserved.".into(),
+                            );
+                        }
+                    }
                     if let Some(sent) = self.policy_sends.remove(&submission_id) {
                         let draft = self.composer.draft_mut(scope.clone());
                         if draft.model == sent.model {
@@ -305,6 +342,11 @@ impl Viewer {
             && !self.fixture
             && !self.history_loading
             && self.read_only_reason().is_none()
+            && !self
+                .chat
+                .views
+                .get(&self.composer_scope())
+                .is_some_and(|v| v.slash_running || v.slash_intent.is_some())
             && !self
                 .conversation
                 .view(&self.composer_scope())

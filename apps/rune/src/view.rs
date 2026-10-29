@@ -4,9 +4,11 @@
 
 mod audio;
 pub(crate) mod client;
+pub(crate) mod client_settings;
 pub(crate) mod composer;
 pub(crate) mod connections;
 mod conversation;
+mod decks;
 mod directories;
 pub(crate) mod files;
 pub(crate) mod layout;
@@ -30,8 +32,10 @@ use palette::{Pal, pal};
 
 pub fn app(s: &Viewer, cx: &mut Cx<Viewer>) -> El {
     let system_dark = cx.system_dark();
+    s.client_settings.system_dark.set(system_dark);
     let dark = s.theme.unwrap_or(system_dark);
-    let k = rune_theme_opencode::kit(dark);
+    let local_kit = s.client_settings.theme_kit(rune_theme_opencode::kit(dark));
+    let k = &local_kit;
     let p = pal(dark);
     let mut layer = Vec::new();
     let main = if s.connection_form {

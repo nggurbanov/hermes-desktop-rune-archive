@@ -1,4 +1,6 @@
 //! Owner-scoped child rosters and separate native Rune spectator windows.
+mod mailbox;
+mod media;
 mod process;
 mod proof;
 #[cfg(test)]

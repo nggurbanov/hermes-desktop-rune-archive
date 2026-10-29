@@ -23,7 +23,7 @@ impl Viewer {
         self.page_requests(effects);
     }
     pub fn poll_files(&mut self, now: f64) -> bool {
-        if !(self.inspector.is_open() || self.route == Route::FilePreview) {
+        if !(self.pane_shown("files") || self.route == Route::FilePreview) {
             return false;
         }
         let scope = self.composer_scope();

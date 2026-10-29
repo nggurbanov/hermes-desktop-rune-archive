@@ -75,7 +75,11 @@ impl Viewer {
                 }
             }
         }
-        let effects = if operation.starts_with("chrome.") {
+        let successful = result.is_ok();
+        let effects = if operation.starts_with("client-display.") {
+            self.client_settings.apply(operation, result);
+            vec![]
+        } else if operation.starts_with("chrome.") {
             self.chrome.apply(operation, result)
         } else if operation == "terminal.processes" {
             if let Some(owner) = self.process_owner.take() {
@@ -116,6 +120,17 @@ impl Viewer {
         } else {
             vec![]
         };
+        if successful
+            && matches!(operation, "settings.config" | "settings.readback")
+            && self
+                .settings
+                .scope_profile
+                .as_ref()
+                .is_none_or(|p| p == &self.profile)
+        {
+            self.client_settings
+                .apply_config(self.settings.confirmed_config());
+        }
         self.settings_local_navigation();
         self.page_requests(effects);
         if self.messaging.take_reconnect_followthrough() {
@@ -197,6 +212,8 @@ impl Viewer {
             self.chrome.fixture();
             self.seed_sidebar_fixture();
         } else if self.connection.is_some() {
+            let effects = self.client_settings.bind(self.composer_scope());
+            self.page_requests(effects);
             let effects = self.identities.bind(self.composer_scope().connection);
             self.page_requests(effects);
             let effects = self.chrome.load();
@@ -224,6 +241,11 @@ impl Viewer {
             self.apply_page_result(&operation, reply.result);
         }
         if !self.fixture {
+            if self.connection.is_some() {
+                let effects = self.client_settings.poll(now);
+                changed |= !effects.is_empty();
+                self.page_requests(effects);
+            }
             if self.connection.is_some() && self.sidebar.is_open() {
                 let effects = self.sidebar_state.tick(now);
                 changed |= !effects.is_empty();

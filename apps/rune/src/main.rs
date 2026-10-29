@@ -2,10 +2,12 @@ mod app;
 mod audio;
 mod chat;
 mod client;
+mod client_settings;
 mod client_status;
 mod composer;
 mod connections;
 mod conversation;
+mod decks;
 mod directories;
 mod files;
 mod gateway;
@@ -67,6 +69,7 @@ fn main() {
             ("composer", app::composer_scene),
             ("subagents", app::subagents_scene),
             ("rich-chat", app::rich_chat_scene),
+            ("rich-replay", app::rich_replay_scene),
             ("models", app::models_scene),
             ("reasoning", app::reasoning_scene),
             ("permissions", app::permissions_scene),

@@ -50,12 +50,53 @@ This is a working migration increment; complete chat parity remains in progress.
 
 Isolated synthetic gateway socket contracts cover restore-only (no submit),
 unknown rewind ACK recovery with the same UUID and fences, and the existing
-conversation lifecycle suite. Four focused chat tests cover projection, opaque
-reasoning carriers, tools, catalog/extension discovery and owned branch recovery;
-two history tests cover moving-tail backfill and authoritative rewrites.
-`check-chat.mjs` exercises native rich rendering and history-action UI against
-an isolated fixture, without connecting to an agent. The `rich-chat` scene is
+conversation lifecycle suite. Focused chat tests cover projection, opaque reasoning carriers, tools,
+catalog/extension discovery, owned branch recovery, alias cycles, completion
+races and mismatched model-confirmation owners. History tests cover moving-tail
+backfill and authoritative rewrites. Real socket tests additionally exercise
+multimodal staging before rewind, invalid bytes, frozen restore-only input and
+lost canonical policy ACK recovery. `check-chat.mjs` passed 13 native checks of
+rich rendering, history-action UI, command keyboard/modifier behavior and
+restored image/file chips against isolated fixtures, without an agent. The `rich-chat` scene is
 synthetic; its example output is not a report from a live execution.
+
+
+## Multimodal and slash increment
+
+Stored user turns capture their exact original text, image/file sources and
+public display text under the original connection/profile/stored-session owner.
+Edit replaces only an unambiguous public text region; hidden attached context
+remains intact. Every attachment is fetched and frozen into the private journal
+before rewind. Send stages acknowledged image uploads/file references first,
+then rewinds and submits one retained user input with separate canonical
+`text`/`api_text` when its public and model-facing text differ. Invalid bytes,
+unsupported parts and gateway limits fail before history changes. Replay is
+bounded to 16 attachments, 5 MiB per attachment, 64 MiB frozen data and 2 MiB transport
+text. Immutable Arc buffers avoid copying media on every native render.
+
+Restore-only returns the complete frozen bundle after the rewind ACK and emits
+no prompt/upload. An empty composer adopts it; a newer draft remains untouched
+and the user can explicitly append the saved input. Draft persistence includes
+this bundle and uses a version that older clients refuse without dropping it.
+The confirmation captures revision/generation/authority when displayed, so a
+new turn arriving during confirmation requires the user to review it again.
+
+Canonical slash mutations persist their UUID, owner, policy/cwd and exact CAS
+fences before I/O. Unknown receipts retry that same operation; expensive-model
+confirmation gets a new request UUID on the same saved action. Generic legacy
+commands cannot be replayed idempotently, so an unknown outcome requires explicit
+acknowledgement after reviewing its effects. Startup recovery never runs a
+command. Alias chains preserve multiline arguments and reject cycles/depth
+exhaustion. A delayed skill expansion uses the originally captured policy;
+a delayed prefill never overwrites newly typed text.
+
+`complete.slash` supplies live argument candidates and replacement offsets.
+Queries debounce 120 ms with at most 2 in flight, use strict owner/query fences and
+UTF-16 boundaries, and reset on workspace changes. Up/Down selects a candidate,
+Tab/Enter inserts it, and Escape preserves text while dismissing the menu.
+The native transcript also consumes confirmed font/scale, bubble transparency,
+timestamps and reasoning/tool disclosure preferences. Explicit manual closes
+remain distinguishable from default-open preferences.
 
 ## Remaining parity work
 
@@ -63,17 +104,21 @@ synthetic; its example output is not a report from a live execution.
   image analysis summaries, citation navigation and all tool-specific rich
   presentations need their original contracts and acceptance cases.
 - Reactions, transcript minimap/search/navigation, full selection/quote modes,
-  timestamps/display preferences and export are not fully ported.
+  specialized display preferences and export are not fully ported.
 - Rich image/video/audio/PDF/document players, precise zoom/pan, image saving,
   generated-media galleries and media retry/eviction policies remain incomplete.
 - Destructive message actions currently require the canonical revision-fenced
   gateway. Legacy mutating history paths need equivalent safe acceptance.
-  Structured attachments cannot yet be replayed through edit/retry/restore;
-  such actions are refused before changing history, preserving the original.
-- Slash local actions and all canonical policy/alias directives are not fully
-  migrated. The curated fallback registry and comprehensive keyboard completion
-  behavior still need parity. Errors preserve the typed command rather than
-  silently dropping it. Commands with ambiguous outcomes are not auto-retried.
+  Supported image/file turns replay from frozen originals; unsupported opaque
+  provider content is refused before changing history.
+- Session model/provider picker labels still need complete synchronization from
+  authoritative session metadata after external policy edits. Confirmed slash
+  mutations reconnect their session, while draft choices retain their own scope.
+- The full slash local-action set, specialized session/theme inline pickers,
+  fuzzy skill ranking and group presentation still need parity. Canonical
+  model/reasoning/compress/branch/title directives, live aliases, shared fallback
+  visibility gates and keyboard/argument completion are implemented. Commands
+  with ambiguous outcomes are never auto-retried.
 - Concurrent tiles, multiple independent draft windows and complete native
   subagent rich-media renderer sharing remain separate migration work.
 

@@ -12,6 +12,7 @@ use std::sync::{
 pub(crate) struct Projection {
     pub messages: Vec<HistoryMessage>,
     pub tools: Vec<String>,
+    pub activities: Vec<Value>,
     pub reasoning: String,
     pub running: bool,
     pub error: Option<String>,
@@ -22,6 +23,7 @@ impl Projection {
         Self {
             messages: view.messages.clone(),
             tools: view.tools.clone(),
+            activities: view.activities.clone(),
             reasoning: view.reasoning.clone(),
             running: view.running,
             error: view.error.clone(),
@@ -30,7 +32,7 @@ impl Projection {
     }
 }
 pub(super) struct Watch {
-    pub receive: Receiver<Projection>,
+    pub receive: super::mailbox::Receiver,
     stop: Arc<AtomicBool>,
 }
 impl Drop for Watch {
@@ -39,19 +41,19 @@ impl Drop for Watch {
     }
 }
 pub(super) fn start(connection: Connection, profile: String, child: String, waker: Waker) -> Watch {
-    let (send, receive) = mpsc::channel();
+    let (send, receive) = super::mailbox::channel();
     let stop = Arc::new(AtomicBool::new(false));
     let stopped = stop.clone();
     std::thread::spawn(move || run(connection, profile, child, send, waker, stopped));
     Watch { receive, stop }
 }
 fn publish(
-    send: &Sender<Projection>,
+    send: &super::mailbox::Sender,
     waker: &Waker,
     view: &ConversationView,
     connected: bool,
 ) -> bool {
-    if send.send(Projection::from_view(view, connected)).is_err() {
+    if !send.send(Projection::from_view(view, connected)) {
         return false;
     }
     waker();
@@ -129,7 +131,7 @@ fn run(
     connection: Connection,
     profile: String,
     child: String,
-    send: Sender<Projection>,
+    send: super::mailbox::Sender,
     waker: Waker,
     stop: Arc<AtomicBool>,
 ) {

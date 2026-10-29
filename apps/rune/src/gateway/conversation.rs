@@ -190,15 +190,24 @@ impl SessionTransport {
             snapshot: None,
         })
     }
-    pub fn call(&mut self, method: &str, mut params: Value) -> Result<Value, CallError> {
+    pub fn call(&mut self, method: &str, params: Value) -> Result<Value, CallError> {
+        self.call_with_timeout(method, params, TIMEOUT)
+    }
+    pub fn call_with_timeout(
+        &mut self,
+        method: &str,
+        mut params: Value,
+        timeout: Duration,
+    ) -> Result<Value, CallError> {
         params
             .as_object_mut()
             .ok_or("Invalid conversation request")?
             .insert("profile".into(), json!(self.profile));
         self.gateway.sequence += 1;
         let id = self.gateway.sequence;
-        let deadline = Instant::now() + TIMEOUT;
-        socket_timeout(self.gateway.socket.get_mut(), TIMEOUT)?;
+        let timeout = timeout.min(Duration::from_secs(660));
+        let deadline = Instant::now() + timeout;
+        socket_timeout(self.gateway.socket.get_mut(), timeout)?;
         self.gateway
             .socket
             .send(Message::Text(
@@ -466,6 +475,29 @@ impl SessionTransport {
                 .filter(|e| e.session == runtime)
                 .collect(),
         ))
+    }
+    pub fn replay_media(&mut self, source: &str, stored: &str) -> Result<Value, CallError> {
+        self.ensure_profiles()?;
+        let source = if source.starts_with("file:") {
+            url::Url::parse(source)
+                .ok()
+                .and_then(|u| u.to_file_path().ok())
+                .ok_or("The stored file URL is invalid")?
+                .to_string_lossy()
+                .into_owned()
+        } else {
+            source.into()
+        };
+        let request = if source.starts_with("http://") || source.starts_with("https://") {
+            crate::pages::PageRequest::get("/api/media/proxy").query("url", source)
+        } else {
+            crate::pages::PageRequest::get("/api/fs/read-data-url")
+                .query("path", source)
+                .query("session_id", stored)
+        };
+        self.gateway
+            .page_request(&self.profile, &request)
+            .map_err(CallError::from)
     }
     pub fn upload_image(&mut self, data_url: String, name: &str) -> Result<Value, CallError> {
         self.ensure_profiles()?;

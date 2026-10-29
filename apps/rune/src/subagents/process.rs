@@ -90,6 +90,7 @@ pub(super) struct NativeWindow {
     replies: Receiver<Value>,
     pub focus_receipts: u64,
     pub theme_receipt: Option<Value>,
+    pub inspection: Option<Value>,
 }
 impl NativeWindow {
     pub fn spawn(launch: Launch) -> Result<Self, String> {
@@ -133,7 +134,11 @@ impl NativeWindow {
             replies,
             focus_receipts: 0,
             theme_receipt: None,
+            inspection: None,
         })
+    }
+    pub fn inspect(&mut self) -> Result<(), String> {
+        send(&mut self.input, &json!({"type":"inspect"}))
     }
     pub fn focus(&mut self) -> Result<(), String> {
         send(&mut self.input, &json!({"type":"focus"}))
@@ -146,6 +151,9 @@ impl NativeWindow {
     }
     pub fn exited(&mut self) -> bool {
         for value in self.replies.try_iter() {
+            if value["type"] == "inspection" {
+                self.inspection = Some(value.clone());
+            }
             if value["type"] == "ready" {
                 self.ready = true;
             }
@@ -217,4 +225,8 @@ pub(super) fn receipt(kind: &str, dark: Option<bool>) {
         &mut std::io::stdout().lock(),
         &json!({"type":kind,"dark":dark}),
     );
+}
+
+pub(super) fn report(value: Value) {
+    let _ = send(&mut std::io::stdout().lock(), &value);
 }

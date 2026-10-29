@@ -109,7 +109,7 @@ pub fn timeline(s: &Viewer, p: &Pal) -> El {
             .filter(|(row, _)| Some(*row) == message.row);
         if let Some((_, edit)) = edit {
             let scope = owner.clone();
-            let editor = text_input(edit, BUBBLE)
+            let editor = text_input(edit, s.client_settings.prose(BUBBLE))
                 .key("chat-edit-input")
                 .w_full()
                 .color(p.text)
@@ -140,7 +140,8 @@ pub fn timeline(s: &Viewer, p: &Pal) -> El {
                     .px(14.)
                     .py(10.)
                     .radius(10.)
-                    .fill(p.layer2),
+                    .fill(s.client_settings.bubble_fill(p.layer2))
+                    .border(1., p.border_muted),
             );
         }
         stack = stack.child(col().key(key).w_full().max_w(CONTENT_W).pb(20.).child(body));
@@ -154,11 +155,29 @@ pub fn timeline(s: &Viewer, p: &Pal) -> El {
                     &owner,
                     "live-reasoning",
                     "Thought",
-                    markdown_view(p, &view.reasoning),
+                    markdown_view(s, p, &view.reasoning),
                 )
                 .max_w(CONTENT_W)
                 .w_full()
                 .pb(10.),
+            );
+        }
+        if view.activities.is_empty() && !view.tools.is_empty() {
+            let mut details = col().w_full().gap(6.);
+            for tool in &view.tools {
+                details = details.child(
+                    text(tool)
+                        .font(s.client_settings.prose(UI))
+                        .color(p.muted)
+                        .wrap()
+                        .selectable(true),
+                );
+            }
+            stack = stack.child(
+                disclosure(s, k, &owner, "legacy-tools", "Agent activity", details)
+                    .max_w(CONTENT_W)
+                    .w_full()
+                    .pb(8.),
             );
         }
         for (index, tool) in view.activities.iter().enumerate() {
@@ -192,6 +211,7 @@ pub fn timeline(s: &Viewer, p: &Pal) -> El {
                     .selectable(true),
                 )
                 .child(markdown_view(
+                    s,
                     p,
                     tool["result"]
                         .as_str()
@@ -233,17 +253,31 @@ fn action(label: &str, owner: DraftScope, value: Action, k: &Kit) -> El {
         .build(k)
 }
 fn disclosure(s: &Viewer, k: &Kit, owner: &DraftScope, key: &str, title: &str, content: El) -> El {
+    let reasoning = title == "Thought";
+    if reasoning && !s.client_settings.show_reasoning() {
+        return el().h(0.);
+    }
     let open = s
         .chat
         .views
         .get(owner)
-        .is_some_and(|v| v.expanded.contains(key));
+        .map(|v| {
+            if v.collapsed.contains(key) {
+                Some(false)
+            } else if v.expanded.contains(key) {
+                Some(true)
+            } else {
+                None
+            }
+        })
+        .flatten()
+        .unwrap_or_else(|| s.client_settings.default_open(reasoning, s.simple_mode));
     let mut view = col().key(format!("detail-{key}")).w_full().gap(8.);
     view = view.child(
         action(
             &format!("{} {title}", if open { "⌄" } else { "›" }),
             owner.clone(),
-            Action::Expand(key.into()),
+            Action::SetDisclosure(key.into(), !open),
             k,
         )
         .key(format!("toggle-{key}"))
@@ -267,8 +301,10 @@ fn render_part(
 ) -> El {
     let key = format!("{}-part-{index}", message.key);
     match part {
-        Part::Text(body) => markdown_view(p, body).key(key),
-        Part::Reasoning(body) => disclosure(s, k, owner, &key, "Thought", markdown_view(p, body)),
+        Part::Text(body) => markdown_view(s, p, body).key(key),
+        Part::Reasoning(body) => {
+            disclosure(s, k, owner, &key, "Thought", markdown_view(s, p, body))
+        }
         Part::Tool {
             name,
             args,
@@ -281,7 +317,7 @@ fn render_part(
                 .gap(8.)
                 .child(text(args).font(CODE).color(p.muted).wrap().selectable(true));
             if let Some(output) = output {
-                details = details.child(markdown_view(p, output));
+                details = details.child(markdown_view(s, p, output));
             }
             if let Some(process) = process {
                 details = details.child(action(
@@ -346,8 +382,22 @@ fn render_part(
                     .wrap(),
                 );
             }
+            if media.is_some_and(|m| {
+                m.error.is_some() || m.image.as_ref().is_some_and(|i| i.error().is_some())
+            }) {
+                image = image.child(action(
+                    "Retry image",
+                    owner.clone(),
+                    Action::RetryMedia(source.clone()),
+                    k,
+                ));
+            }
             image.child(action(
-                label,
+                &if media.is_none() {
+                    format!("Load {label}")
+                } else {
+                    label.clone()
+                },
                 owner.clone(),
                 Action::Image(source.clone()),
                 k,
@@ -425,6 +475,25 @@ fn message_actions(s: &Viewer, k: &Kit, owner: &DraftScope, message: &Message) -
             }
         }
     }
+    if s.client_settings.timestamps() {
+        if let Some(timestamp) = message.timestamp.and_then(|value| {
+            chrono::DateTime::from_timestamp(
+                value.floor() as i64,
+                ((value - value.floor()) * 1_000_000_000.) as u32,
+            )
+        }) {
+            controls = controls.child(el().grow(1.)).child(
+                text(
+                    timestamp
+                        .with_timezone(&chrono::Local)
+                        .format("%H:%M")
+                        .to_string(),
+                )
+                .font(k.ty.text_xsmall)
+                .color(k.c.text_faint),
+            );
+        }
+    }
     controls
 }
 fn chat_status(s: &Viewer, k: &Kit, owner: &DraftScope) -> El {
@@ -458,6 +527,70 @@ fn chat_status(s: &Viewer, k: &Kit, owner: &DraftScope) -> El {
                 .color(k.c.text_muted)
                 .wrap()
                 .selectable(true),
+        );
+    }
+    if let Some((_, message)) = &state.slash_confirmation {
+        view = view
+            .child(text(message).font(k.ty.small).color(k.c.text_base).wrap())
+            .child(
+                action(
+                    "Confirm model change",
+                    owner.clone(),
+                    Action::ConfirmSlash,
+                    k,
+                )
+                .key("confirm-slash-model"),
+            );
+    } else if let Some(intent) = &state.slash_intent {
+        if !state.slash_running {
+            if intent.retryable() || !intent.attempted {
+                view = view.child(
+                    action(
+                        "Retry retained command",
+                        owner.clone(),
+                        Action::RetrySlash,
+                        k,
+                    )
+                    .key("retry-slash-command"),
+                );
+            }
+            view = view.child(
+                action(
+                    "I reviewed the command’s outcome",
+                    owner.clone(),
+                    Action::ResolveSlashUnknown,
+                    k,
+                )
+                .key("acknowledge-slash-command"),
+            );
+        }
+    }
+    if let Some(command) = &state.failed_command {
+        let copy = command.clone();
+        view = view.child(
+            Button::new("Copy failed command")
+                .variant(ButtonVariant::GhostMuted)
+                .on_press_tx(move |_: &mut Viewer, tx| tx.copy(copy.clone()))
+                .build(k),
+        );
+    }
+    if state.prefill_candidate.is_some() {
+        view = view.child(action(
+            "Append command result to draft",
+            owner.clone(),
+            Action::AppendPrefill,
+            k,
+        ));
+    }
+    if state.restored_candidate.is_some() {
+        view = view.child(
+            action(
+                "Append restored input to draft",
+                owner.clone(),
+                Action::UseRestored,
+                k,
+            )
+            .key("append-restored-input"),
         );
     }
     if state.branch_busy {
@@ -494,16 +627,7 @@ pub fn slash_panel(s: &Viewer, k: &Kit) -> El {
         })
         .px(20.)
         .gap(2.);
-    let Some((name, arg)) = s
-        .composer
-        .draft(&owner)
-        .and_then(|d| crate::chat::parse_slash(&d.text.text))
-    else {
-        return el().h(0.);
-    };
-    if !arg.is_empty() {
-        return el().h(0.);
-    }
+    let candidates = s.chat_completion_candidates(&owner);
     let Some(state) = s.chat.views.get(&owner) else {
         return el().h(0.);
     };
@@ -514,12 +638,7 @@ pub fn slash_panel(s: &Viewer, k: &Kit) -> El {
                 .color(k.c.text_muted),
         );
     }
-    for command in state
-        .slash
-        .iter()
-        .filter(|r| r.name.starts_with(&name))
-        .take(30)
-    {
+    for (index, command) in candidates.iter().enumerate() {
         panel = panel.child(
             action(
                 &format!(
@@ -533,13 +652,24 @@ pub fn slash_panel(s: &Viewer, k: &Kit) -> El {
                 k,
             )
             .justify_start()
-            .key(format!("slash-{}", command.name)),
+            .key(format!("slash-{}", command.name))
+            .fill(
+                if index
+                    == state
+                        .slash_highlight
+                        .min(candidates.len().saturating_sub(1))
+                {
+                    k.c.layer_02
+                } else {
+                    rune::Color::TRANSPARENT
+                },
+            ),
         );
     }
     panel
 }
 
-fn markdown_view(p: &Pal, src: &str) -> El {
+fn markdown_view(s: &Viewer, p: &Pal, src: &str) -> El {
     let kit = Kit::neutral(p.dark);
     let style = MarkdownStyle::from_kit(&kit)
         .text(p.text)
@@ -549,10 +679,51 @@ fn markdown_view(p: &Pal, src: &str) -> El {
         .code_block(p.layer1, p.border_muted)
         .quote_rule(p.layer3)
         .rule(p.border)
-        .body_font(MD)
-        .heading_font(1, H1)
-        .heading_font(2, H2)
-        .heading_font(3, H3)
-        .code_block_font(CODE);
-    Markdown::new(src).style(style).build(&kit).selectable(true)
+        .body_font(s.client_settings.prose(MD))
+        .heading_font(1, s.client_settings.prose(H1))
+        .heading_font(2, s.client_settings.prose(H2))
+        .heading_font(3, s.client_settings.prose(H3))
+        .code_block_font(s.client_settings.prose(CODE));
+    let owner = s.composer_scope();
+    Markdown::new(src)
+        .style(style)
+        .on_link_tx(move |s: &mut Viewer, target, tx| {
+            if s.composer_scope() != owner {
+                return;
+            }
+            match url::Url::parse(target) {
+                Ok(url)
+                    if matches!(url.scheme(), "http" | "https")
+                        && url.username().is_empty()
+                        && url.password().is_none() =>
+                {
+                    if tx.open_url(url.as_str()).is_err() {
+                        s.compose_error = Some("The link could not be opened".into());
+                    }
+                }
+                Ok(url) if url.scheme() == "file" => {
+                    if let Ok(path) = url.to_file_path() {
+                        s.open_chat_file(owner.clone(), path.to_string_lossy().into_owned());
+                    }
+                }
+                Err(url::ParseError::RelativeUrlWithoutBase) if !target.starts_with('#') => {
+                    let path = if std::path::Path::new(target).is_absolute() {
+                        Some(target.to_owned())
+                    } else {
+                        s.workspace_cwd().map(|cwd| {
+                            std::path::Path::new(&cwd)
+                                .join(target)
+                                .to_string_lossy()
+                                .into_owned()
+                        })
+                    };
+                    if let Some(path) = path {
+                        s.open_chat_file(owner.clone(), path);
+                    }
+                }
+                _ => {}
+            }
+        })
+        .build(&kit)
+        .selectable(true)
 }

@@ -654,6 +654,13 @@ fn confirmed_restore_uses_durable_rewind_and_never_submits_a_new_user_prompt() {
         &scope,
         SendInput {
             text: "old question".into(),
+            model: Some(ModelKey {
+                provider: "fixture".into(),
+                id: "pending-choice".into(),
+            }),
+            model_changed: true,
+            reasoning: Some("high".into()),
+            reasoning_changed: true,
             rewind: Some(Rewrite {
                 target: 91,
                 revision: 2,
@@ -758,6 +765,277 @@ fn lost_rewind_receipt_retries_exact_identity_and_fences_even_after_revision_adv
     let snap = retry.transport().unwrap().resume("stored").unwrap();
     retry.prepare_rewind(&mut saved, &journal, snap).unwrap();
     assert!(journal.load(&id).unwrap().mutations[0].complete);
+    server.join().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn multimodal_edit_stages_exact_files_and_images_before_rewind_then_admits_one_owned_turn() {
+    let root = std::env::temp_dir().join(format!("hermes-multimodal-{}", uuid::Uuid::new_v4()));
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let connection = Connection::Url {
+        endpoint: format!("http://{}", listener.local_addr().unwrap()),
+        token: Some("synthetic-token".into()),
+    };
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(4)))
+            .unwrap();
+        let mut ws = tungstenite::accept(stream).unwrap();
+        let resume = request(&mut ws, "session.resume");
+        answer(&mut ws, &resume, snapshot(false, 0));
+        history(&listener, json!([]));
+        let (mut http, _) = listener.accept().unwrap();
+        http.set_read_timeout(Some(Duration::from_secs(4))).unwrap();
+        let mut reader = BufReader::new(&mut http);
+        let mut headers = String::new();
+        let mut length = 0;
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            if line == "\r\n" {
+                break;
+            }
+            if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                length = value.trim().parse::<usize>().unwrap();
+            }
+            headers.push_str(&line);
+        }
+        assert!(headers.starts_with("POST /api/chat/image-upload?"));
+        assert!(headers.contains("profile=work"));
+        let mut body = vec![0; length];
+        std::io::Read::read_exact(&mut reader, &mut body).unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["data_url"], "data:image/png;base64,aW1hZ2U=");
+        let response = json!({"path":"/staged/image.png","mime_type":"image/png"}).to_string();
+        write!(http,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",response.len()).unwrap();
+        drop(http);
+        let file = request(&mut ws, "file.attach");
+        assert_eq!(
+            file["params"]["data_url"],
+            "data:text/plain;base64,bm90ZXM="
+        );
+        answer(
+            &mut ws,
+            &file,
+            json!({"attached":true,"ref_text":"@file:staged-notes.txt"}),
+        );
+        let rewind = request(&mut ws, "session.mutate");
+        assert_eq!(rewind["params"]["operation"], "rewind");
+        assert_eq!(rewind["params"]["payload"]["target_message_id"], 91);
+        answer(
+            &mut ws,
+            &rewind,
+            json!({"session_id":"live","operation":"rewind","revision":3}),
+        );
+        let readback = request(&mut ws, "session.resume");
+        let mut current = snapshot(false, 0);
+        current["revision"] = json!(3);
+        answer(&mut ws, &readback, current);
+        history(&listener, json!([]));
+        let submit = request(&mut ws, "prompt.submit");
+        assert_eq!(
+            submit["params"]["text"],
+            "@file:staged-notes.txt\n\nEdited public request"
+        );
+        assert_eq!(
+            submit["params"]["api_text"],
+            "@file:staged-notes.txt\n\nprivate-prefix\nEdited public request\nprivate-suffix"
+        );
+        assert_eq!(
+            submit["params"]["attachments"],
+            json!([{"path":"/staged/image.png","mime":"image/png"}])
+        );
+        answer(
+            &mut ws,
+            &submit,
+            json!({"ref":{"session_id":"live"},"admission_id":"admitted","status":"queued","execution_generation":0}),
+        );
+    });
+    let scope = DraftScope {
+        connection: 1,
+        profile: "work".into(),
+        session: Some("stored".into()),
+    };
+    let row = HistoryMessage::from_row(
+        &json!({"role":"user","row_id":91,"text":"Public request","content":[{"type":"text","text":"private-prefix\nPublic request\nprivate-suffix"},{"type":"image_url","image_url":{"url":"data:image/png;base64,aW1hZ2U="}},{"type":"file","path":"data:text/plain;base64,bm90ZXM=","name":"Notes"}]}),
+    );
+    let replay = ReplayBundle::capture(&connection, &scope, &row)
+        .unwrap()
+        .with_text("Edited public request")
+        .unwrap();
+    let prepared = Prepared::new(
+        &connection,
+        &scope,
+        SendInput {
+            text: "Edited public request".into(),
+            replay: Some(replay),
+            rewind: Some(Rewrite {
+                target: 91,
+                revision: 2,
+                generation: 0,
+                restore_only: false,
+            }),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let journal = Journal::new(root.clone()).unwrap();
+    journal.save(&prepared).unwrap();
+    let (mut worker, _) = worker(connection, scope);
+    worker.submit(prepared, &journal).unwrap();
+    server.join().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn invalid_multimodal_bytes_fail_before_any_rewind_or_admission() {
+    let root = std::env::temp_dir().join(format!(
+        "hermes-multimodal-refused-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let connection = Connection::Url {
+        endpoint: format!("http://{}", listener.local_addr().unwrap()),
+        token: Some("synthetic-token".into()),
+    };
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut ws = tungstenite::accept(stream).unwrap();
+        let resume = request(&mut ws, "session.resume");
+        answer(&mut ws, &resume, snapshot(false, 0));
+        history(&listener, json!([]));
+        ws.get_mut()
+            .set_read_timeout(Some(Duration::from_millis(250)))
+            .unwrap();
+        assert!(
+            ws.read().is_err(),
+            "Unrecoverable media cannot be followed by a history mutation or admission"
+        );
+    });
+    let scope = DraftScope {
+        connection: 1,
+        profile: "work".into(),
+        session: Some("stored".into()),
+    };
+    let row = HistoryMessage::from_row(
+        &json!({"role":"user","row_id":91,"content":[{"type":"text","text":"Keep me"},{"type":"image_url","image_url":"data:image/png;base64,%%%"}]}),
+    );
+    let replay = ReplayBundle::capture(&connection, &scope, &row).unwrap();
+    let prepared = Prepared::new(
+        &connection,
+        &scope,
+        SendInput {
+            text: "Keep me".into(),
+            replay: Some(replay),
+            rewind: Some(Rewrite {
+                target: 91,
+                revision: 2,
+                generation: 0,
+                restore_only: false,
+            }),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let id = prepared.submission_id.clone();
+    let journal = Journal::new(root.clone()).unwrap();
+    journal.save(&prepared).unwrap();
+    let (mut worker, _) = worker(connection, scope);
+    assert!(worker.submit(prepared, &journal).is_err());
+    assert!(journal.load(&id).unwrap().mutations.is_empty());
+    server.join().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn multimodal_restore_returns_frozen_original_input_without_upload_or_prompt() {
+    let root = std::env::temp_dir().join(format!("hermes-restore-media-{}", uuid::Uuid::new_v4()));
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let connection = Connection::Url {
+        endpoint: format!("http://{}", listener.local_addr().unwrap()),
+        token: Some("synthetic-token".into()),
+    };
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut ws = tungstenite::accept(stream).unwrap();
+        let resume = request(&mut ws, "session.resume");
+        answer(&mut ws, &resume, snapshot(false, 0));
+        history(&listener, json!([]));
+        let rewind = request(&mut ws, "session.mutate");
+        assert_eq!(rewind["params"]["payload"]["target_message_id"], 91);
+        answer(
+            &mut ws,
+            &rewind,
+            json!({"session_id":"live","operation":"rewind","revision":3}),
+        );
+        let read = request(&mut ws, "session.resume");
+        let mut current = snapshot(false, 0);
+        current["revision"] = json!(3);
+        answer(&mut ws, &read, current);
+        history(&listener, json!([]));
+        ws.get_mut()
+            .set_read_timeout(Some(Duration::from_millis(200)))
+            .unwrap();
+        assert!(ws.read().is_err());
+    });
+    let scope = DraftScope {
+        connection: 1,
+        profile: "work".into(),
+        session: Some("stored".into()),
+    };
+    let row = HistoryMessage::from_row(
+        &json!({"role":"user","row_id":91,"content":[{"type":"text","text":"Original"},{"type":"image_url","image_url":"data:image/png;base64,aW1hZ2U="},{"type":"file","path":"data:text/plain;base64,bm90ZXM=","name":"Notes"}]}),
+    );
+    let replay = ReplayBundle::capture(&connection, &scope, &row).unwrap();
+    let entry = Prepared::new(
+        &connection,
+        &scope,
+        SendInput {
+            text: "Original".into(),
+            replay: Some(replay),
+            rewind: Some(Rewrite {
+                target: 91,
+                revision: 2,
+                generation: 0,
+                restore_only: true,
+            }),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let journal = Journal::new(root.clone()).unwrap();
+    journal.save(&entry).unwrap();
+    let (mut worker, replies) = worker(connection, scope);
+    worker.submit(entry, &journal).unwrap();
+    let bundle = replies
+        .try_iter()
+        .find_map(|reply| {
+            if let Reply::Admitted {
+                restored_replay, ..
+            } = reply
+            {
+                restored_replay
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    assert_eq!(bundle.attachments.len(), 2);
+    assert!(
+        bundle
+            .attachments
+            .iter()
+            .all(|a| a.frozen.as_deref() == Some(a.source.as_ref()))
+    );
+    assert_eq!(bundle.visible, "Original");
     server.join().unwrap();
     std::fs::remove_dir_all(root).unwrap();
 }

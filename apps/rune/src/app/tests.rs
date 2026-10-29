@@ -304,3 +304,22 @@ fn synthetic_scenes_never_read_live_voice_or_models_from_preconfigured_routes() 
         "fixture models must not attempt a worker request"
     );
 }
+
+#[test]
+fn reverting_device_preferences_disarms_a_failed_write_retry_without_erasing_other_errors() {
+    let mut s = Viewer::empty();
+    s.fixture = false;
+    s.preferences = s.client_preferences_snapshot();
+    s.preferences_retry_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(1));
+    s.preferences_error = Some("Previous write failed".into());
+    s.client_error = Some("Keep this independent connection error".into());
+    assert!(s.save_client_preferences().is_ok());
+    assert!(s.preferences_retry_at.is_none());
+    assert!(s.preferences_error.is_none());
+    assert_eq!(
+        s.client_error.as_deref(),
+        Some("Keep this independent connection error")
+    );
+    s.preferences_writable = false;
+    assert!(s.save_client_preferences().is_err());
+}

@@ -81,53 +81,6 @@ impl Chat {
             }
         });
     }
-    pub fn dispatch(
-        &mut self,
-        connection: Connection,
-        owner: DraftScope,
-        input: String,
-        runtime: Option<String>,
-    ) -> Result<(), String> {
-        let view = self.views.entry(owner.clone()).or_default();
-        if view.slash_running {
-            return Err("Wait for this slash command to finish".into());
-        }
-        let waker = self
-            .waker
-            .clone()
-            .ok_or("The command worker is not initialized")?;
-        view.slash_running = true;
-        let send = self.send.clone();
-        std::thread::spawn(move || {
-            let result = (|| {
-                let mut transport = SessionTransport::connect(&connection, &owner.profile)?;
-                let (name, arg) = parse_slash(&input).ok_or("Invalid slash command")?;
-                let target = runtime.or(owner.session.clone());
-                let params = json!({"session_id":target,"command":input});
-                match transport.call("slash.exec", params) {
-                    Ok(v) => Ok(v),
-                    Err(e) if e.code == Some(-32601) => transport
-                        .call(
-                            "command.dispatch",
-                            json!({"name":name,"arg":arg,"session_id":target}),
-                        )
-                        .map_err(|e| e.message),
-                    Err(e) => Err(e.message),
-                }
-            })();
-            if send
-                .send(Reply::Slash {
-                    owner,
-                    input,
-                    result,
-                })
-                .is_ok()
-            {
-                waker();
-            }
-        });
-        Ok(())
-    }
     pub fn branch(
         &mut self,
         connection: Connection,

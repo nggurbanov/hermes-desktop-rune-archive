@@ -1,4 +1,5 @@
 use super::journal::Mutation;
+mod replay;
 mod rewrite;
 use super::*;
 use crate::gateway::{
@@ -75,6 +76,7 @@ pub(crate) enum Reply {
         admission: Option<String>,
         replayed: bool,
         user_row: Option<u64>,
+        restored_replay: Option<ReplayBundle>,
     },
     Event {
         origin: DraftScope,
@@ -297,6 +299,7 @@ impl Worker {
         } else {
             self.attached(snapshot.clone())?;
         }
+        self.prepare_replay(&mut entry, journal, &snapshot)?;
         let snapshot = self.prepare_rewind(&mut entry, journal, snapshot)?;
         if entry.input.rewind.as_ref().is_some_and(|r| r.restore_only) {
             journal.retire(&entry.submission_id)?;
@@ -309,6 +312,7 @@ impl Worker {
                 admission: None,
                 replayed: false,
                 user_row: None,
+                restored_replay: entry.input.replay.clone(),
             });
             return Ok(());
         }
@@ -325,6 +329,17 @@ impl Worker {
             .unwrap_or(&entry.input.text)
             .to_owned();
         let mut params = json!({"session_id":runtime,"text":text,"submission_id":entry.submission_id,"queued":true,"surface":entry.input.surface.as_deref().unwrap_or("desktop")});
+        if let Some(replay) = &entry.input.replay {
+            let visible = [entry.replay_refs.join("\n"), replay.visible.clone()]
+                .into_iter()
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            params["text"] = json!(visible);
+            if visible != text {
+                params["api_text"] = json!(text);
+            }
+        }
         if entry.input.voice_turn {
             params["voice_turn"] = json!(true);
         }
@@ -369,6 +384,7 @@ impl Worker {
             status: status.clone(),
             replayed,
             user_row: receipt.get("user_row_id").and_then(Value::as_u64),
+            restored_replay: None,
             generation: receipt.get("execution_generation").and_then(Value::as_u64),
             admission: receipt
                 .get("admission_id")
@@ -569,6 +585,18 @@ impl Worker {
                 self.transport()?.call("config.set",json!({"session_id":snapshot.runtime,"key":"reasoning","value":payload.get("effort").filter(|v|!v.is_null()).cloned().unwrap_or_else(||json!("reset"))}))?
             }
         };
+        if snapshot.canonical
+            && value.get("session_id").and_then(Value::as_str) != Some(snapshot.runtime.as_str())
+        {
+            return Err(CallError {
+                message: "Session mutation acknowledgement owner mismatch; the outcome is unknown"
+                    .into(),
+                code: None,
+                data: None,
+                uncertain: true,
+            });
+        }
+
         if value.get("status").and_then(Value::as_str) == Some("confirmation_required")
             || value.get("confirm_required") == Some(&Value::Bool(true))
         {
@@ -595,16 +623,6 @@ impl Worker {
             return Err(format!("{message}. Confirm the model selection before sending").into());
         }
         if snapshot.canonical {
-            if value.get("session_id").and_then(Value::as_str) != Some(snapshot.runtime.as_str()) {
-                return Err(CallError {
-                    message:
-                        "Session mutation acknowledgement owner mismatch; the outcome is unknown"
-                            .into(),
-                    code: None,
-                    data: None,
-                    uncertain: true,
-                });
-            }
             snapshot.revision = value
                 .get("revision")
                 .and_then(Value::as_u64)

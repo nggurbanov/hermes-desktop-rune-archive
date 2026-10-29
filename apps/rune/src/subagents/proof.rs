@@ -22,6 +22,33 @@ fn wait(
     }
     Err("The native spectator acknowledgement timed out".into())
 }
+fn wait_inspection(
+    manager: &mut Subagents,
+    condition: impl Fn(&Value) -> bool,
+) -> Result<(), String> {
+    let deadline = Instant::now() + Duration::from_secs(12);
+    loop {
+        manager.poll(Some(false));
+        let window = manager
+            .windows
+            .values_mut()
+            .next()
+            .ok_or("The rich spectator closed")?;
+        if let Some(info) = &window.inspection {
+            if info["media_error"] == true {
+                return Err("The rich spectator could not load its scoped image".into());
+            }
+            if condition(info) {
+                return Ok(());
+            }
+        }
+        if Instant::now() > deadline {
+            return Err("The rich spectator UI did not acknowledge the expected state".into());
+        }
+        window.inspect()?;
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
 fn next(input: &mut impl std::io::BufRead) -> Result<(), String> {
     let value = process::frame(input)?.ok_or("The acceptance controller closed")?;
     if value["type"] != "next" {
@@ -58,6 +85,14 @@ pub(super) fn run(args: &[String]) -> Result<(), String> {
     manager.event(&scope,"subagent.start",&json!({"subagent_id":"proof-child","child_session_id":"child","goal":"Compare all 80 source images and summarize the differences","task_index":0}));
     manager.open(&connection, &scope, "proof-child", Some(false))?;
     wait(&mut manager, Some(false), |window| window.ready())?;
+    let rich = args.iter().any(|arg| arg == "--rich-media");
+    if rich {
+        wait_inspection(&mut manager, |info| {
+            info["images_ready"].as_u64().unwrap_or(0) > 0
+                && info["file_parts"].as_u64().unwrap_or(0) > 0
+                && info["tool_parts"].as_u64().unwrap_or(0) > 0
+        })?;
+    }
     let pid = manager
         .windows
         .values()
@@ -73,6 +108,11 @@ pub(super) fn run(args: &[String]) -> Result<(), String> {
     })?;
     if manager.windows.len() != 1 || manager.windows.values().next().map(|w| w.id()) != Some(pid) {
         return Err("Reopening duplicated the native subagent window".into());
+    }
+    if rich {
+        wait_inspection(&mut manager, |info| {
+            info["expanded_tools"].as_u64().unwrap_or(0) > 0
+        })?;
     }
     wait(&mut manager, Some(true), |window| {
         window.theme_receipt == Some(json!(true))

@@ -48,8 +48,11 @@ pub fn dock(s: &Viewer, p: &Pal, k: &Kit, layer: &mut Vec<El>) -> El {
             let scope = s.composer_scope();
             &mut s.composer.draft_mut(scope).text
         })
+        .on_input_key(|s: &mut Viewer, event, tx| s.chat_completion_key(event, tx))
         .on_submit(|s: &mut Viewer, tx| {
-            s.send_draft();
+            if !s.chat_complete_submit() {
+                s.send_draft();
+            }
             tx.instant();
         });
     let mut content = col()
@@ -118,6 +121,27 @@ pub fn dock(s: &Viewer, p: &Pal, k: &Kit, layer: &mut Vec<El>) -> El {
         }
         content = content.child(attachments);
     }
+    if let Some(replay) = &draft.replay {
+        let mut files = row().key("replay-attachments").w_full().gap(6.0).scroll_x();
+        for (index, attachment) in replay.attachments.iter().enumerate() {
+            let owner = scope.clone();
+            files = files.child(
+                Button::new(format!("{}  ×", attachment.name))
+                    .variant(ButtonVariant::GhostMuted)
+                    .help("Remove this restored attachment from the draft")
+                    .on_press(move |s: &mut Viewer| {
+                        if let Some(bundle) = &mut s.composer.draft_mut(owner.clone()).replay {
+                            if index < bundle.attachments.len() {
+                                bundle.attachments.remove(index);
+                            }
+                        }
+                    })
+                    .build(k)
+                    .key(format!("replay-attachment-{index}")),
+            );
+        }
+        content = content.child(files);
+    }
     let mode = Button::new(
         if s.admission_mode == crate::conversation::AdmissionMode::Queue {
             "Queue"
@@ -173,7 +197,12 @@ pub fn dock(s: &Viewer, p: &Pal, k: &Kit, layer: &mut Vec<El>) -> El {
         .child(voice::primary(
             s,
             k,
-            !draft.text.text.trim().is_empty() || !draft.attachments.is_empty(),
+            !draft.text.text.trim().is_empty()
+                || !draft.attachments.is_empty()
+                || draft
+                    .replay
+                    .as_ref()
+                    .is_some_and(|r| !r.attachments.is_empty()),
         ));
     content = content.child(auto_grow(field, 2, 7).max_h(168.0)).child(
         row()

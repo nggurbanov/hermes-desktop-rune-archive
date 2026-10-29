@@ -268,8 +268,17 @@ fn session_row(item: &SidebarSession, s: &Viewer, k: &Kit) -> El {
     let id = item.id.clone();
     let status = state.status(item);
     let target = (profile.clone(), id.clone());
+    let density = s.client_settings.prefs.session_density.as_str();
     let mut line = SidebarRow::new(item.title())
-        .height(if state.prefs.cards { 66.0 } else { 34.0 })
+        .height(if state.prefs.cards {
+            66.0
+        } else {
+            match density {
+                "comfortable" => 44.0,
+                "detailed" => 66.0,
+                _ => 34.0,
+            }
+        })
         .detail(relative_age(item.recency(), state.now))
         .selected(s.profile == profile && s.selected_session.as_ref() == Some(&id))
         .depth(if item._branched_from.is_some() { 1 } else { 0 })
@@ -283,7 +292,7 @@ fn session_row(item: &SidebarSession, s: &Viewer, k: &Kit) -> El {
         Status::Draft => RowStatus::Other(text("○").font(k.ty.small).color(k.c.text_faint)),
         Status::Idle => RowStatus::Other(el().size(4.0, 4.0).radius(2.0).fill(k.c.text_faint)),
     });
-    if state.prefs.cards {
+    if state.prefs.cards || density == "detailed" {
         let mut metadata = vec![
             project(item)
                 .rsplit('/')
@@ -294,7 +303,7 @@ fn session_row(item: &SidebarSession, s: &Viewer, k: &Kit) -> El {
         if let Some(model) = &item.model {
             metadata.push(model.clone());
         }
-        if state.prefs.preview
+        if (state.prefs.preview || density == "detailed")
             && let Some(preview) = &item.preview
         {
             metadata.push(preview.chars().take(90).collect());

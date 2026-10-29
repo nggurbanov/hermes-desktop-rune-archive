@@ -25,7 +25,7 @@ impl DraftScope {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct ModelKey {
     pub provider: String,
     pub id: String,
@@ -52,6 +52,7 @@ pub struct Draft {
     pub cwd: Option<String>,
     pub cwd_explicit: bool,
     pub attachments: Vec<DraftAttachment>,
+    pub replay: Option<crate::conversation::ReplayBundle>,
 }
 
 impl Default for Draft {
@@ -69,6 +70,7 @@ impl Default for Draft {
             cwd: None,
             cwd_explicit: false,
             attachments: vec![],
+            replay: None,
         }
     }
 }
@@ -83,6 +85,7 @@ pub enum Popup {
 mod persistence;
 pub struct Composer {
     persisted: Option<persistence::Persistence>,
+    storage_revision: u64,
     pub popup: Option<Popup>,
     pub popup_scope: Option<DraftScope>,
     pub search: TextEdit,
@@ -129,6 +132,7 @@ impl Default for Composer {
     fn default() -> Self {
         Self {
             persisted: None,
+            storage_revision: 0,
             popup: None,
             popup_scope: None,
             search: TextEdit::new(""),
@@ -161,6 +165,7 @@ impl Composer {
     }
 
     pub fn draft_mut(&mut self, scope: DraftScope) -> &mut Draft {
+        self.storage_revision = self.storage_revision.wrapping_add(1);
         self.drafts.entry(scope).or_default()
     }
 
@@ -222,6 +227,7 @@ impl Composer {
         if origin == &destination {
             return;
         }
+        self.storage_revision = self.storage_revision.wrapping_add(1);
         if let Some(draft) = self.drafts.remove(origin) {
             self.drafts.entry(destination).or_insert(draft);
         }
@@ -233,6 +239,7 @@ impl Composer {
     }
 
     pub fn toggle_favorite(&mut self, connection: u64, provider: &str, id: &str) {
+        self.storage_revision = self.storage_revision.wrapping_add(1);
         let key = (connection, provider.to_owned(), id.to_owned());
         if !self.favorites.remove(&key) {
             self.favorites.insert(key);
@@ -334,6 +341,7 @@ impl Composer {
             return false;
         }
         draft.attachments.remove(index);
+        self.storage_revision = self.storage_revision.wrapping_add(1);
         true
     }
 
@@ -502,6 +510,7 @@ mod tests;
 
 impl Composer {
     pub fn rename_profile(&mut self, connection: u64, from: &str, to: &str) {
+        self.storage_revision = self.storage_revision.wrapping_add(1);
         let keys: Vec<_> = self
             .drafts
             .keys()
@@ -522,6 +531,7 @@ impl Composer {
         self.close();
     }
     pub fn delete_profile(&mut self, connection: u64, name: &str) {
+        self.storage_revision = self.storage_revision.wrapping_add(1);
         self.drafts
             .retain(|scope, _| scope.connection != connection || scope.profile != name);
         self.close();

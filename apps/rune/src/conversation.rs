@@ -15,13 +15,16 @@ use std::{
 
 mod clarify;
 mod history;
+mod replay;
+pub use replay::{ReplayAttachment, ReplayBundle};
 mod journal;
 mod projection;
 mod worker;
 mod workspace;
 pub(crate) use journal::{Journal, Prepared};
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SendInput {
     pub canonical_bot: bool,
     pub voice_turn: bool,
@@ -32,6 +35,7 @@ pub struct SendInput {
     pub text: String,
     pub display_text: Option<String>,
     pub rewind: Option<Rewrite>,
+    pub replay: Option<ReplayBundle>,
     pub attachments: Vec<AttachmentInput>,
     pub model: Option<ModelKey>,
     pub reasoning: Option<String>,
@@ -173,6 +177,7 @@ pub enum Update {
         scope: DraftScope,
         submission_id: String,
         text: String,
+        restored_replay: Option<ReplayBundle>,
     },
     Failed {
         scope: DraftScope,
@@ -390,6 +395,9 @@ impl Conversation {
         input: SendInput,
     ) -> Result<String, String> {
         validate(&input)?;
+        if let Some(replay) = &input.replay {
+            replay.verify(&connection, &scope)?;
+        }
         if self
             .retired_profiles
             .contains(&(scope.connection, scope.profile.clone()))
@@ -783,6 +791,7 @@ impl Conversation {
                     admission,
                     replayed,
                     user_row,
+                    restored_replay,
                 } => {
                     let view = self.views.entry(origin.clone()).or_default();
                     view.preparing = false;
@@ -834,6 +843,7 @@ impl Conversation {
                         scope: scope.clone(),
                         submission_id: id,
                         text,
+                        restored_replay,
                     });
                     updates.push(Update::Changed { scope });
                 }

@@ -410,7 +410,7 @@ pub fn panel(s: &Viewer, k: &Kit, layer: &mut Vec<El>) -> El {
                 continue;
             }
             let mut style = TextStyle::new(size, if cell.bold() { 700. } else { 400. })
-                .mono()
+                .family(s.client_settings.terminal_family())
                 .lh(lh);
             if cell.italic() {
                 style = style.italic();

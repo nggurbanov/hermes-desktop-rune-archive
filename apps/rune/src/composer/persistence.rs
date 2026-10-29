@@ -26,20 +26,24 @@ struct SavedDraft {
     service_tier_changed: bool,
     approval_changed: bool,
     attachments: Vec<PathBuf>,
+    #[serde(default)]
+    replay: Option<crate::conversation::ReplayBundle>,
 }
 pub(super) struct Persistence {
     epoch: u64,
     path: PathBuf,
     previous: Vec<u8>,
     pending: Option<(Vec<u8>, f64)>,
+    scanned_revision: Option<u64>,
 }
 impl Composer {
     pub fn bind_storage(&mut self, connection: &Connection, epoch: u64) -> Result<(), String> {
         if self.persisted.as_ref().is_some_and(|s| s.epoch == epoch) {
             return Ok(());
         }
-        if let Some(p) = &mut self.persisted {
-            if let Some((bytes, _)) = p.pending.take() {
+        if let Some(p) = &self.persisted {
+            let bytes = self.storage_bytes(p.epoch)?;
+            if bytes != p.previous {
                 crate::client::private_write(&p.path, &bytes)?;
             }
         }
@@ -54,13 +58,13 @@ impl Composer {
         };
         let state: State = if bytes.is_empty() {
             State {
-                version: 1,
+                version: 2,
                 ..Default::default()
             }
         } else {
             let state: State = serde_json::from_slice(&bytes)
                 .map_err(|_| "Saved drafts are invalid; their file was retained")?;
-            if state.version != 1 {
+            if !matches!(state.version, 1 | 2) {
                 return Err("Saved drafts use a newer client format".into());
             }
             state
@@ -79,6 +83,7 @@ impl Composer {
                 approval_mode: saved.approval_mode,
                 cwd: saved.cwd,
                 cwd_explicit: saved.cwd_explicit,
+                replay: saved.replay,
                 model_changed: saved.model_changed,
                 reasoning_changed: saved.reasoning_changed,
                 service_tier_changed: saved.service_tier_changed,
@@ -109,6 +114,7 @@ impl Composer {
             path,
             previous: bytes,
             pending: None,
+            scanned_revision: None,
         });
         Ok(())
     }
@@ -135,6 +141,7 @@ impl Composer {
                 service_tier_changed: draft.service_tier_changed,
                 approval_changed: draft.approval_changed,
                 attachments: draft.attachments.iter().map(|a| a.path.clone()).collect(),
+                replay: draft.replay.clone(),
             })
             .collect();
         drafts.sort_by(|a, b| (&a.profile, &a.session).cmp(&(&b.profile, &b.session)));
@@ -146,7 +153,7 @@ impl Composer {
             .collect();
         favorites.sort();
         serde_json::to_vec(&State {
-            version: 1,
+            version: 2,
             drafts,
             favorites,
         })
@@ -156,16 +163,21 @@ impl Composer {
         let Some(epoch) = self.persisted.as_ref().map(|p| p.epoch) else {
             return Ok(None);
         };
-        let bytes = self.storage_bytes(epoch)?;
-        let p = self.persisted.as_mut().unwrap();
-        if p.pending
-            .as_ref()
-            .map(|(saved, _)| saved)
-            .unwrap_or(&p.previous)
-            != &bytes
-        {
-            p.pending = Some((bytes, now + 0.35));
+        let revision = self.storage_revision;
+        if self.persisted.as_ref().unwrap().scanned_revision != Some(revision) {
+            let bytes = self.storage_bytes(epoch)?;
+            let p = self.persisted.as_mut().unwrap();
+            p.scanned_revision = Some(revision);
+            if p.pending
+                .as_ref()
+                .map(|(bytes, _)| bytes)
+                .unwrap_or(&p.previous)
+                != &bytes
+            {
+                p.pending = Some((bytes, now + 0.35));
+            }
         }
+        let p = self.persisted.as_mut().unwrap();
         if let Some((_, due)) = &p.pending {
             if now < *due {
                 return Ok(Some(std::time::Duration::from_secs_f64(
@@ -173,9 +185,13 @@ impl Composer {
                 )));
             }
         }
-        if let Some((bytes, _)) = p.pending.take() {
-            crate::client::private_write(&p.path, &bytes)?;
-            p.previous = bytes;
+        if let Some((bytes, _)) = &p.pending {
+            if let Err(error) = crate::client::private_write(&p.path, bytes) {
+                p.pending.as_mut().unwrap().1 = now + 1.;
+                return Err(error);
+            }
+            p.previous = bytes.clone();
+            p.pending = None;
         }
         Ok(None)
     }
@@ -239,5 +255,46 @@ mod tests {
                 .unwrap()
                 .contains("other private draft")
         );
+    }
+}
+
+#[cfg(test)]
+mod write_retry_tests {
+    use super::*;
+    #[test]
+    fn a_failed_private_write_keeps_the_latest_draft_for_retry_without_another_edit() {
+        let root =
+            std::env::temp_dir().join(format!("hermes-draft-retry-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let blocked = root.join("blocked");
+        std::fs::write(&blocked, b"file").unwrap();
+        let path = blocked.join("drafts.json");
+        let mut composer = Composer::new();
+        let owner = DraftScope {
+            connection: 7,
+            profile: "work".into(),
+            session: Some("stored".into()),
+        };
+        composer
+            .draft_mut(owner)
+            .text
+            .replace_text("Keep this after the write failure");
+        composer.persisted = Some(Persistence {
+            epoch: 7,
+            path: path.clone(),
+            previous: vec![],
+            pending: None,
+            scanned_revision: None,
+        });
+        assert!(composer.poll_storage(0.).unwrap().is_some());
+        assert!(composer.poll_storage(0.4).is_err());
+        assert!(composer.persisted.as_ref().unwrap().pending.is_some());
+        std::fs::remove_file(&blocked).unwrap();
+        composer.poll_storage(1.5).unwrap();
+        let saved: State = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved.version, 2);
+        assert_eq!(saved.drafts[0].text, "Keep this after the write failure");
+        drop(composer);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

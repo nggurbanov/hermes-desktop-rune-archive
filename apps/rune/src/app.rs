@@ -66,6 +66,7 @@ pub struct Viewer {
     pub operations: crate::operations::Operations,
     pub health_open: bool,
     pub chrome: crate::client_status::ClientStatus,
+    pub client_settings: crate::client_settings::ClientSettings,
     pub show_statusbar: bool,
     pub show_profile_rail: bool,
     pub hidden_status_items: std::collections::BTreeSet<String>,
@@ -79,7 +80,6 @@ pub struct Viewer {
     voice_sends: HashMap<DraftScope, String>,
     spoken_completion: HashMap<DraftScope, u64>,
     pub compose_error: Option<String>,
-    pub show_reasoning: bool,
     pub admission_mode: crate::conversation::AdmissionMode,
     pub recoverable_sends: Vec<(String, String)>,
     read_only_chats: HashMap<DraftScope, String>,
@@ -92,6 +92,9 @@ pub struct Viewer {
     pub client_error: Option<String>,
     pub client_notice: Option<String>,
     preferences: crate::client::Preferences,
+    preferences_writable: bool,
+    preferences_retry_at: Option<std::time::Instant>,
+    preferences_error: Option<String>,
     pub(crate) profile_preferences: crate::client::profiles::ProfilePreferences,
     pub sidebar_state: crate::sidebar::SidebarState,
     pub settings: crate::pages::settings::Settings,
@@ -125,6 +128,8 @@ pub struct Viewer {
     pub inspector: PaneState,
     pub theme: Option<bool>,
     pub layout: crate::layout::Node,
+    pub decks: crate::decks::Decks,
+    pub layout_name: TextEdit,
     pub arranging: bool,
     pub connection_form: bool,
     pub connection_url: TextEdit,
@@ -209,6 +214,7 @@ impl Viewer {
             operations: crate::operations::Operations::new(),
             health_open: false,
             chrome: Default::default(),
+            client_settings: crate::client_settings::ClientSettings::new(),
             show_statusbar: true,
             show_profile_rail: true,
             hidden_status_items: crate::client::default_hidden_status(),
@@ -226,7 +232,6 @@ impl Viewer {
             voice_sends: HashMap::new(),
             spoken_completion: HashMap::new(),
             compose_error: None,
-            show_reasoning: false,
             admission_mode: Default::default(),
             recoverable_sends: vec![],
             read_only_chats: HashMap::new(),
@@ -239,6 +244,9 @@ impl Viewer {
             client_error: None,
             client_notice: None,
             preferences: crate::client::Preferences::default(),
+            preferences_writable: true,
+            preferences_retry_at: None,
+            preferences_error: None,
             profile_preferences: Default::default(),
             sidebar_state: crate::sidebar::SidebarState::new(),
             settings: crate::pages::settings::Settings::new(),
@@ -272,6 +280,8 @@ impl Viewer {
             inspector: PaneState::new(300.0).range(240.0, 520.0).collapsed(),
             theme: None,
             layout: Default::default(),
+            decks: Default::default(),
+            layout_name: TextEdit::default(),
             arranging: false,
             connection_form: true,
             connection_url: TextEdit::new(""),
@@ -334,9 +344,21 @@ impl Viewer {
                     s.inspector.toggle();
                     s.advanced_tools_open = true;
                 }
+                s.decks = prefs.decks.clone().unwrap_or_else(|| {
+                    let mut decks = crate::decks::Decks::default();
+                    if prefs.inspector_open {
+                        decks.hidden.clear();
+                    }
+                    decks
+                });
+                s.decks.normalize();
+                s.decks.tool_gate = s.inspector.is_open();
                 s.preferences = prefs;
             }
-            Err(error) => s.client_error = Some(error),
+            Err(error) => {
+                s.preferences_writable = false;
+                s.client_error = Some(error);
+            }
         }
         if let Some(endpoint) = argument("--gateway") {
             let token = std::env::var("HERMES_GATEWAY_TOKEN")
@@ -360,7 +382,24 @@ impl Viewer {
         s
     }
 
+    pub fn key_capture_visible(&self) -> bool {
+        self.route == crate::pages::Route::Settings
+            && self.settings.section == "shortcuts"
+            && !self.connection_form
+            && !self.profile_picker
+            && !self.health_open
+            && !self.workspace_menu
+            && self.directories.owner.is_none()
+            && self.composer.popup.is_none()
+            && self.row_menu.is_none()
+            && !self.chrome.menu
+            && self.chrome.detail.is_none()
+            && !self.arranging
+    }
     pub fn begin(&mut self) {
+        if !self.fixture {
+            self.client_settings.load();
+        }
         if !self.fixture && self.connection.is_some() {
             self.reconnect();
         }
@@ -756,14 +795,7 @@ impl Viewer {
     }
 
     pub fn set_simple_mode(&mut self, simple: bool) {
-        if simple == self.simple_mode {
-            return;
-        }
-        if simple {
-            self.advanced_tools_open = self.inspector.is_open();
-        }
-        self.simple_mode = simple;
-        self.inspector.set_open(!simple && self.advanced_tools_open);
+        self.set_layout_mode(simple);
     }
     fn dispatch(&mut self, command: Command) {
         self.intent += 1;
@@ -1132,11 +1164,23 @@ pub fn setup(s: &mut Viewer, waker: Waker) {
 }
 
 pub fn poll(s: &mut Viewer, now: f64, tx: &mut Tx) -> bool {
-    s.save_client_preferences();
+    s.sync_tool_gate();
+    if !s.key_capture_visible() {
+        s.client_settings.capture = None;
+    }
+    if let Err(error) = s.save_client_preferences() {
+        s.client_error = Some(error);
+    }
+    if let Some(at) = s.preferences_retry_at {
+        tx.wake_after(at.saturating_duration_since(std::time::Instant::now()));
+    }
     if !s.fixture {
         match s.composer.poll_storage(now) {
             Ok(Some(delay)) => tx.wake_after(delay),
-            Err(error) => s.client_error = Some(error),
+            Err(error) => {
+                s.client_error = Some(error);
+                tx.wake_after(std::time::Duration::from_secs(1));
+            }
             _ => {}
         }
     }
@@ -1159,12 +1203,7 @@ pub fn poll(s: &mut Viewer, now: f64, tx: &mut Tx) -> bool {
     );
     let scope = s.composer_scope();
     let chat_visible = s.route == crate::pages::Route::Chat
-        && s.layout.shows("workspace", &|pane| match pane {
-            "workspace" => true,
-            "sessions" | "hermes-bots:pane" => s.sidebar.is_open(),
-            "files" | "review" | "terminal" => s.inspector.is_open(),
-            _ => false,
-        });
+        && s.layout.shows("workspace", &|pane| s.pane_visible(pane));
     let subagents_changed = if !s.fixture && chat_visible {
         if let Some(connection) = s.connection.as_ref() {
             s.subagents.observe(
@@ -1192,7 +1231,7 @@ pub fn poll(s: &mut Viewer, now: f64, tx: &mut Tx) -> bool {
         | s.poll_connections()
         | s.poll_files(now)
         | s.poll_tools(now, tx);
-    if s.inspector.is_open() || s.route == crate::pages::Route::FilePreview {
+    if s.pane_shown("files") || s.route == crate::pages::Route::FilePreview {
         tx.wake_after(std::time::Duration::from_secs(4));
     }
     if s.plugin_hosts.is_open() {
@@ -1201,7 +1240,7 @@ pub fn poll(s: &mut Viewer, now: f64, tx: &mut Tx) -> bool {
     if let Some(delay) = s.review.wake_after() {
         tx.wake_after(delay);
     }
-    if s.inspector.is_open() {
+    if s.pane_shown("terminal") {
         tx.wake_after(std::time::Duration::from_secs(2));
     }
     if let Some(delay) = s.messaging.wake_after() {
@@ -1308,6 +1347,10 @@ pub fn subagents_scene(s: &mut Viewer) {
     reader_scene(s);
     s.subagents.fixture(s.composer_scope());
 }
+pub fn rich_replay_scene(s: &mut Viewer) {
+    reader_scene(s);
+    s.rich_chat_replay_fixture();
+}
 pub fn rich_chat_scene(s: &mut Viewer) {
     reader_scene(s);
     s.rich_chat_fixture();
@@ -1375,20 +1418,16 @@ pub fn error_scene(s: &mut Viewer) {
 mod tests;
 
 pub fn on_key(s: &mut Viewer, event: &rune::KeyEvent, tx: &mut Tx) -> bool {
+    if !s.key_capture_visible() {
+        s.client_settings.capture = None;
+    }
+    if s.client_capture_key(event, tx) {
+        return true;
+    }
     if crate::view::terminal::on_key(s, event, tx) {
         return true;
     }
-    if let rune::Key::Command(ch) = event.key {
-        match ch {
-            'n' => s.new_draft(),
-            ',' => s.open_route(crate::pages::Route::Settings),
-            'b' => s.sidebar.toggle(),
-            'j' => s.inspector.toggle(),
-            'k' => s.open_route(crate::pages::Route::CommandCenter),
-            's' if event.mods.shift => s.show_statusbar = !s.show_statusbar,
-            _ => return crate::view::composer::on_key(s, event, tx),
-        }
-        tx.instant();
+    if s.client_shortcut(event, tx) {
         return true;
     }
     if crate::view::composer::on_key(s, event, tx) {
@@ -1479,13 +1518,48 @@ pub fn cron_scene(s: &mut Viewer) {
 }
 
 impl Viewer {
-    fn save_client_preferences(&mut self) {
+    fn save_client_preferences(&mut self) -> Result<(), String> {
         if self.fixture {
-            return;
+            return Ok(());
+        }
+        if !self.preferences_writable {
+            return Err(
+                "Saved client preferences could not be loaded; their file has been preserved"
+                    .into(),
+            );
+        }
+        if self
+            .preferences_retry_at
+            .is_some_and(|at| at > std::time::Instant::now())
+        {
+            return Err(self
+                .preferences_error
+                .clone()
+                .unwrap_or_else(|| "Client preferences have not been saved yet".into()));
         }
         self.remember_profile_appearance();
-        let next = crate::client::Preferences {
+        let next = self.client_preferences_snapshot();
+        if next != self.preferences {
+            if let Err(error) = next.save() {
+                self.preferences_retry_at =
+                    Some(std::time::Instant::now() + std::time::Duration::from_secs(2));
+                self.preferences_error = Some(error.clone());
+                return Err(error);
+            }
+            self.preferences = next;
+        }
+        if self.client_error.as_ref() == self.preferences_error.as_ref() {
+            self.client_error = None;
+        }
+        self.preferences_error = None;
+        self.preferences_retry_at = None;
+        Ok(())
+    }
+    fn client_preferences_snapshot(&self) -> crate::client::Preferences {
+        crate::client::Preferences {
+            other: self.preferences.other.clone(),
             layout: self.layout.clone(),
+            decks: Some(self.decks.clone()),
             review: self.review_preferences.clone(),
             show_statusbar: self.show_statusbar,
             show_profile_rail: self.show_profile_rail,
@@ -1501,13 +1575,6 @@ impl Viewer {
             } else {
                 self.inspector.is_open()
             },
-        };
-        if next != self.preferences {
-            self.preferences = next.clone();
-            match next.save() {
-                Ok(()) => self.client_error = None,
-                Err(error) => self.client_error = Some(error),
-            }
         }
     }
 }
@@ -1616,3 +1683,6 @@ pub fn review_scene(s: &mut Viewer) {
     layout_scene(s);
     s.review.fixture(s.composer_scope());
 }
+
+#[path = "app/decks.rs"]
+mod deck_actions;

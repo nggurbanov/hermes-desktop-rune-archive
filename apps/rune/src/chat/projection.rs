@@ -27,6 +27,7 @@ pub struct Message {
     pub key: String,
     pub row: Option<u64>,
     pub through: Option<u64>,
+    pub timestamp: Option<f64>,
     pub role: String,
     pub text: String,
     pub parts: Vec<Part>,
@@ -158,6 +159,22 @@ fn tool(v: &Value) -> Part {
         process: v["process_id"].as_str().map(str::to_owned),
     }
 }
+/// Public tool activity projection is shared by main and spectator transcripts.
+pub fn activity(value: &Value) -> Part {
+    let mut part = tool(value);
+    if let Part::Tool { output, .. } = &mut part {
+        if output.is_none() && value["state"] == "complete" {
+            *output = Some(
+                value["summary"]
+                    .as_str()
+                    .or(value["text"].as_str())
+                    .unwrap_or("")
+                    .to_owned(),
+            );
+        }
+    }
+    part
+}
 pub fn project(rows: &[HistoryMessage]) -> Vec<Message> {
     let mut messages: Vec<Message> = vec![];
     for (index, row) in rows.iter().enumerate() {
@@ -239,6 +256,7 @@ pub fn project(rows: &[HistoryMessage]) -> Vec<Message> {
                 .unwrap_or_else(|| format!("live-{index}-{}", row.role)),
             row: row.row_id(),
             through: row.row_id(),
+            timestamp: raw["timestamp"].as_f64(),
             role: row.role.clone(),
             text: row.content.clone(),
             parts,

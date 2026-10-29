@@ -73,6 +73,7 @@ pub struct Settings {
     pub demo: bool,
     detached: TextEdit,
     baseline: Value,
+    config_ready: bool,
     schema: Value,
     sent: Option<Value>,
     revision: u64,
@@ -118,6 +119,7 @@ impl Settings {
             demo: false,
             detached: TextEdit::new(""),
             baseline: json!({}),
+            config_ready: false,
             schema: json!({}),
             sent: None,
             revision: 0,
@@ -293,6 +295,7 @@ impl Settings {
                     }
                     let dirty = self.edits();
                     self.baseline = value;
+                    self.config_ready = true;
                     self.rebuild();
                     self.restore_edits(dirty);
                     vec![]
@@ -369,6 +372,9 @@ impl Settings {
             .and_then(Value::as_object)
             .cloned()
             .unwrap_or_default();
+        for key in ["desktop.font_family", "terminal.font_family"] {
+            schemas.entry(key.to_owned()).or_insert_with(||json!({"type":"string","description":"Font family assigned to this agent profile."}));
+        }
         let mut flat = BTreeMap::new();
         flatten(&self.baseline, "", &mut flat);
         for (key, value) in flat {
@@ -400,7 +406,12 @@ impl Settings {
                     .or_else(|| schema.get("description").and_then(Value::as_str))
                     .unwrap_or("")
                     .to_owned();
-                let section = section_for(&key, &schema, &meta);
+                let section =
+                    if matches!(key.as_str(), "desktop.font_family" | "terminal.font_family") {
+                        "appearance".into()
+                    } else {
+                        section_for(&key, &schema, &meta)
+                    };
                 let options = meta["ENUM_OPTIONS"]
                     .get(&key)
                     .or_else(|| schema.get("options"))
@@ -582,6 +593,12 @@ impl Settings {
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
         }
+    }
+    pub fn config_ready(&self) -> bool {
+        self.config_ready
+    }
+    pub fn confirmed_config(&self) -> &Value {
+        &self.baseline
     }
     pub fn export_value(&self) -> Result<Value, String> {
         let mut value = self.baseline.clone();
@@ -836,6 +853,9 @@ pub enum Action {
 }
 impl Viewer {
     pub fn settings_action(&mut self, action: Action) {
+        if matches!(&action,Action::Section(section) if section!="shortcuts") {
+            self.client_settings.capture = None;
+        }
         let effects = match action {
             Action::Load => self.settings.load(),
             Action::VoicesLoad => self.settings.voice_load(),

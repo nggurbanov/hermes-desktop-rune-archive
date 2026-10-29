@@ -152,7 +152,7 @@ impl FileWriter {
         self.receive.try_iter().collect()
     }
 }
-fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
+pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
     use std::io::Write;
     let parent = path
         .parent()

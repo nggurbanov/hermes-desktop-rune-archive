@@ -8,8 +8,11 @@ use std::{
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Preferences {
+    #[serde(flatten)]
+    pub other: std::collections::BTreeMap<String, serde_json::Value>,
     pub speak_replies: bool,
     pub layout: crate::layout::Node,
+    pub decks: Option<crate::decks::Decks>,
     pub review: serde_json::Value,
     pub show_statusbar: bool,
     pub show_profile_rail: bool,
@@ -24,8 +27,10 @@ pub struct Preferences {
 impl Default for Preferences {
     fn default() -> Self {
         Self {
+            other: Default::default(),
             speak_replies: false,
             layout: Default::default(),
+            decks: None,
             review: serde_json::Value::Null,
             show_statusbar: true,
             show_profile_rail: true,

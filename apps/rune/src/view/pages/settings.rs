@@ -297,6 +297,7 @@ pub fn page(s: &Viewer, k: &Kit, layer: &mut Vec<El>) -> El {
         );
     }
     let mut fields = col()
+        .key("settings-fields")
         .w_full()
         .gap(2.0)
         .scroll(ScrollSpec {
@@ -304,6 +305,9 @@ pub fn page(s: &Viewer, k: &Kit, layer: &mut Vec<El>) -> El {
         })
         .grow(1.0)
         .min_h(0.0);
+    if matches!(state.section.as_str(), "chat" | "workspace") {
+        fields = fields.children(crate::view::client_settings::rows(s, k, layer));
+    }
     if state.section == "providers" {
         fields = fields.children(providers::rows(s, k));
     } else if state.section == "delegation" {
