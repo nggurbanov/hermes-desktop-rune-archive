@@ -333,6 +333,7 @@ impl Viewer {
                 generation: confirmation.generation,
                 restore_only: matches!(confirmation.kind, RewriteKind::Restore),
             }),
+            policy_stamp: Some(draft.policy_stamp()),
             model: draft.model.clone(),
             reasoning: draft.reasoning.clone(),
             service_tier: draft.service_tier.clone(),
@@ -470,6 +471,10 @@ impl Viewer {
                         continue;
                     }
                     self.chat.presentation(owner.clone()).slash_running = false;
+                    if intent.session_bypass() {
+                        self.finish_conversation_bypass(owner, intent, result);
+                        continue;
+                    }
                     let policy = intent.policy.clone();
                     match result {
                         Ok(value)
@@ -640,6 +645,7 @@ impl Viewer {
         let draft = self.composer.draft(&owner).cloned().unwrap_or_default();
         let policy = SendInput {
             text: input.clone(),
+            policy_stamp: Some(draft.policy_stamp()),
             model: draft.model.clone(),
             reasoning: draft.reasoning.clone(),
             service_tier: draft.service_tier.clone(),
@@ -690,6 +696,22 @@ impl Viewer {
                 Some((child.into(), "Branched conversation".into()));
         }
         if value.get("mutation").is_some() {
+            let mut receipt = value["mutation"].clone();
+            if receipt["operation"].is_null() {
+                receipt["operation"] = value["operation"].clone();
+            }
+            let fields = self.conversation.policy_receipt(
+                &owner,
+                &receipt,
+                &value["policy_payload"],
+                policy.policy_stamp.clone(),
+            );
+            if let Some(stamp) = &policy.policy_stamp {
+                self.composer.settle_policy(&owner, stamp, fields);
+            }
+            if let Some(view) = self.conversation.view(&owner) {
+                self.composer.reconcile_policy(&owner, &view.policy);
+            }
             if let Some(connection) = self.connection.clone() {
                 let _ = self.conversation.reconnect(connection, &owner);
             }
@@ -710,6 +732,10 @@ impl Viewer {
                     return;
                 };
                 let mut sent = self.composer.draft(&owner).cloned().unwrap_or_default();
+                if let Some(stamp) = &policy.policy_stamp {
+                    sent.policy_id = stamp.draft_id.clone();
+                    sent.policy_revisions = stamp.revisions;
+                }
                 sent.model = policy.model.clone();
                 sent.reasoning = policy.reasoning.clone();
                 sent.service_tier = policy.service_tier.clone();
@@ -802,9 +828,7 @@ impl Viewer {
                             && (value != "none" || c.can_disable_reasoning == Some(true))
                     });
                 if supported {
-                    let draft = self.composer.draft_mut(owner.clone());
-                    draft.reasoning = Some(value);
-                    draft.reasoning_changed = true;
+                    self.composer.choose_reasoning(owner.clone(), Some(value));
                     Ok(())
                 } else {
                     Err("This model does not advertise the requested reasoning setting".into())
@@ -838,6 +862,33 @@ impl Viewer {
             return;
         };
         if confirm {
+            let current = self.composer.draft(&owner).map(|d| d.policy_stamp());
+            let matches = match (intent.policy.policy_stamp.as_ref(), current.as_ref()) {
+                (Some(sent), Some(now)) => {
+                    sent.draft_id == now.draft_id
+                        && sent.revisions.model == now.revisions.model
+                        && (intent.params["payload"].get("reasoning").is_none()
+                            || sent.revisions.reasoning == now.revisions.reasoning)
+                }
+                _ => false,
+            };
+            let same_execution = self.conversation.view(&owner).is_some_and(|v| {
+                intent.runtime.as_deref() == Some(v.runtime.as_str())
+                    && intent.revision == Some(v.revision)
+                    && intent.generation == Some(v.generation)
+            });
+            if !matches || !same_execution {
+                match intent.settle(&serde_json::json!({"cancelled_stale_confirmation":true})) {
+                    Ok(()) => {
+                        let view = self.chat.presentation(owner);
+                        view.slash_intent = None;
+                        view.slash_confirmation = None;
+                        view.error = Some("The model choice or session changed after this confirmation opened. Submit the current choice again.".into());
+                    }
+                    Err(error) => self.chat.presentation(owner).error = Some(error),
+                }
+                return;
+            }
             let Some((token, _)) = self
                 .chat
                 .views

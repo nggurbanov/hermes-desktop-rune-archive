@@ -23,7 +23,8 @@ vt100 = "0.16"
 rfd = "0.15"
 ignore = "0.4"
 trash = "5.2"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp"] }
+resvg = "=0.45.1"
 cpal = "0.16"
 rodio = "0.21.1"
 hound = "3.5"
@@ -39,6 +40,8 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 flate2 = "1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
+zbus = { version = "=5.19.0", default-features = false, features = ["tokio"] }
+futures-util = { version = ">=0.3.32,<0.4", default-features = false, features = ["std", "async-await"] }
 webrtc-audio-processing = { version = "2.1", default-features = false, features = ["bundled"] }
 gtk = "0.18"
 rustix = { version = "1", features = ["net", "process", "fs"] }

@@ -1,7 +1,7 @@
 //! Durable, owner-scoped conversations. A lost ACK is a retained intent, never
 //! permission to create another session or submit another user turn.
 use crate::{
-    composer::{DraftScope, ModelKey},
+    composer::{DraftScope, ModelKey, PolicyFields, PolicyStamp},
     gateway::{Connection, HistoryMessage},
 };
 use rune::Waker;
@@ -18,7 +18,9 @@ mod history;
 mod replay;
 pub use replay::{ReplayAttachment, ReplayBundle};
 mod journal;
+mod policy;
 mod projection;
+pub use policy::{DeferredPolicy, SessionPolicy};
 mod worker;
 mod workspace;
 pub(crate) use journal::{Journal, Prepared};
@@ -26,6 +28,7 @@ pub(crate) use journal::{Journal, Prepared};
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SendInput {
+    pub policy_stamp: Option<PolicyStamp>,
     pub canonical_bot: bool,
     pub voice_turn: bool,
     pub voice_context: Option<String>,
@@ -117,6 +120,7 @@ pub struct ModelConfirmation {
 
 #[derive(Default)]
 pub struct ConversationView {
+    pub policy: SessionPolicy,
     pub messages: Vec<HistoryMessage>,
     pub running: bool,
     pub completion: u64,
@@ -155,12 +159,27 @@ pub struct ConversationView {
     pub(crate) stored: String,
     pub(crate) replay_epoch: String,
     pub(crate) last_sequence: u64,
+    pub(crate) policy_sequence: u64,
     pub(crate) delta: Option<projection::Delta>,
     pub(crate) submitted: std::collections::HashSet<String>,
 }
 
 #[derive(Clone, Debug)]
 pub enum Update {
+    ProfileApprovalSet {
+        scope: DraftScope,
+        mode: String,
+    },
+    StreamOpened {
+        scope: DraftScope,
+    },
+    NoticeEvent {
+        scope: DraftScope,
+        kind: String,
+        payload: Value,
+        runtime: String,
+        replay: bool,
+    },
     AgentEvent {
         scope: DraftScope,
         kind: String,
@@ -178,6 +197,8 @@ pub enum Update {
         submission_id: String,
         text: String,
         restored_replay: Option<ReplayBundle>,
+        policy_stamp: Option<PolicyStamp>,
+        policy_fields: PolicyFields,
     },
     Failed {
         scope: DraftScope,
@@ -226,6 +247,66 @@ impl Conversation {
     }
     pub fn view(&self, scope: &DraftScope) -> Option<&ConversationView> {
         self.views.get(&self.key(scope))
+    }
+    pub fn bypass_receipt(&mut self, owner: &DraftScope, value: &Value) -> bool {
+        let key = self.key(owner);
+        let Some(view) = self.views.get_mut(&key) else {
+            return false;
+        };
+        if value["session_id"].as_str() != Some(view.runtime.as_str())
+            || value["stored_session_id"].as_str() != Some(view.stored.as_str())
+            || value["execution_generation"]
+                .as_u64()
+                .is_none_or(|g| g != view.generation)
+        {
+            return false;
+        }
+        view.policy.yolo = value["reported_yolo"].as_bool();
+        true
+    }
+    pub fn profile_approval(
+        &mut self,
+        owner: &DraftScope,
+        mode: &str,
+    ) -> Vec<(DraftScope, SessionPolicy)> {
+        let mut changed = Vec::new();
+        for (scope, view) in &mut self.views {
+            if scope.connection == owner.connection
+                && scope.profile == owner.profile
+                && view.policy.approval_mode.as_deref() != Some(mode)
+            {
+                view.policy.approval_mode = Some(mode.into());
+                changed.push((scope.clone(), view.policy.clone()));
+            }
+        }
+        changed
+    }
+    pub fn policy_receipt(
+        &mut self,
+        scope: &DraftScope,
+        receipt: &Value,
+        payload: &Value,
+        stamp: Option<PolicyStamp>,
+    ) -> PolicyFields {
+        let key = self.key(scope);
+        let Some(view) = self.views.get_mut(&key) else {
+            return PolicyFields::default();
+        };
+        if receipt["session_id"].as_str() != Some(view.runtime.as_str()) {
+            return PolicyFields::default();
+        }
+        if receipt["revision"]
+            .as_u64()
+            .is_some_and(|r| r < view.revision)
+        {
+            // An older receipt still settles its captured intent, never newer authority.
+            return SessionPolicy::default().receipt(receipt, payload, stamp);
+        }
+        let fields = view.policy.receipt(receipt, payload, stamp);
+        if let Some(revision) = receipt["revision"].as_u64() {
+            view.revision = revision;
+        }
+        fields
     }
     pub fn attach(&mut self, connection: Connection, scope: DraftScope) -> Result<(), String> {
         if scope.session.is_none() {
@@ -461,10 +542,18 @@ impl Conversation {
         connection: Connection,
         scope: DraftScope,
         id: &str,
+        current_policy: Option<PolicyStamp>,
     ) -> Result<(), String> {
         let journal = Journal::new(crate::client::state_dir()?.join("submissions"))?;
         let mut entry = journal.load(id)?;
         entry.verify_owner(&connection, &scope)?;
+        if !policy::matches_model_choice(
+            entry.input.policy_stamp.as_ref(),
+            current_policy.as_ref(),
+            entry.input.reasoning_changed,
+        ) {
+            return Err("A newer model or reasoning choice replaced this confirmation. Cancel the saved send and submit the current choice.".into());
+        }
         let mutation = entry
             .mutations
             .iter_mut()
@@ -699,7 +788,10 @@ impl Conversation {
         let mut updates = vec![];
         for reply in self.receive.try_iter().take(4096).collect::<Vec<_>>() {
             let reply_owner = match &reply {
-                worker::Reply::Older { origin, .. }
+                worker::Reply::StreamOpened { origin }
+                | worker::Reply::PolicyReceipt { origin, .. }
+                | worker::Reply::PolicySetting { origin, .. }
+                | worker::Reply::Older { origin, .. }
                 | worker::Reply::Workspace { origin, .. }
                 | worker::Reply::Snapshot { origin, .. }
                 | worker::Reply::Admitted { origin, .. }
@@ -716,6 +808,47 @@ impl Conversation {
                 continue;
             }
             match reply {
+                worker::Reply::StreamOpened { origin } => {
+                    updates.push(Update::StreamOpened { scope: origin })
+                }
+                worker::Reply::PolicyReceipt {
+                    origin,
+                    receipt,
+                    payload,
+                    stamp,
+                } => {
+                    let key = self.key(&origin);
+                    if let Some(view) = self.views.get_mut(&key) {
+                        if receipt["session_id"].as_str() == Some(view.runtime.as_str())
+                            && receipt["revision"]
+                                .as_u64()
+                                .is_none_or(|r| r >= view.revision)
+                        {
+                            view.policy.receipt(&receipt, &payload, stamp);
+                            if let Some(revision) = receipt["revision"].as_u64() {
+                                view.revision = revision;
+                            }
+                            updates.push(Update::Changed { scope: key });
+                        }
+                    }
+                }
+                worker::Reply::PolicySetting {
+                    origin,
+                    key: setting,
+                    value,
+                } => {
+                    let key = self.key(&origin);
+                    if let Some(view) = self.views.get_mut(&key) {
+                        if setting == "approvals.mode" {
+                            updates.push(Update::ProfileApprovalSet {
+                                scope: key.clone(),
+                                mode: value.clone(),
+                            });
+                        }
+                        view.policy.setting(&setting, value, view.running);
+                        updates.push(Update::Changed { scope: key });
+                    }
+                }
                 worker::Reply::Older {
                     origin,
                     cursor,
@@ -792,6 +925,8 @@ impl Conversation {
                     replayed,
                     user_row,
                     restored_replay,
+                    policy_stamp,
+                    policy_fields,
                 } => {
                     let view = self.views.entry(origin.clone()).or_default();
                     view.preparing = false;
@@ -844,39 +979,73 @@ impl Conversation {
                         submission_id: id,
                         text,
                         restored_replay,
+                        policy_stamp,
+                        policy_fields,
                     });
                     updates.push(Update::Changed { scope });
                 }
-                worker::Reply::Event { origin, event } => {
-                    let view = self.views.entry(origin.clone()).or_default();
-                    if (matches!(
-                        event.kind.as_str(),
-                        "agent.terminal.output" | "terminal.close" | "message.start"
-                    ) || event.kind.starts_with("subagent."))
-                        && event.session == view.runtime
-                        && event
-                            .epoch
-                            .as_ref()
-                            .is_none_or(|epoch| epoch == &view.replay_epoch)
-                        && event.authority.is_none_or(|epoch| epoch >= view.authority)
-                        && event.sequence.is_none_or(|seq| seq > view.last_sequence)
-                    {
-                        updates.push(Update::AgentEvent {
-                            scope: DraftScope {
-                                session: Some(view.stored.clone()),
-                                ..origin.clone()
-                            },
-                            kind: event.kind.clone(),
-                            payload: event.payload.clone(),
-                        });
-                    }
+                worker::Reply::Event {
+                    origin,
+                    event,
+                    replay,
+                } => {
+                    let key = self.key(&origin);
+                    let Some(view) = self.views.get_mut(&key) else {
+                        continue;
+                    };
                     if view.apply_event(&event) {
-                        updates.push(Update::Changed {
-                            scope: DraftScope {
-                                session: Some(view.stored.clone()),
-                                ..origin
-                            },
-                        });
+                        let scope = DraftScope {
+                            session: Some(view.stored.clone()),
+                            ..origin
+                        };
+                        if matches!(
+                            event.kind.as_str(),
+                            "agent.terminal.output" | "terminal.close" | "message.start"
+                        ) || event.kind.starts_with("subagent.")
+                            || (event.kind == "session.updated"
+                                && event.sequence.is_none_or(|seq| seq >= view.policy_sequence))
+                        {
+                            updates.push(Update::AgentEvent {
+                                scope: scope.clone(),
+                                kind: event.kind.clone(),
+                                payload: event.payload.clone(),
+                            });
+                        }
+                        if matches!(
+                            event.kind.as_str(),
+                            "message.complete"
+                                | "message.error"
+                                | "error"
+                                | "approval.request"
+                                | "clarify.request"
+                                | "input.request"
+                                | "notification.show"
+                        ) {
+                            let mut payload = event.payload.clone();
+                            if event.kind == "approval.request" {
+                                let id = payload["prompt_id"]
+                                    .as_str()
+                                    .or_else(|| payload["request_id"].as_str());
+                                if let Some(prompt) = id.and_then(|id| {
+                                    view.prompts
+                                        .iter()
+                                        .find(|p| p.kind == "approval" && p.prompt_id == id)
+                                }) {
+                                    payload["prompt_id"] = serde_json::json!(prompt.prompt_id);
+                                    payload["execution_generation"] =
+                                        serde_json::json!(prompt.execution_generation);
+                                    payload["choices"] = serde_json::json!(prompt.choices);
+                                }
+                            }
+                            updates.push(Update::NoticeEvent {
+                                scope: scope.clone(),
+                                kind: event.kind.clone(),
+                                payload,
+                                runtime: view.runtime.clone(),
+                                replay,
+                            });
+                        }
+                        updates.push(Update::Changed { scope });
                     }
                 }
                 worker::Reply::Failed {
@@ -929,6 +1098,8 @@ impl Conversation {
                         .get("cwd")
                         .and_then(Value::as_str)
                         .map(str::to_owned);
+                    view.policy.info(&snapshot.info);
+                    view.policy_sequence = snapshot.sequence;
                     view.metadata = snapshot.metadata;
                     view.prompts = snapshot.prompts;
                     view.admissions = snapshot.pending;

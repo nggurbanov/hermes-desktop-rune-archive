@@ -1039,3 +1039,186 @@ fn multimodal_restore_returns_frozen_original_input_without_upload_or_prompt() {
     server.join().unwrap();
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn persisted_policy_stamp_defers_reasoning_and_never_acknowledges_a_newer_a_b_a_choice() {
+    let root = std::env::temp_dir().join(format!("hermes-policy-stamp-{}", uuid::Uuid::new_v4()));
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let connection = Connection::Url {
+        endpoint: format!("http://{}", listener.local_addr().unwrap()),
+        token: Some("synthetic-token".into()),
+    };
+    let scope = DraftScope {
+        connection: 1,
+        profile: "work".into(),
+        session: Some("stored".into()),
+    };
+    let mut composer = crate::composer::Composer::new();
+    composer.choose_reasoning(scope.clone(), Some("high".into()));
+    let stamp = composer.draft(&scope).unwrap().policy_stamp();
+    let prepared = Prepared::new(
+        &connection,
+        &scope,
+        SendInput {
+            text: "test message".into(),
+            reasoning: Some("high".into()),
+            reasoning_changed: true,
+            policy_stamp: Some(stamp.clone()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let journal = Journal::new(root.clone()).unwrap();
+    journal.save(&prepared).unwrap();
+    let prepared = journal.load(&prepared.submission_id).unwrap();
+    assert_eq!(prepared.input.policy_stamp.as_ref(), Some(&stamp));
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(4)))
+            .unwrap();
+        let mut ws = tungstenite::accept(stream).unwrap();
+        let resume = request(&mut ws, "session.resume");
+        let mut info = snapshot(true, 0);
+        info["info"]["model"] = json!("running-model");
+        info["info"]["provider"] = json!("running-provider");
+        info["info"]["reasoning_effort"] = json!("low");
+        answer(&mut ws, &resume, info);
+        history(&listener, json!([]));
+        let mutation = request(&mut ws, "session.mutate");
+        assert_eq!(mutation["params"]["operation"], "reasoning");
+        assert_eq!(mutation["params"]["payload"], json!({"effort":"high"}));
+        answer(
+            &mut ws,
+            &mutation,
+            json!({"session_id":"live","operation":"reasoning","status":"deferred","revision":2,"execution_generation":1,"effort":"high"}),
+        );
+        let first_submit = request(&mut ws, "prompt.submit");
+        drop(ws);
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(4)))
+            .unwrap();
+        let mut ws = tungstenite::accept(stream).unwrap();
+        let resume = request(&mut ws, "session.resume");
+        let mut info = snapshot(true, 0);
+        info["info"]["model"] = json!("running-model");
+        info["info"]["provider"] = json!("running-provider");
+        info["info"]["reasoning_effort"] = json!("low");
+        answer(&mut ws, &resume, info);
+        history(&listener, json!([]));
+        // A completed deferred mutation is projected from its retained receipt;
+        // only the exact unknown prompt is retried, never the policy mutation.
+        let submit = request(&mut ws, "prompt.submit");
+        assert_eq!(submit["params"], first_submit["params"]);
+        answer(
+            &mut ws,
+            &submit,
+            json!({"admission_id":"queued-policy","ref":{"profile_id":"fixture-profile","session_id":"live"},"status":"queued","sequence":1,"execution_generation":null,"authority_epoch":7}),
+        );
+    });
+    let submission = prepared.submission_id.clone();
+    let (mut first, _) = worker(connection.clone(), scope.clone());
+    assert!(first.submit(prepared, &journal).unwrap_err().uncertain);
+    let recovered = journal.load(&submission).unwrap();
+    assert_eq!(
+        recovered.mutations[0].receipt.as_ref().unwrap()["status"],
+        "deferred"
+    );
+    let (mut worker, replies) = worker(connection, scope.clone());
+    worker.submit(recovered, &journal).unwrap();
+    // The original receipt has arrived in the worker queue, but a later input owns the UI now.
+    composer.choose_reasoning(scope.clone(), Some("low".into()));
+    composer.choose_reasoning(scope.clone(), Some("high".into()));
+    let mut manager = Conversation::new();
+    for reply in replies.try_iter() {
+        manager.replies.send(reply).unwrap();
+    }
+    let updates = manager.poll();
+    let policy = &manager.view(&scope).unwrap().policy;
+    assert_eq!(policy.reasoning.as_deref(), Some("low"));
+    assert_eq!(policy.next_reasoning(), Some("high"));
+    assert_eq!(policy.model.as_deref(), Some("running-model"));
+    let mut observed = false;
+    for update in updates {
+        if let Update::Admitted {
+            policy_stamp,
+            policy_fields,
+            ..
+        } = update
+        {
+            observed = true;
+            assert_eq!(policy_stamp.as_ref(), Some(&stamp));
+            assert!(policy_fields.reasoning);
+            assert!(!composer.settle_policy(&scope, policy_stamp.as_ref().unwrap(), policy_fields));
+        }
+    }
+    assert!(observed);
+    composer.reconcile_policy(&scope, policy);
+    assert!(composer.draft(&scope).unwrap().reasoning_changed);
+    assert_eq!(
+        composer.draft(&scope).unwrap().reasoning.as_deref(),
+        Some("high")
+    );
+    server.join().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn live_session_info_updates_clean_fields_without_inventing_a_missing_provider() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let connection = Connection::Url {
+        endpoint: format!("http://{}", listener.local_addr().unwrap()),
+        token: Some("synthetic-token".into()),
+    };
+    let scope = DraftScope {
+        connection: 1,
+        profile: "work".into(),
+        session: Some("stored".into()),
+    };
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut ws = tungstenite::accept(stream).unwrap();
+        let resume = request(&mut ws, "session.resume");
+        let mut initial = snapshot(true, 0);
+        initial["info"]["model"] = json!("old");
+        initial["info"]["provider"] = json!("old-route");
+        initial["info"]["reasoning_effort"] = json!("low");
+        answer(&mut ws, &resume, initial);
+        history(&listener, json!([]));
+        event(
+            &mut ws,
+            1,
+            "session.info",
+            json!({"model":"unlisted-current","reasoning_effort":"ultra","reasoning_effort_wire":"max","service_tier":"normal","yolo":false}),
+        );
+    });
+    let (mut worker, replies) = worker(connection, scope.clone());
+    worker.attach().unwrap();
+    let event = worker.transport().unwrap().read_event().unwrap().unwrap();
+    worker.event(event).unwrap();
+    let mut conversation = Conversation::new();
+    for reply in replies.try_iter() {
+        conversation.replies.send(reply).unwrap();
+    }
+    conversation.poll();
+    let policy = &conversation.view(&scope).unwrap().policy;
+    assert_eq!(policy.model.as_deref(), Some("unlisted-current"));
+    assert!(policy.provider.is_none());
+    assert_eq!(policy.reasoning_wire.as_deref(), Some("max"));
+    assert!(policy.approval_mode.is_none());
+    let mut composer = crate::composer::Composer::new();
+    composer.choose_approval(scope.clone(), Some("smart".into()));
+    composer.reconcile_policy(&scope, policy);
+    assert_eq!(composer.model_name(&scope), Some("unlisted-current"));
+    assert!(composer.effective_model_key(&scope).is_none());
+    assert_eq!(
+        composer.draft(&scope).unwrap().reasoning.as_deref(),
+        Some("ultra")
+    );
+    assert!(composer.draft(&scope).unwrap().approval_changed);
+    server.join().unwrap();
+}

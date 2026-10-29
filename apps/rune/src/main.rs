@@ -15,10 +15,12 @@ mod identities;
 mod layout;
 mod media;
 mod native_fs;
+mod notifications;
 mod oauth;
 mod operations;
 mod pages;
 mod plugin_host;
+mod preview;
 mod review;
 mod sidebar;
 mod subagents;
@@ -30,6 +32,9 @@ use app::Viewer;
 use rune::{AppSpec, Chrome};
 
 fn main() {
+    if preview::run_if_proof_mode() {
+        return;
+    }
     if subagents::run_if_window_mode() {
         return;
     }
@@ -84,15 +89,19 @@ fn main() {
     };
     let application = rune::App::new(spec)
         .on_ime(view::terminal::on_ime)
+        .on_focus(app::on_focus)
         .chrome(Chrome {
             full_size_content: true,
             traffic_lights: Some((16.0, 16.0)),
             drag_regions: true,
         });
     let handle = application.handle();
+    let native_window = handle.clone();
     application
         .on_ready(move |_| {
-            handle.update(|s, tx| {
+            let native_window = native_window.clone();
+            handle.update(move |s, tx| {
+                s.native_window = Some(native_window);
                 s.begin();
                 tx.instant();
             })

@@ -243,7 +243,7 @@ impl Artifacts {
                 return self.ensure_thumbnails();
             }
             Action::NativeOpen => return self.native_open(),
-            Action::OpenChat(_) => {}
+            Action::OpenChat(_) | Action::Inspect => {}
         }
         vec![]
     }

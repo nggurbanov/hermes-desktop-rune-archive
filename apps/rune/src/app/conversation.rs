@@ -1,6 +1,8 @@
 use super::*;
 #[path = "conversation/chat.rs"]
 mod chat;
+#[path = "conversation/policy.rs"]
+mod policy;
 use crate::conversation::{AttachmentInput, SendInput, Update};
 impl Viewer {
     pub fn new_draft(&mut self) {
@@ -68,6 +70,7 @@ impl Viewer {
         };
         let input = SendInput {
             replay,
+            policy_stamp: Some(draft.policy_stamp()),
             canonical_bot: self.bot_empty,
             mode: self.admission_mode,
             text: draft.text.text.clone(),
@@ -158,9 +161,22 @@ impl Viewer {
     }
     pub fn poll_conversations(&mut self) -> bool {
         let updates = self.conversation.poll();
-        let changed = !updates.is_empty();
+        let mut changed = !updates.is_empty();
         for update in updates {
             match update {
+                Update::ProfileApprovalSet { scope, mode } => {
+                    self.client_settings.confirm_approval_mode(&scope, &mode);
+                    let effects = self.client_settings.refresh();
+                    self.page_requests(effects);
+                }
+                Update::StreamOpened { scope } => self.notifications.stream_opened(&scope),
+                Update::NoticeEvent {
+                    scope,
+                    kind,
+                    payload,
+                    runtime,
+                    replay,
+                } => self.notification_event(&scope, &kind, &payload, &runtime, replay),
                 Update::AgentEvent {
                     scope,
                     kind,
@@ -168,6 +184,9 @@ impl Viewer {
                 } => {
                     self.terminal.agent_event(&scope, &kind, &payload);
                     self.subagents.event(&scope, &kind, &payload);
+                    if kind == "session.updated" {
+                        self.chat_policy_event(&scope, &payload);
+                    }
                 }
                 Update::Bound { origin, stored } => {
                     let destination = DraftScope {
@@ -235,6 +254,9 @@ impl Viewer {
                 }
                 Update::Changed { scope } => {
                     if let Some(view) = self.conversation.view(&scope) {
+                        self.composer.reconcile_policy(&scope, &view.policy);
+                    }
+                    if let Some(view) = self.conversation.view(&scope) {
                         let previous = self
                             .review_completions
                             .insert(scope.clone(), view.completion);
@@ -258,6 +280,8 @@ impl Viewer {
                     scope,
                     submission_id,
                     restored_replay,
+                    policy_stamp,
+                    policy_fields,
                     ..
                 } => {
                     if let Some(replay) = restored_replay {
@@ -276,20 +300,12 @@ impl Viewer {
                             );
                         }
                     }
-                    if let Some(sent) = self.policy_sends.remove(&submission_id) {
-                        let draft = self.composer.draft_mut(scope.clone());
-                        if draft.model == sent.model {
-                            draft.model_changed = false;
-                        }
-                        if draft.reasoning == sent.reasoning {
-                            draft.reasoning_changed = false;
-                        }
-                        if draft.service_tier == sent.service_tier {
-                            draft.service_tier_changed = false;
-                        }
-                        if draft.approval_mode == sent.approval_mode {
-                            draft.approval_changed = false;
-                        }
+                    self.policy_sends.remove(&submission_id);
+                    if let Some(stamp) = &policy_stamp {
+                        self.composer.settle_policy(&scope, stamp, policy_fields);
+                    }
+                    if let Some(view) = self.conversation.view(&scope) {
+                        self.composer.reconcile_policy(&scope, &view.policy);
                     }
                     self.recovery_scope = None;
                     if scope == self.composer_scope() {
@@ -331,6 +347,7 @@ impl Viewer {
             self.recovery_scope = Some(scope.clone());
             self.refresh_recoverable();
         }
+        changed |= self.poll_policy();
         changed
     }
 }
@@ -364,7 +381,12 @@ impl Viewer {
             return;
         }
         if let Some(connection) = self.connection.clone() {
-            if let Err(error) = self.conversation.confirm_model(connection, scope, &id) {
+            if let Err(error) = self.conversation.confirm_model(
+                connection,
+                scope.clone(),
+                &id,
+                self.composer.draft(&scope).map(|d| d.policy_stamp()),
+            ) {
                 self.compose_error = Some(error);
             }
         }

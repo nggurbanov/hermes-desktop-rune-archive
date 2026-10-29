@@ -43,6 +43,8 @@ struct BotOpen {
 }
 
 pub struct Viewer {
+    pub notifications: crate::notifications::Notifications,
+    pub(crate) native_window: Option<rune::AppHandle<Viewer>>,
     pub route: crate::pages::Route,
     pub conversation: crate::conversation::Conversation,
     pub chat: crate::chat::Chat,
@@ -53,6 +55,8 @@ pub struct Viewer {
     plugin_navigation: Vec<plugin_actions::PluginNavigation>,
     pub connections: crate::connections::Connections,
     pub files: crate::files::Files,
+    pub preview: crate::preview::Service,
+    preview_return: Option<crate::pages::Route>,
     pub identities: crate::identities::Identities,
     pub directories: crate::directories::Directories,
     pub terminal: crate::terminal::Terminal,
@@ -195,12 +199,16 @@ enum Update {
 impl Viewer {
     fn empty() -> Self {
         Self {
+            notifications: crate::notifications::Notifications::new(),
+            native_window: None,
             route: crate::pages::Route::Chat,
             conversation: crate::conversation::Conversation::new(),
             chat: crate::chat::Chat::new(),
             subagents: crate::subagents::Subagents::new(),
             connections: crate::connections::Connections::new(),
             files: crate::files::Files::new(),
+            preview: crate::preview::Service::new(),
+            preview_return: None,
             identities: Default::default(),
             directories: Default::default(),
             terminal: crate::terminal::Terminal::new(),
@@ -399,6 +407,7 @@ impl Viewer {
     pub fn begin(&mut self) {
         if !self.fixture {
             self.client_settings.load();
+            self.notifications.load();
         }
         if !self.fixture && self.connection.is_some() {
             self.reconnect();
@@ -410,6 +419,7 @@ impl Viewer {
             self.change_connection();
             return;
         };
+        self.bind_notifications(&connection);
         self.endpoint_label = connection_label(&connection);
         self.loading = true;
         self.error = None;
@@ -466,6 +476,8 @@ impl Viewer {
         if !self.allow_owner_change("") {
             return;
         }
+        self.preview.close_connection(self.connection_epoch);
+        self.preview_return = None;
         self.chat.close_connection(self.connection_epoch);
         self.subagents.close_connection(self.connection_epoch);
         self.conversation.close_connection(self.connection_epoch);
@@ -1045,6 +1057,9 @@ impl Viewer {
 }
 
 pub fn setup(s: &mut Viewer, waker: Waker) {
+    if !s.fixture {
+        s.notifications.start(waker.clone(), true);
+    }
     s.composer.init_network(waker.clone());
     s.conversation.init(waker.clone());
     s.subagents.init(waker.clone());
@@ -1052,6 +1067,7 @@ pub fn setup(s: &mut Viewer, waker: Waker) {
     s.audio.init(waker.clone());
     s.operations.init(waker.clone());
     s.files.init(waker.clone());
+    s.preview.init(waker.clone());
     s.identities.init(waker.clone());
     if !s.fixture {
         s.terminal.init(waker.clone());
@@ -1221,7 +1237,10 @@ pub fn poll(s: &mut Viewer, now: f64, tx: &mut Tx) -> bool {
     if let Some(delay) = s.subagents.wake_after() {
         tx.wake_after(delay);
     }
-    let pages_changed = subagents_changed
+    let notification_changes = s.poll_notifications();
+    let pages_changed = notification_changes
+        | s.poll_preview()
+        | subagents_changed
         | timer_changed
         | s.poll_chat(tx)
         | s.poll_pages(now)
@@ -1686,3 +1705,13 @@ pub fn review_scene(s: &mut Viewer) {
 
 #[path = "app/decks.rs"]
 mod deck_actions;
+
+#[path = "app/notifications.rs"]
+mod notification_actions;
+pub fn on_focus(s: &mut Viewer, focused: bool, tx: &mut Tx) {
+    s.notifications.set_focus(focused);
+    if !focused {
+        s.client_settings.capture = None;
+    }
+    tx.instant();
+}

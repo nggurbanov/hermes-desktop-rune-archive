@@ -1,13 +1,14 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync, rmSync, mkdirSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const app = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const binary = process.argv[2] || path.join(app, 'target/debug', process.platform === 'win32' ? 'hermes-rune.exe' : 'hermes-rune')
-const out = mkdtempSync(path.join(os.tmpdir(), 'hermes-composer-'))
+const out = process.env.HERMES_SCREEN_EVIDENCE || mkdtempSync(path.join(os.tmpdir(), 'hermes-composer-'))
+mkdirSync(out, { recursive: true })
 const env = { ...process.env, HOME: out, USERPROFILE: out, HERMES_HOME: path.join(out, 'agent'), HERMES_GATEWAY_TOKEN: '' }
 let passed = false
 const tap = (key, t) => ({ type: 'tap', key, t })
@@ -64,10 +65,10 @@ try {
   const shortcut = render('model-shortcut', { scene: 'models', events: [key('2', .1, { cmd: true })] })
   assert.ok(!get(shortcut, 'model-picker'))
   assert.ok(text(shortcut, '4.1'))
-  const settings = render('draft-settings', { events: [tap('model-settings-trigger', .1), tap('effort-ultra', .3), tap('tier-priority', .5),  tap('approval-off', 1.1)] })
+  const settings = render('draft-settings', { events: [tap('model-settings-trigger', .1), tap('effort-ultra', .3), tap('tier-priority', .5), { type: 'scroll', key: 'model-settings-menu', dy: -700, dur: .2, t: .7 }, tap('approval-off', 1.1)] })
   assert.ok(text(settings, '5 Ultra'))
   assert.ok(get(settings, 'model-settings-menu') && get(settings, 'permissions-selector'))
-  assert.ok(text(settings, 'Full access'))
+  assert.ok(text(settings, 'Off'))
   const voice = render('voice-fan', { events: [{ type: 'move', key: 'voice-fan', t: .1 }] })
   assert.ok(get(voice, 'voice-speak'))
   assert.ok(get(voice, 'voice-wake'))
@@ -83,12 +84,12 @@ try {
   const shortSettings = render('short-dark-settings', { scene: 'reasoning', theme: 'dark', size: '1024x520', events: [{ type: 'scroll', key: 'model-settings-menu', dy: -700, dur: .25, t: .1 }, tap('approval-off', .6)] })
   const settingsRect = get(shortSettings, 'model-settings-menu').rect
   assert.ok(settingsRect[0] >= 0 && settingsRect[1] >= 0 && settingsRect[0] + settingsRect[2] <= 1025 && settingsRect[1] + settingsRect[3] <= 521, 'combined settings stays inside a short window')
-  assert.ok(text(shortSettings, 'Full access'), 'scrolling reaches permissions in a short window')
+  assert.ok(text(shortSettings, 'Off'), 'scrolling reaches permissions in a short window')
   const settingsEscape = render('settings-escape', { scene: 'reasoning', events: [key('Escape', .1)] })
   assert.ok(!get(settingsEscape, 'model-settings-menu') && get(settingsEscape, 'model-settings-trigger'))
   console.log('Passed 19 native composer checks: form, voice primary/engine status/unknown/Escape/short-window, autofocus search, filtered physical Enter, provider filter, favorites, keyboard selection, shortcuts, draft settings, voice fan, Escape, file dialog and short-window dark appearance')
   passed = true
 } finally {
-  if (passed) rmSync(out, { recursive: true, force: true })
+  if (passed && !process.env.HERMES_SCREEN_EVIDENCE) rmSync(out, { recursive: true, force: true })
   else console.error(`Synthetic composer evidence: ${out}`)
 }

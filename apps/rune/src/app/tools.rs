@@ -210,6 +210,7 @@ impl Viewer {
                     text: prompt,
                     cwd: Some(cwd),
                     cwd_explicit: true,
+                    policy_stamp: Some(draft.policy_stamp()),
                     model: draft.model.clone(),
                     reasoning: draft.reasoning.clone(),
                     service_tier: draft.service_tier.clone(),

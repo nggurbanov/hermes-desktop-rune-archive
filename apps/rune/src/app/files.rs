@@ -4,7 +4,52 @@ use crate::{
     pages::{PageRequest, Route},
 };
 impl Viewer {
+    pub(super) fn poll_preview(&mut self) -> bool {
+        let mut changed = self.preview.poll();
+        if self.preview.active().is_none() && self.route == Route::FilePreview {
+            if let Some(route) = self.preview_return.take() {
+                self.route = route;
+                self.reveal_pane("workspace");
+                changed = true;
+            }
+        }
+        changed
+    }
     pub fn files_action(&mut self, action: Action) {
+        if let Action::Open(path) = &action {
+            let busy = self
+                .files
+                .editor
+                .as_ref()
+                .is_some_and(|e| e.dirty() || e.busy);
+            if !busy {
+                if let Some(kind) =
+                    crate::preview::Kind::for_path(path).filter(|kind| kind.available())
+                {
+                    if let (Some(owner), Some(connection)) =
+                        (self.files.owner.clone(), self.connection.clone())
+                    {
+                        if !self.fixture && owner == self.composer_scope() {
+                            self.preview.open(
+                                connection,
+                                crate::preview::Target {
+                                    owner,
+                                    source: crate::preview::Source::AgentPath(path.clone()),
+                                    label: path.rsplit('/').next().unwrap_or(path).into(),
+                                    kind,
+                                },
+                            );
+                            if self.route != Route::FilePreview {
+                                self.preview_return = Some(self.route);
+                            }
+                            self.open_route(Route::FilePreview);
+                            return;
+                        }
+                    }
+                }
+                self.preview.close();
+            }
+        }
         if matches!(action, Action::Open(_))
             && !self
                 .files
@@ -100,5 +145,82 @@ impl Viewer {
             self.composer.draft_mut(scope).text.insert(&contents);
             self.open_route(Route::Chat);
         }
+    }
+}
+
+impl Viewer {
+    pub fn preview_artifact(&mut self, artifact: crate::pages::artifacts::Artifact) {
+        if self.fixture || self.artifacts.demo {
+            return;
+        }
+        let Some(connection) = self.connection.clone() else {
+            return;
+        };
+        let kind = if artifact.kind == "image" {
+            Some(crate::preview::Kind::Image)
+        } else {
+            crate::preview::Kind::for_path(&artifact.value)
+        };
+        let Some(kind) = kind.filter(|kind| kind.available()) else {
+            return;
+        };
+        let source = if artifact.value.starts_with("data:") {
+            let Some((_, bytes)) = &self.artifacts.download else {
+                return;
+            };
+            crate::preview::Source::Inline {
+                mime: self.artifacts.mime.clone(),
+                bytes: bytes.clone().into(),
+            }
+        } else if artifact.value.starts_with("https://") || artifact.value.starts_with("http://") {
+            crate::preview::Source::RemoteUrl(artifact.value)
+        } else {
+            crate::preview::Source::AgentPath(artifact.value)
+        };
+        self.preview.open(
+            connection,
+            crate::preview::Target {
+                owner: DraftScope {
+                    connection: self.connection_epoch,
+                    profile: artifact.profile,
+                    session: Some(artifact.session),
+                },
+                source,
+                label: artifact.label,
+                kind,
+            },
+        );
+        if self.route != Route::FilePreview {
+            self.preview_return = Some(self.route);
+        }
+        self.open_route(Route::FilePreview);
+    }
+}
+
+#[cfg(test)]
+mod preview_return_tests {
+    use super::*;
+    #[test]
+    fn closing_an_image_returns_to_the_existing_artifact_selection_without_reindexing() {
+        let mut s = Viewer::empty();
+        s.fixture = true;
+        s.artifacts.rows.push(crate::pages::artifacts::Artifact {
+            kind: "image".into(),
+            value: "/agent/source.png".into(),
+            label: "Keep this selected image".into(),
+            session: "stored".into(),
+            profile: "default".into(),
+            title: "Original conversation".into(),
+            timestamp: 0,
+        });
+        s.artifacts.selected = Some(0);
+        s.preview_return = Some(Route::Artifacts);
+        s.route = Route::FilePreview;
+        assert!(s.poll_preview());
+        assert!(s.route == Route::Artifacts);
+        assert_eq!(s.artifacts.selected, Some(0));
+        assert_eq!(s.artifacts.rows[0].label, "Keep this selected image");
+        assert!(!s.artifacts.loading);
+        assert!(!s.poll_preview());
     }
 }

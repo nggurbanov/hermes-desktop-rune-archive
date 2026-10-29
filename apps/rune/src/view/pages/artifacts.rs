@@ -15,7 +15,7 @@ fn btn(s: &Viewer, label: impl Into<String>, action: Action, disabled: bool, k: 
         Action::Select(i) | Action::OpenChat(i) | Action::RetryThumbnail(i) => {
             s.artifacts.rows.get(i).map(|a| (i, a.key()))
         }
-        Action::NativeOpen | Action::LoadFile => s
+        Action::NativeOpen | Action::LoadFile | Action::Inspect => s
             .artifacts
             .selected
             .and_then(|i| s.artifacts.rows.get(i).map(|a| (i, a.key()))),
@@ -29,6 +29,7 @@ fn btn(s: &Viewer, label: impl Into<String>, action: Action, disabled: bool, k: 
             | Action::RetryThumbnail(_)
             | Action::LoadFile
             | Action::NativeOpen
+            | Action::Inspect
     );
     Button::new(label)
         .variant(ButtonVariant::Ghost)

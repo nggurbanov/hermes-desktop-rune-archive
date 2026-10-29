@@ -15,7 +15,7 @@ impl Worker {
         let index = if let Some(i) = entry.mutations.iter().position(|m| m.operation == "rewind") {
             i
         } else {
-            entry.mutations.push(Mutation{operation:"rewind".into(),complete:false,confirmation:None,refused:false,params:json!({"session_id":snapshot.runtime,"request_id":uuid::Uuid::new_v4().to_string(),"expected_revision":rewrite.revision,"expected_generation":rewrite.generation,"operation":"rewind","payload":{"target_message_id":rewrite.target}})});
+            entry.mutations.push(Mutation{receipt:None,operation:"rewind".into(),complete:false,confirmation:None,refused:false,params:json!({"session_id":snapshot.runtime,"request_id":uuid::Uuid::new_v4().to_string(),"expected_revision":rewrite.revision,"expected_generation":rewrite.generation,"operation":"rewind","payload":{"target_message_id":rewrite.target}})});
             journal.save(entry)?;
             entry.mutations.len() - 1
         };

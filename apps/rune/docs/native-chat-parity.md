@@ -98,6 +98,46 @@ The native transcript also consumes confirmed font/scale, bubble transparency,
 timestamps and reasoning/tool disclosure preferences. Explicit manual closes
 remain distinguishable from default-open preferences.
 
+## Authoritative policy increment
+
+Session snapshots, recovered snapshots, accepted `session.info` and canonical
+model/reasoning mutation receipts now project explicit owner policy. Requested
+reasoning and the route's actual wire level remain separate. Missing provider
+metadata never reuses a different route's provider; an unlisted current model
+still appears in the footer without fabricating a selectable catalog row.
+Accepted deferred model/effort/tier choices belong to the next message while
+observed session facts remain available separately. A refused deferred model
+returns to committed facts. Canonical deferred guard events use the retained
+model-confirmation surface, including explicit cancellation and newer-intent
+and execution-fence checks.
+
+Every draft has a persisted UUID and independent model/reasoning/tier/approval
+user revisions. Send and slash intents capture those stamps before asynchronous
+work. Admission acknowledgement clears only the exact captured field revision
+of the same draft: A→B→A, another existing destination draft, delayed skill
+expansion and restored journals cannot acknowledge newer intent. Old journals
+without a stamp never clear dirty fields. Completed canonical policy receipts
+are retained in the prepared-send journal so an explicit retry after a lost
+prompt acknowledgement restores accepted deferred presentation without issuing
+another policy mutation. Versionless profile settings are read back on recovery.
+
+Clean fields follow accepted authority; dirty fields retain user intent.
+Profile approval mode comes from the exact owner's confirmed configuration or
+verified write/readback, independently of session YOLO and ACP edit policy.
+Verified approval writes supersede older configuration reads and reconcile
+other sessions of the same connection/profile. The independent conversation
+bypass switch uses a retained exact session `config.set key=yolo` value without
+`scope`, never a profile-mode write or a prompt. Canonical readback confirms the
+session flag; legacy uses its exact session ACK and an owned snapshot because
+there is no legacy YOLO getter. A legacy process/profile override that still
+reports bypass active remains displayed with a failure message. Unknown outcomes
+require explicit recovery; canonical recovery reads current state rather than
+replaying a write over another client's possible later choice. Accepted notification cues are
+emitted after runtime, replay epoch, sequence, authority and generation fences;
+replay is explicit, and approval actions retain the actual prompt's generation
+and offered choices. Socket-open cues describe real transport opens rather than
+history hydration.
+
 ## Remaining parity work
 
 - Provider/Codex sidecar detail reconstruction and folding are not exhaustive;
@@ -111,9 +151,12 @@ remain distinguishable from default-open preferences.
   gateway. Legacy mutating history paths need equivalent safe acceptance.
   Supported image/file turns replay from frozen originals; unsupported opaque
   provider content is refused before changing history.
-- Session model/provider picker labels still need complete synchronization from
-  authoritative session metadata after external policy edits. Confirmed slash
-  mutations reconnect their session, while draft choices retain their own scope.
+- A fully acknowledged deferred pick is not exposed by the current canonical
+  resume snapshot before its next-turn claim. After a fresh app restart with no
+  unresolved send journal, the client shows the owner's observed route until the
+  pick applies; it cannot prove a cached pick still wins over other clients.
+  Legacy snapshots can report a pending selection instead of a running route,
+  so the UI labels those facts as agent-reported rather than proven execution.
 - The full slash local-action set, specialized session/theme inline pickers,
   fuzzy skill ranking and group presentation still need parity. Canonical
   model/reasoning/compress/branch/title directives, live aliases, shared fallback

@@ -312,6 +312,31 @@ impl ClientSettings {
             self.config = value.clone();
         }
     }
+    pub fn confirmed_approval_mode(&self, owner: &DraftScope) -> Option<String> {
+        if !self.owner.as_ref().is_some_and(|current| {
+            current.connection == owner.connection && current.profile == owner.profile
+        }) {
+            return None;
+        }
+        self.config
+            .pointer("/approvals/mode")
+            .and_then(Value::as_str)
+            .filter(|mode| matches!(*mode, "manual" | "smart" | "off"))
+            .map(str::to_owned)
+    }
+    pub fn confirm_approval_mode(&mut self, owner: &DraftScope, mode: &str) {
+        if !self.owner.as_ref().is_some_and(|current| {
+            current.connection == owner.connection && current.profile == owner.profile
+        }) {
+            return;
+        }
+        if let Some(root) = self.config.as_object_mut() {
+            let approvals = root.entry("approvals").or_insert_with(|| json!({}));
+            if let Some(approvals) = approvals.as_object_mut() {
+                approvals.insert("mode".into(), json!(mode));
+            }
+        }
+    }
     pub fn theme_kit(&self, base: &rune_kit::Kit) -> rune_kit::Kit {
         let mut k = base.clone();
         let family = self.chat_family();

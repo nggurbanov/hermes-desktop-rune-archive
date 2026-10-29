@@ -12,6 +12,13 @@ impl ConversationView {
         let same_authority = self.authority == snapshot.authority && self.stored == snapshot.stored;
         self.canonical = snapshot.canonical;
         self.metadata = snapshot.metadata.clone();
+        let deferred = (self.stored == snapshot.stored)
+            .then(|| self.policy.deferred.take())
+            .flatten();
+        self.policy = SessionPolicy::from_info(&snapshot.info);
+        self.policy.deferred = deferred;
+        self.policy.info(&snapshot.info);
+        self.policy_sequence = snapshot.sequence;
         self.title = snapshot
             .info
             .get("title")
@@ -164,24 +171,51 @@ impl ConversationView {
         if event.authority.is_some_and(|epoch| epoch < self.authority) {
             return false;
         }
+        if event
+            .generation
+            .is_some_and(|generation| generation < self.generation)
+        {
+            return false;
+        }
+        if event.sequence.is_some_and(|seq| seq <= self.last_sequence) {
+            return false;
+        }
         if let Some(authority) = event.authority {
             self.authority = authority;
         }
         if let Some(seq) = event.sequence {
-            if seq <= self.last_sequence {
-                return false;
-            }
             self.last_sequence = seq;
         }
         if let Some(generation) = event.generation {
-            if generation < self.generation {
-                return false;
-            }
             self.generation = generation;
         }
         let p = &event.payload;
         match event.kind.as_str() {
+            "session.info" => {
+                if event.sequence.is_none_or(|seq| seq >= self.policy_sequence) {
+                    self.policy.info(p.get("info").unwrap_or(p));
+                    if let Some(seq) = event.sequence {
+                        self.policy_sequence = seq;
+                    }
+                    if !self.metadata.is_object() {
+                        self.metadata = serde_json::json!({});
+                    }
+                    if !self.metadata["info"].is_object() {
+                        self.metadata["info"] = serde_json::json!({});
+                    }
+                    if let Some(info) = p.get("info").unwrap_or(p).as_object() {
+                        self.metadata["info"]
+                            .as_object_mut()
+                            .unwrap()
+                            .extend(info.clone());
+                    }
+                    if let Some(cwd) = p.get("cwd").and_then(Value::as_str) {
+                        self.cwd = Some(cwd.into());
+                    }
+                }
+            }
             "message.start" => {
+                self.policy.turn_started();
                 self.activities.clear();
                 self.reasoning.clear();
                 self.tools.clear();
@@ -474,6 +508,22 @@ impl ConversationView {
                 }
             }
             "session.updated" => {
+                let fresh_policy = event.sequence.is_none_or(|seq| seq >= self.policy_sequence)
+                    && p["revision"]
+                        .as_u64()
+                        .is_none_or(|revision| revision >= self.revision);
+                if !fresh_policy {
+                    return true;
+                }
+                if fresh_policy {
+                    self.policy.receipt(p, &Value::Null, None);
+                    if let Some(info) = p.get("info") {
+                        self.policy.info(info);
+                    }
+                    if let Some(seq) = event.sequence {
+                        self.policy_sequence = seq;
+                    }
+                }
                 if let Some(info) = p.get("info").and_then(Value::as_object) {
                     if !self.metadata.is_object() {
                         self.metadata = serde_json::json!({});
@@ -498,7 +548,7 @@ impl ConversationView {
                     }
                 }
                 if let Some(revision) = p.get("revision").and_then(Value::as_u64) {
-                    self.revision = revision;
+                    self.revision = self.revision.max(revision);
                 }
             }
             "error" => {

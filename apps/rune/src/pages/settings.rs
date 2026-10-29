@@ -724,6 +724,7 @@ impl Settings {
             ("chat".into(), "Chat".into()),
             ("appearance".into(), "Appearance".into()),
             ("connections".into(), "Connections".into()),
+            ("notifications".into(), "Notifications".into()),
             ("workspace".into(), "Workspace".into()),
             ("safety".into(), "Safety".into()),
             ("browser".into(), "Browser".into()),

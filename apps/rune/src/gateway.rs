@@ -21,6 +21,7 @@ mod local;
 mod pages;
 pub(crate) mod plugin;
 pub(crate) mod sidebar;
+pub(crate) mod stream;
 pub(crate) mod terminal;
 mod voice;
 pub use catalog::{CatalogModel, ModelCapabilities, ModelCatalog, ModelProvider};

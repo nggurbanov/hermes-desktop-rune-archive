@@ -10,6 +10,10 @@ struct State {
 }
 #[derive(Serialize, Deserialize)]
 struct SavedDraft {
+    #[serde(default)]
+    policy_id: String,
+    #[serde(default)]
+    policy_revisions: PolicyRevisions,
     profile: String,
     session: Option<String>,
     text: String,
@@ -58,13 +62,13 @@ impl Composer {
         };
         let state: State = if bytes.is_empty() {
             State {
-                version: 2,
+                version: 3,
                 ..Default::default()
             }
         } else {
             let state: State = serde_json::from_slice(&bytes)
                 .map_err(|_| "Saved drafts are invalid; their file was retained")?;
-            if !matches!(state.version, 1 | 2) {
+            if !matches!(state.version, 1 | 2 | 3) {
                 return Err("Saved drafts use a newer client format".into());
             }
             state
@@ -76,6 +80,13 @@ impl Composer {
                 session: saved.session,
             };
             self.drafts.entry(scope).or_insert_with(|| Draft {
+                policy_id: if saved.policy_id.is_empty() {
+                    uuid::Uuid::new_v4().to_string()
+                } else {
+                    saved.policy_id
+                },
+                policy_revisions: saved.policy_revisions,
+                session_policy: Default::default(),
                 text: TextEdit::new(saved.text),
                 model: saved.model.map(|(provider, id)| ModelKey { provider, id }),
                 reasoning: saved.reasoning,
@@ -124,6 +135,8 @@ impl Composer {
             .iter()
             .filter(|(scope, _)| scope.connection == epoch)
             .map(|(scope, draft)| SavedDraft {
+                policy_id: draft.policy_id.clone(),
+                policy_revisions: draft.policy_revisions,
                 profile: scope.profile.clone(),
                 session: scope.session.clone(),
                 text: draft.text.text.clone(),
@@ -153,7 +166,7 @@ impl Composer {
             .collect();
         favorites.sort();
         serde_json::to_vec(&State {
-            version: 2,
+            version: 3,
             drafts,
             favorites,
         })
@@ -219,6 +232,8 @@ mod tests {
             profile: "work".into(),
             session: Some("stored".into()),
         };
+        composer.choose_reasoning(scope.clone(), Some("high".into()));
+        let stamp = composer.draft(&scope).unwrap().policy_stamp();
         let draft = composer.draft_mut(scope);
         draft.text.replace_text("Do the next step");
         draft.reasoning = Some("high".into());
@@ -243,6 +258,8 @@ mod tests {
         let state: State = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(state.drafts.len(), 1);
         assert_eq!(state.drafts[0].profile, "work");
+        assert_eq!(state.drafts[0].policy_id, stamp.draft_id);
+        assert_eq!(state.drafts[0].policy_revisions, stamp.revisions);
         assert_eq!(state.drafts[0].text, "Do the next step");
         assert!(state.drafts[0].reasoning_changed);
         assert_eq!(
@@ -292,7 +309,7 @@ mod write_retry_tests {
         std::fs::remove_file(&blocked).unwrap();
         composer.poll_storage(1.5).unwrap();
         let saved: State = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        assert_eq!(saved.version, 2);
+        assert_eq!(saved.version, 3);
         assert_eq!(saved.drafts[0].text, "Keep this after the write failure");
         drop(composer);
         std::fs::remove_dir_all(root).unwrap();

@@ -1,5 +1,6 @@
 //! Canonical slash mutations retain their exact request and fences across lost replies.
 use super::*;
+mod bypass;
 use crate::gateway::conversation::{CallError, SessionTransport};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -16,6 +17,8 @@ pub struct SlashIntent {
     pub method: Option<String>,
     pub params: Value,
     pub attempted: bool,
+    #[serde(default)]
+    pub config_ack: Option<Value>,
     #[serde(default)]
     pub policy: crate::conversation::SendInput,
 }
@@ -39,7 +42,10 @@ impl SlashIntent {
         )
     }
     pub fn retryable(&self) -> bool {
-        self.method.as_deref() == Some("session.mutate")
+        self.method.as_deref() == Some("session.mutate") || self.session_bypass()
+    }
+    pub fn session_bypass(&self) -> bool {
+        self.method.as_deref() == Some("config.set") && self.params["key"] == "yolo"
     }
     fn verify(&self, connection: &Connection, owner: &DraftScope) -> Result<(), String> {
         if self.principal != crate::client::connection_key(connection)?
@@ -79,6 +85,7 @@ impl Chat {
             method: None,
             params: Value::Null,
             attempted: false,
+            config_ack: None,
             policy,
         };
         self.start_slash(connection, owner, intent)
@@ -312,6 +319,9 @@ fn execute(
     catalog: &Value,
     persist: &impl Fn(&SlashIntent) -> Result<(), String>,
 ) -> Result<Value, CallError> {
+    if intent.session_bypass() {
+        return bypass::execute(transport, intent, persist);
+    }
     if intent.attempted {
         if !intent.retryable() {
             return Err(unknown(
@@ -474,7 +484,7 @@ fn mutate(
     }
     let operation = intent.params["operation"].as_str().unwrap_or("command");
     Ok(
-        json!({"type":"exec","output":format!("{operation}: completed"),"mutation":value,"operation":operation}),
+        json!({"type":"exec","output":format!("{operation}: completed"),"mutation":value,"operation":operation,"policy_payload":intent.params["payload"]}),
     )
 }
 
@@ -513,6 +523,7 @@ mod tests {
             method: None,
             params: Value::Null,
             attempted: false,
+            config_ack: None,
             policy: Default::default(),
         }
     }
@@ -633,3 +644,7 @@ mod tests {
         server.join().unwrap();
     }
 }
+
+#[cfg(test)]
+#[path = "slash/bypass_tests.rs"]
+mod bypass_tests;

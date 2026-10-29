@@ -70,6 +70,7 @@ pub enum Action {
     FilePage(usize),
     RetryThumbnail(usize),
     NativeOpen,
+    Inspect,
     Zoom(f32),
     ClosePreview,
     Filter(String),
@@ -461,6 +462,7 @@ impl Viewer {
                 action,
                 Action::LoadFile
                     | Action::NativeOpen
+                    | Action::Inspect
                     | Action::Refresh
                     | Action::RetryFailed
                     | Action::RetrySession(_)
@@ -479,6 +481,17 @@ impl Viewer {
             if matches!(action, Action::Refresh) {
                 self.invalidate_page_requests("artifacts.thumb.");
             }
+        }
+        if matches!(action, Action::Inspect) {
+            if let Some(artifact) = self
+                .artifacts
+                .selected
+                .and_then(|i| self.artifacts.rows.get(i))
+                .cloned()
+            {
+                self.preview_artifact(artifact);
+            }
+            return;
         }
         if let Action::OpenChat(i) = action {
             if let Some(a) = self.artifacts.rows.get(i).cloned() {

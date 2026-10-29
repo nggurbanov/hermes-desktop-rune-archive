@@ -14,7 +14,13 @@ pub fn page(s: &Viewer, k: &Kit, layer: &mut Vec<El>) -> El {
         Route::Settings => settings::page(s, k, layer),
         Route::Bots => bots::page(s, k, layer),
         Route::Connections => super::connections::panel(s, k, layer),
-        Route::FilePreview => super::files::preview(s, k),
+        Route::FilePreview => {
+            if s.preview.active().is_some() {
+                super::preview::panel(s, k)
+            } else {
+                super::files::preview(s, k)
+            }
+        }
         Route::Capabilities => capabilities::page(s, k, layer),
         Route::Cron => cron::page(s, k, layer),
         Route::Messaging => messaging::page(s, k, layer),

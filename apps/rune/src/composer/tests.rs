@@ -135,7 +135,7 @@ fn stale_catalog_replies_cannot_cross_a_new_request_or_connection_owner() {
 fn catalog_defaults_never_replace_an_explicit_choice_or_seed_a_background_draft() {
     let mut composer = Composer::new();
     let requested = scope(1, "default", Some("one"));
-    let foreground = scope(1, "default", Some("two"));
+    let foreground = scope(1, "default", None);
     composer.pending = Some(Pending {
         id: 1,
         scope: requested.clone(),
@@ -219,4 +219,71 @@ fn chosen_attachment_previews_are_local_and_removal_never_deletes_the_file() {
     assert_eq!(composer.attachment_error.as_deref(), Some(error.as_str()));
     std::fs::remove_file(image).unwrap();
     std::fs::remove_dir(folder).unwrap();
+}
+
+#[test]
+fn a_profile_catalog_cannot_relabel_an_existing_session_or_ack_a_reselected_model() {
+    let mut composer = Composer::new();
+    let owner = scope(1, "default", Some("stored"));
+    composer.pending = Some(Pending {
+        id: 1,
+        scope: owner.clone(),
+    });
+    assert!(composer.apply_catalog_reply(
+        CatalogReply {
+            id: 1,
+            scope: owner.clone(),
+            result: Ok(ModelCatalog::from_value(&catalog_value()).unwrap())
+        },
+        &owner
+    ));
+    assert!(
+        composer
+            .draft(&owner)
+            .is_none_or(|draft| draft.model.is_none())
+    );
+    assert!(composer.model_name(&owner).is_none());
+    composer
+        .select_model(owner.clone(), model("reasoner"))
+        .unwrap();
+    let sent = composer.draft(&owner).unwrap().policy_stamp();
+    composer
+        .select_model(owner.clone(), model("reasoner"))
+        .unwrap();
+    assert!(!composer.settle_policy(
+        &owner,
+        &sent,
+        PolicyFields {
+            model: true,
+            ..Default::default()
+        }
+    ));
+    assert!(composer.draft(&owner).unwrap().model_changed);
+}
+
+#[test]
+fn observed_provider_aliases_must_resolve_uniquely_before_using_model_capabilities() {
+    let mut composer = Composer::new();
+    let owner = scope(1, "default", Some("stored"));
+    let mut value = catalog_value();
+    value["providers"][0]["aliases"] = json!(["shared", "unique"]);
+    value["providers"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"slug":"other", "name":"Other", "aliases":["shared"], "models":["reasoner"]}));
+    composer.fixture_catalog(owner.clone(), &value).unwrap();
+    let mut policy = crate::conversation::SessionPolicy {
+        model: Some("reasoner".into()),
+        provider: Some("shared".into()),
+        ..Default::default()
+    };
+    composer.reconcile_policy(&owner, &policy);
+    assert!(composer.selected_model(&owner).is_none());
+    assert_eq!(composer.model_name(&owner), Some("reasoner"));
+    policy.provider = Some("unique".into());
+    composer.reconcile_policy(&owner, &policy);
+    assert_eq!(composer.selected_model(&owner).unwrap().0.id, "configured");
+    policy.provider = Some("other".into());
+    composer.reconcile_policy(&owner, &policy);
+    assert_eq!(composer.selected_model(&owner).unwrap().0.id, "other");
 }

@@ -40,6 +40,9 @@ pub struct DraftAttachment {
 
 #[derive(Clone)]
 pub struct Draft {
+    pub policy_id: String,
+    pub policy_revisions: PolicyRevisions,
+    pub session_policy: crate::conversation::SessionPolicy,
     pub text: TextEdit,
     pub model: Option<ModelKey>,
     pub model_changed: bool,
@@ -58,6 +61,9 @@ pub struct Draft {
 impl Default for Draft {
     fn default() -> Self {
         Self {
+            policy_id: uuid::Uuid::new_v4().to_string(),
+            policy_revisions: PolicyRevisions::default(),
+            session_policy: crate::conversation::SessionPolicy::default(),
             text: TextEdit::new(""),
             model: None,
             model_changed: false,
@@ -83,6 +89,8 @@ pub enum Popup {
 }
 
 mod persistence;
+mod policy;
+pub use policy::{PolicyFields, PolicyRevisions, PolicyStamp};
 pub struct Composer {
     persisted: Option<persistence::Persistence>,
     storage_revision: u64,
@@ -247,7 +255,7 @@ impl Composer {
     }
 
     pub fn selected_model(&self, scope: &DraftScope) -> Option<(&ModelProvider, &CatalogModel)> {
-        let key = self.draft(scope)?.model.as_ref()?;
+        let key = self.effective_model_key(scope)?;
         find_model(self.catalog_for(scope)?, key)
     }
 
@@ -261,6 +269,7 @@ impl Composer {
         let draft = self.draft_mut(scope);
         draft.model = Some(key);
         draft.model_changed = true;
+        draft.policy_revisions.model += 1;
         if let Some(effort) = draft.reasoning.as_deref() {
             let supported = capabilities.as_ref().is_some_and(|caps| {
                 caps.reasoning == Some(true)
@@ -271,6 +280,8 @@ impl Composer {
             });
             if !supported {
                 draft.reasoning = None;
+                draft.reasoning_changed = true;
+                draft.policy_revisions.reasoning += 1;
             }
         }
         if let Some(tier) = draft.service_tier.as_deref() {
@@ -282,6 +293,8 @@ impl Composer {
                 });
             if !supported {
                 draft.service_tier = None;
+                draft.service_tier_changed = true;
+                draft.policy_revisions.tier += 1;
             }
         }
         self.close();
@@ -430,7 +443,13 @@ impl Composer {
         if self.images.is_none() {
             self.images = Some(ImageCache::new(Arc::new(|| {})));
         }
-        self.initialize_default_model(&scope);
+        self.initialize_profile_default(&scope);
+        if let Some(draft) = self.drafts.get_mut(&scope) {
+            if let Some(key) = &draft.model {
+                draft.session_policy.model = Some(key.id.clone());
+                draft.session_policy.provider = Some(key.provider.clone());
+            }
+        }
         Ok(())
     }
 
@@ -463,6 +482,13 @@ impl Composer {
     }
 
     fn initialize_default_model(&mut self, scope: &DraftScope) {
+        if scope.session.is_some() {
+            return;
+        }
+        self.initialize_profile_default(scope);
+    }
+
+    fn initialize_profile_default(&mut self, scope: &DraftScope) {
         if self.draft(scope).is_some_and(|draft| draft.model.is_some()) {
             return;
         }
@@ -473,23 +499,32 @@ impl Composer {
         else {
             return;
         };
-        let key = catalog
-            .providers
-            .iter()
-            .find(|row| row.matches(provider))
-            .and_then(|provider| {
-                provider
-                    .models
-                    .iter()
-                    .find(|row| row.id == *model && row.available)
-                    .map(|model| ModelKey {
-                        provider: provider.id.clone(),
-                        id: model.id.clone(),
-                    })
-            });
+        let key = resolve_provider(catalog, provider).and_then(|provider| {
+            provider
+                .models
+                .iter()
+                .find(|row| row.id == *model && row.available)
+                .map(|model| ModelKey {
+                    provider: provider.id.clone(),
+                    id: model.id.clone(),
+                })
+        });
         if let Some(key) = key {
             self.draft_mut(scope.clone()).model = Some(key);
         }
+    }
+}
+
+fn resolve_provider<'a>(catalog: &'a ModelCatalog, name: &str) -> Option<&'a ModelProvider> {
+    if let Some(provider) = catalog.providers.iter().find(|p| p.id == name) {
+        return Some(provider);
+    }
+    let mut aliases = catalog.providers.iter().filter(|p| p.matches(name));
+    let first = aliases.next()?;
+    if aliases.next().is_none() {
+        Some(first)
+    } else {
+        None
     }
 }
 
@@ -497,10 +532,7 @@ fn find_model<'a>(
     catalog: &'a ModelCatalog,
     key: &ModelKey,
 ) -> Option<(&'a ModelProvider, &'a CatalogModel)> {
-    let provider = catalog
-        .providers
-        .iter()
-        .find(|provider| provider.id == key.provider)?;
+    let provider = resolve_provider(catalog, &key.provider)?;
     let model = provider.models.iter().find(|model| model.id == key.id)?;
     Some((provider, model))
 }

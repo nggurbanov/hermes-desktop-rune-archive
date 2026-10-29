@@ -35,16 +35,19 @@ isolated temporary home and actual Rune controls/keyboard events.
 Full parity still requires the remaining original actions and contributed
 plugin keybindings, original cloud/fleet/global window actions, arbitrary
 installed/custom font handling, native zoom/text direction, translucency,
-custom themes/skins/marketplace, completion sound and native notification
-permission/click routing. Rune's current public Tx surface has no OS notification
-API; this increment exposes no enabled dummy notification or global-hotkey
-switch. Those platform integrations need real native services and OS acceptance.
+custom themes/skins/marketplace, completion sounds, complete native notification
+coverage and global hotkeys. The separate Linux notification adapter and its
+remaining platform/visibility limitations are documented in
+`native-notifications-parity.md`; these preferences keep their device authority.
 
-Verified 2026-10-29: all six behavior tests passed, and all 13 native interaction
-cases passed with a fresh binary. The native cases verify actual transcript
+Verified 2026-10-29: all six behavior tests passed, and all 15 native interaction
+cases passed against the immutable third-checkpoint binary. The native cases verify actual transcript
 geometry and bubble alpha, live reasoning folding, sidebar density, font
 controls, capture/rebinding/clear/reset/cancel/conflicts, and a shifted character
-still entering the draft without triggering its global action.
+still entering the draft without triggering its global action. Recording also
+survives an attempted click on the disabled search field and cancels when leaving
+the visible shortcut editor. Evidence: `/tmp/hermes-client-settings-third`, with
+`/tmp/hermes-client-settings-third.log`.
 
 Run from `apps/rune` after building:
 

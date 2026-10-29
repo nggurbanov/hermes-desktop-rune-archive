@@ -2,7 +2,7 @@
 use super::{Viewer, draft};
 use crate::composer::{DraftScope, Popup};
 use rune::{Color, El, Icon, ScrollSpec, col, el, icon, row, text};
-use rune_kit::{Button, ButtonVariant, IconButton, IconButtonVariant, Kit};
+use rune_kit::{Button, ButtonVariant, IconButton, IconButtonVariant, Kit, Switch};
 use rune_theme_opencode::icons as ic;
 
 static SLIDERS: Icon = Icon {
@@ -45,7 +45,7 @@ pub(super) fn model_trigger(s: &Viewer, k: &Kit) -> El {
         .composer
         .selected_model(&scope)
         .map(|(_, m)| m.label.as_str())
-        .or_else(|| current.model.as_ref().map(|m| m.id.as_str()))
+        .or_else(|| s.composer.model_name(&scope))
         .unwrap_or("Select model");
     let compact = label
         .strip_prefix("GPT-")
@@ -56,7 +56,17 @@ pub(super) fn model_trigger(s: &Viewer, k: &Kit) -> El {
         Some(value) => format!("{compact} {}", effort_label(value)),
         None => compact,
     };
-    let help = format!("{label}\nChoose a model for the next message");
+    let mut help = format!("{label}\nChoose a model for the next message");
+    if current.model_changed || current.session_policy.deferred.is_some() {
+        help.push_str("\nThis selection is for the next message.");
+        if let Some(reported) = &current.session_policy.model {
+            help.push_str(&format!("\nAgent-reported model: {reported}"));
+        }
+    } else if !current.reasoning_changed {
+        if let Some(wire) = &current.session_policy.reasoning_wire {
+            help.push_str(&format!("\nResolved reasoning effort: {wire}"));
+        }
+    }
     Button::new(&summary)
         .variant(ButtonVariant::GhostMuted)
         .label_with(move |font, ink| {
@@ -177,9 +187,8 @@ pub(super) fn menu(s: &Viewer, scope: &DraftScope, k: &Kit) -> El {
                 k,
             )
             .on_press(move |s: &mut Viewer| {
-                let draft = s.composer.draft_mut(owner.clone());
-                draft.reasoning = value.map(str::to_owned);
-                draft.reasoning_changed = true;
+                s.composer
+                    .choose_reasoning(owner.clone(), value.map(str::to_owned));
             }),
         );
     }
@@ -216,9 +225,8 @@ pub(super) fn menu(s: &Viewer, scope: &DraftScope, k: &Kit) -> El {
                 k,
             )
             .on_press(move |s: &mut Viewer| {
-                let draft = s.composer.draft_mut(owner.clone());
-                draft.service_tier = value.map(str::to_owned);
-                draft.service_tier_changed = true;
+                s.composer
+                    .choose_service_tier(owner.clone(), value.map(str::to_owned));
             }),
         );
     }
@@ -251,19 +259,19 @@ fn permissions(s: &Viewer, scope: &DraftScope, k: &Kit) -> El {
         (
             Some("manual"),
             "Manual",
-            "Keep Hermes manual approval checks.",
+            "Use manual approval checks for this agent profile.",
             &LOCK,
         ),
         (
             Some("smart"),
             "Smart",
-            "Let Hermes evaluate which actions need approval.",
+            "Let Hermes evaluate approvals for this agent profile.",
             &SMART,
         ),
         (
             Some("off"),
-            "Full access",
-            "Allow actions without Hermes approval prompts.",
+            "Off",
+            "Disable approval checks for this agent profile.",
             &SHIELD_OFF,
         ),
     ] {
@@ -277,9 +285,8 @@ fn permissions(s: &Viewer, scope: &DraftScope, k: &Kit) -> El {
                 .label(label)
                 .help(detail)
                 .on_press(move |s: &mut Viewer| {
-                    let draft = s.composer.draft_mut(owner.clone());
-                    draft.approval_mode = mode.map(str::to_owned);
-                    draft.approval_changed = true;
+                    s.composer
+                        .choose_approval(owner.clone(), mode.map(str::to_owned));
                 })
                 .build(k)
                 .key(format!("approval-{}", mode.unwrap_or("default")))
@@ -296,6 +303,12 @@ fn permissions(s: &Viewer, scope: &DraftScope, k: &Kit) -> El {
         .w_full()
         .gap(8.0)
         .child(heading("Permissions", k))
+        .child(
+            text("Profile approval policy")
+                .font(k.ty.small)
+                .color(k.c.text_muted)
+                .px(8.0),
+        )
         .child(segments)
         .child(
             text(selected.0)
@@ -311,5 +324,41 @@ fn permissions(s: &Viewer, scope: &DraftScope, k: &Kit) -> El {
                 .wrap()
                 .px(8.0)
                 .pb(8.0),
+        )
+        .child(divider(k))
+        .child(conversation_bypass(s, scope, k))
+}
+
+fn conversation_bypass(s: &Viewer, scope: &DraftScope, k: &Kit) -> El {
+    let reported = s
+        .composer
+        .draft(scope)
+        .and_then(|draft| draft.session_policy.yolo);
+    let owner = scope.clone();
+    let enabled = s.can_set_conversation_bypass(scope);
+    col()
+        .w_full()
+        .gap(6.0)
+        .px(8.0)
+        .pb(8.0)
+        .child(
+            Switch::new(reported.unwrap_or(false))
+                .label("Bypass approvals for this conversation")
+                .disabled(reported.is_none() || !enabled)
+                .on_toggle(move |s: &mut Viewer| {
+                    s.set_conversation_bypass(owner.clone(), !reported.unwrap_or(false))
+                })
+                .build(k)
+                .key("conversation-approval-bypass"),
+        )
+        .child(
+            text(if reported.is_none() {
+                "Bypass status is unavailable until this conversation is attached."
+            } else {
+                "Separate from the profile policy. The agent reports the effective bypass state."
+            })
+            .font(k.ty.small)
+            .color(k.c.text_muted)
+            .wrap(),
         )
 }

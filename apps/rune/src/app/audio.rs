@@ -289,6 +289,7 @@ impl Viewer {
             voice_context: context,
             surface,
             text,
+            policy_stamp: Some(draft.policy_stamp()),
             model: draft.model.clone(),
             reasoning: draft.reasoning.clone(),
             service_tier: draft.service_tier.clone(),

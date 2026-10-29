@@ -53,6 +53,20 @@ pub(crate) enum Control {
     },
 }
 pub(crate) enum Reply {
+    StreamOpened {
+        origin: DraftScope,
+    },
+    PolicyReceipt {
+        origin: DraftScope,
+        receipt: Value,
+        payload: Value,
+        stamp: Option<PolicyStamp>,
+    },
+    PolicySetting {
+        origin: DraftScope,
+        key: String,
+        value: String,
+    },
     Older {
         origin: DraftScope,
         cursor: usize,
@@ -77,10 +91,13 @@ pub(crate) enum Reply {
         replayed: bool,
         user_row: Option<u64>,
         restored_replay: Option<ReplayBundle>,
+        policy_stamp: Option<PolicyStamp>,
+        policy_fields: PolicyFields,
     },
     Event {
         origin: DraftScope,
         event: Event,
+        replay: bool,
     },
     Failed {
         origin: DraftScope,
@@ -133,6 +150,9 @@ impl Worker {
                 &self.connection,
                 &self.scope.profile,
             )?);
+            self.notify(Reply::StreamOpened {
+                origin: self.scope.clone(),
+            });
         }
         Ok(self.transport.as_mut().unwrap())
     }
@@ -171,6 +191,7 @@ impl Worker {
                         self.notify(Reply::Event {
                             origin: self.scope.clone(),
                             event,
+                            replay: true,
                         });
                     }
                     return Ok(());
@@ -313,6 +334,8 @@ impl Worker {
                 replayed: false,
                 user_row: None,
                 restored_replay: entry.input.replay.clone(),
+                policy_stamp: None,
+                policy_fields: PolicyFields::default(),
             });
             return Ok(());
         }
@@ -385,6 +408,13 @@ impl Worker {
             replayed,
             user_row: receipt.get("user_row_id").and_then(Value::as_u64),
             restored_replay: None,
+            policy_stamp: entry.input.policy_stamp.clone(),
+            policy_fields: PolicyFields {
+                model: entry.input.model_changed,
+                reasoning: entry.input.reasoning_changed,
+                tier: entry.input.service_tier_changed,
+                approval: entry.input.approval_changed,
+            },
             generation: receipt.get("execution_generation").and_then(Value::as_u64),
             admission: receipt
                 .get("admission_id")
@@ -472,6 +502,36 @@ impl Worker {
         existing: bool,
     ) -> Result<(), CallError> {
         if entry.policy_done {
+            for mutation in entry.mutations.iter().filter(|m| m.complete) {
+                if let Some(receipt) = &mutation.receipt {
+                    self.notify(Reply::PolicyReceipt {
+                        origin: self.scope.clone(),
+                        receipt: receipt.clone(),
+                        payload: mutation.params["payload"].clone(),
+                        stamp: entry.input.policy_stamp.clone(),
+                    });
+                }
+            }
+            // A setting has no durable revision receipt. Observe its current
+            // owner value on recovery instead of asserting an old write still wins.
+            for (changed, key) in [
+                (entry.input.service_tier_changed, "fast"),
+                (entry.input.approval_changed, "approvals.mode"),
+            ] {
+                if changed {
+                    let read = self.transport()?.call(
+                        "config.get",
+                        json!({"session_id":snapshot.runtime,"key":key}),
+                    )?;
+                    if let Some(value) = read["value"].as_str() {
+                        self.notify(Reply::PolicySetting {
+                            origin: self.scope.clone(),
+                            key: key.into(),
+                            value: value.into(),
+                        });
+                    }
+                }
+            }
             return Ok(());
         }
         if existing {
@@ -539,6 +599,7 @@ impl Worker {
         } else {
             let params = json!({"session_id":snapshot.runtime,"request_id":uuid::Uuid::new_v4().to_string(),"expected_revision":snapshot.revision,"expected_generation":snapshot.generation,"operation":operation,"payload":payload});
             entry.mutations.push(Mutation {
+                receipt: None,
                 operation: operation.into(),
                 params,
                 complete: false,
@@ -548,6 +609,17 @@ impl Worker {
             entry.mutations.len() - 1
         };
         if entry.mutations[index].complete {
+            if let Some(receipt) = &entry.mutations[index].receipt {
+                if let Some(revision) = receipt["revision"].as_u64() {
+                    snapshot.revision = snapshot.revision.max(revision);
+                }
+                self.notify(Reply::PolicyReceipt {
+                    origin: self.scope.clone(),
+                    receipt: receipt.clone(),
+                    payload: entry.mutations[index].params["payload"].clone(),
+                    stamp: entry.input.policy_stamp.clone(),
+                });
+            }
             return Ok(snapshot);
         }
         if entry.mutations[index].refused {
@@ -631,6 +703,13 @@ impl Worker {
         if value.get("ok") == Some(&Value::Bool(false)) {
             return Err("The agent refused this conversation setting".into());
         }
+        self.notify(Reply::PolicyReceipt {
+            origin: self.scope.clone(),
+            receipt: value.clone(),
+            payload: entry.mutations[index].params["payload"].clone(),
+            stamp: entry.input.policy_stamp.clone(),
+        });
+        entry.mutations[index].receipt = Some(value);
         entry.mutations[index].complete = true;
         journal.save(entry)?;
         Ok(snapshot)
@@ -704,6 +783,11 @@ impl Worker {
                 format!("The agent did not confirm {key}; the message has not been sent").into(),
             );
         }
+        self.notify(Reply::PolicySetting {
+            origin: self.scope.clone(),
+            key: key.into(),
+            value: expected.into(),
+        });
         Ok(())
     }
     fn prepare_files(&mut self, entry: &mut Prepared, journal: &Journal) -> Result<(), CallError> {
@@ -840,6 +924,7 @@ impl Worker {
                                 self.notify(Reply::Event {
                                     origin: self.scope.clone(),
                                     event: replay,
+                                    replay: true,
                                 });
                             }
                         }
@@ -859,6 +944,7 @@ impl Worker {
         self.notify(Reply::Event {
             origin: self.scope.clone(),
             event,
+            replay: false,
         });
         if complete {
             self.attach()?;

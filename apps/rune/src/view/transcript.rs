@@ -540,13 +540,26 @@ fn chat_status(s: &Viewer, k: &Kit, owner: &DraftScope) -> El {
                     k,
                 )
                 .key("confirm-slash-model"),
+            )
+            .child(
+                action(
+                    "Cancel model change",
+                    owner.clone(),
+                    Action::ResolveSlashUnknown,
+                    k,
+                )
+                .key("cancel-slash-model"),
             );
     } else if let Some(intent) = &state.slash_intent {
         if !state.slash_running {
             if intent.retryable() || !intent.attempted {
                 view = view.child(
                     action(
-                        "Retry retained command",
+                        if intent.session_bypass() {
+                            "Resolve bypass change"
+                        } else {
+                            "Retry retained command"
+                        },
                         owner.clone(),
                         Action::RetrySlash,
                         k,

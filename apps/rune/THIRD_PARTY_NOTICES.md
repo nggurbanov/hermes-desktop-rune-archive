@@ -24,3 +24,10 @@ embedded archive and its provenance files.
 Wry and Tao provide the native compatibility window; the system browser engine
 is WebKitGTK on Linux, WKWebView on macOS and WebView2 on Windows. Their Rust
 package licenses are recorded by Cargo's package metadata and lockfile.
+
+The shared native image preview directly uses resvg 0.45.1; its original MIT
+and Apache license texts are retained in `licenses/resvg-0.45.1/`. The Linux
+notification adapter directly uses zbus 5.19.0 and the locked futures-util
+0.3.34; their original texts are retained in their named `licenses/` directories.
+The complete dependency resolution remains in `Cargo.lock`; final distribution
+assembly and platform packaging are tracked separately in the parity ledger.

@@ -8,6 +8,8 @@ use std::{fs, path::PathBuf};
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Input {
     #[serde(default)]
+    pub policy_stamp: Option<crate::composer::PolicyStamp>,
+    #[serde(default)]
     pub voice_turn: bool,
     #[serde(default)]
     pub voice_context: Option<String>,
@@ -65,6 +67,8 @@ pub(crate) struct Prepared {
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Mutation {
+    #[serde(default)]
+    pub receipt: Option<Value>,
     pub operation: String,
     pub params: Value,
     pub complete: bool,
@@ -88,6 +92,7 @@ impl Prepared {
             submission_id: uuid::Uuid::new_v4().to_string(),
             create_id: uuid::Uuid::new_v4().to_string(),
             input: Input {
+                policy_stamp: input.policy_stamp,
                 voice_turn: input.voice_turn,
                 voice_context: input.voice_context,
                 surface: input.surface,

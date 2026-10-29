@@ -57,19 +57,22 @@
     "opencodeReferenceRevision": "3f70cd6b675c89a8a7b64fc09b1bf2b455e0ad1a",
     "scope": "Standalone native Rune full functional transfer. Real scoped pages, conversations/admissions, native voice, original GUI SDK and saved connections implemented in development; complete acceptance still pending. No full-parity claim.",
     "verified": [
-      "Second frozen integration: 304 Rust tests passed; one optional private virtual-audio test ignored by default and passed separately in earlier isolated device acceptance",
+      "Third frozen integration: 341 Rust tests passed; one optional private virtual-audio test ignored by default and passed separately in earlier isolated device acceptance",
       "Native Linux WebRTC peer loopback, Opus and WebRTC AEC3 synthetic double-talk checks",
-      "Immutable second-checkpoint binary: 10 shell, 19 updated T3 composer, 10 layout, 15 client-settings and 13 rich-chat native checks; preceding checkpoint passed 24 feature-page checks",
+      "Immutable third binary: 10 shell, 19 updated T3 composer, 10 layouts, 15 client-settings, 13 rich-chat, 24 feature-pages and 5 notification-settings native checks (96 total)",
       "Actual separate native Rune rich subagent window: one lazy read-only attach, shared image/file/tool presentation, real clipboard copy, same PID/window reuse, focus/theme and viewer-only detach",
       "Canonical multimodal rewind contracts: immutable attachment freeze/upload before deletion, restore without prompt submission and lost-ACK UUID/payload/CAS retention; persisted replay drafts",
       "Native Files/Review/Terminal controllers; real isolated Git and PTY/remote replay contracts",
       "Original Hermes React SDK native Wry proof: canonical and legacy peers, cross-source leases/routing, scoped RPC/events/storage/multipart/socket/native dialogs/disposal; bundled Bots groups and Petdex",
-      "Existing Chikibryak read-only workspace reads; no production sends/config changes/install/restart"
+      "Existing Chikibryak read-only workspace reads; no production sends/config changes/install/restart",
+      "Native image viewer: actual wheel/pinch/pan, both themes, original-byte save and scope retirement; authenticated ranged rawstream and bounded SVG decode contracts",
+      "Authoritative per-field draft policy stamps, deferred journal receipts and separate profile approval/session bypass; exact canonical/legacy socket contracts",
+      "Linux notification broker: 10 contracts including 4 private D-Bus daemon integrations; origin/replay/quiet/delivery/action fences"
     ],
     "pending": [
-      "Remaining rich chat: authoritative policy sync, complete slash/policy directives, provider sidecars, reactions/search/minimap and media players",
+      "Remaining rich chat: complete slash directives, provider sidecars, reactions/search/minimap and media players; canonical snapshots cannot expose absent deferred slots after a fully settled restart",
       "Concurrent session/preview/route tiles, plugin pane geometry and full peer windows; original preset catalog and named saved layouts are now implemented",
-      "Remaining client skins/arbitrary fonts/global hotkeys/notifications and multiple-window storage reconciliation; local typography/density/disclosure and custom shortcuts are now implemented",
+      "Remaining client skins/arbitrary fonts/global hotkeys, multiple-window state reconciliation, background/plugin notification producers, sounds/HUD and macOS/Windows notification adapters",
       "Remaining GUI SDK pane geometry/data engines/preview contributions and parent-window acceptance",
       "Complete Files/Artifacts media/PDF/HTML preview and OS watcher behavior",
       "Cloud/OAuth connection workflow and native macOS/Windows discovery/device/packaging acceptance"
@@ -95,6 +98,7 @@
       "17 native composer scenarios: field, conditional voice primary, read-only/unknown engine menu, autofocus/filter/provider/favorites, physical Enter and shortcuts, staged settings, voice/Escape, scripted file choice and short windows",
       "Read-only Chikibryak voice status: chained selected and GPT-Live available; no microphone, call, transcription or configuration write",
       "Regression contract: synthetic scenes with a preconfigured live route cannot request voice/model reads"
-    ]
+    ],
+    "binarySha256": "1184780fb70e569a31d8bed1de4c69de31d03759fe99b81fac0caffeba0bc1f6"
   }
 }

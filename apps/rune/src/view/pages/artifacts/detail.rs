@@ -35,6 +35,18 @@ pub(super) fn panel(s: &Viewer, a: &Artifact, k: &Kit) -> El {
                 .on_press_tx(move |_: &mut Viewer, tx| tx.copy(copy.clone()))
                 .build(k),
         );
+    if a.kind == "image" {
+        pane = pane.child(
+            btn(
+                s,
+                "Open image viewer",
+                Action::Inspect,
+                state.preview_loading || a.value.starts_with("data:") && state.download.is_none(),
+                k,
+            )
+            .key("artifact-native-preview"),
+        );
+    }
     if state.preview_loading {
         pane = pane.child(note("Reading this artifact through its owning agent…", k));
     }

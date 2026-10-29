@@ -22,6 +22,7 @@ impl Viewer {
         }
         self.retired_profiles
             .insert((self.connection_epoch, profile.into()));
+        self.preview.close_profile(self.connection_epoch, profile);
         self.chat.close_profile(self.connection_epoch, profile);
         self.subagents.close_profile(self.connection_epoch, profile);
         self.conversation

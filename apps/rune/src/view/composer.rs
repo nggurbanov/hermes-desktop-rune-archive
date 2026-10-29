@@ -463,7 +463,11 @@ fn model_picker(s: &Viewer, scope: &DraftScope, k: &Kit) -> El {
                 provider: provider.id.clone(),
                 id: model.id.clone(),
             };
-            let selected = s.composer.draft(scope).and_then(|d| d.model.as_ref()) == Some(&key);
+            let selected = s.composer.selected_model(scope).is_some_and(
+                |(selected_provider, selected_model)| {
+                    selected_provider.id == key.provider && selected_model.id == key.id
+                },
+            );
             let owner = scope.clone();
             let provider_id = provider.id.clone();
             let model_id = model.id.clone();
@@ -618,6 +622,18 @@ fn model_picker(s: &Viewer, scope: &DraftScope, k: &Kit) -> El {
                 .pb(8.0)
                 .gap(8.0)
                 .child(search)
+                .children(
+                    (s.composer.selected_model(scope).is_none())
+                        .then(|| s.composer.model_name(scope))
+                        .flatten()
+                        .map(|name| {
+                            text(format!("Model: {name} · not listed in the current catalog"))
+                                .key("session-model-outside-catalog")
+                                .font(k.ty.small)
+                                .color(k.c.text_muted)
+                                .wrap()
+                        }),
+                )
                 .child(
                     col()
                         .grow(1.0)
