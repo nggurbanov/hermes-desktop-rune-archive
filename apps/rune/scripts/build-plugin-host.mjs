@@ -74,7 +74,7 @@ for (const [name, [dir, manifest]] of [...packages].sort(([a], [b]) => a.localeC
 if (inputs.size < 100 || dependencies.length < 20) throw new Error('The SDK provenance graph is unexpectedly incomplete')
 const data = JSON.stringify(assets)
 const compressed = zlib.gzipSync(Buffer.from(data), { level: 9 })
-const notice = `Hermes Desktop React SDK\n${fs.readFileSync(path.join(repo, 'LICENSE'), 'utf8')}\n\n${licenses.join('\n\n====================\n\n')}`
+const notice = `Hermes Desktop React SDK\n${fs.readFileSync(path.join(repo, 'LICENSE'), 'utf8')}\n\n${licenses.join('\n\n====================\n\n')}`.replace(/\r\n?/g, '\n')
 const manifest = {
   schema: 1, source_head: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim(),
   build_command: 'node apps/rune/scripts/build-plugin-host.mjs', node: process.version,

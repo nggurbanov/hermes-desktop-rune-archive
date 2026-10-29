@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "source_head": "54e0f49e917d8378d458547af2f4c9096c7d5a58",
+  "source_head": "548733d93700558d2bec2f7f2451d4071e8c037e",
   "build_command": "node apps/rune/scripts/build-plugin-host.mjs",
   "node": "v24.15.0",
   "source_inputs": {
@@ -972,7 +972,7 @@
     "apps/desktop/src/themes/skin.ts": "06a7d427bc8ede26a3fe5b216406612e45313d85face296af5632a4d71a0015d",
     "apps/desktop/src/themes/types.ts": "9db990ce6db85bfd7fd4c4e0c070c85a68c1d517282f1e93046d082ad8cfa53b",
     "apps/desktop/src/themes/user-themes.ts": "e67d7f688809af50454632e2a7634b20ce2c4c6f38c976a4b4e0846d29c11211",
-    "apps/rune/scripts/build-plugin-host.mjs": "64000d0ebc140a4412a8d34d931405daa3fc8ec7a92647ebdf68292080d4bbcd",
+    "apps/rune/scripts/build-plugin-host.mjs": "501213f10b3cc62e5f77c690cc0d941f47dfce23f6d6f4501033febab701a04a",
     "apps/rune/src/plugin_host/web/actions.ts": "3a0aaa4ad446c15b9ae805159f5bfbf52d56c2d4896062b93f6c7c51c037b969",
     "apps/rune/src/plugin_host/web/bridge.ts": "914f4366759262e4a3e66e8fb6386ab4668dd8add2c06aa6dac8dc14b6383eaf",
     "apps/rune/src/plugin_host/web/gateway.ts": "ee382c5b12ca9950cad4ab81809efa247a8f49b9723279e155341b85479e00c3",
@@ -8896,6 +8896,6 @@
   },
   "notices": {
     "file": "THIRD_PARTY_LICENSES.txt",
-    "sha256": "eebf7f2f7f524f3fb212b73915732105363feec64d4da5705aeda15d105ec27f"
+    "sha256": "dfbadfb8fbd9c6784cd34e52236d1c1e00bbc8288a5bc5d711e09d695657cf9a"
   }
 }

@@ -17,5 +17,5 @@ package-lock.json linguist-generated=true
 apps/shared/src/gateway-contract.generated.ts linguist-generated=true
 apps/shared/src/gateway-contract.openrpc.json linguist-generated=true
 
-# The provenance manifest hashes the original concatenated dependency notices.
-apps/rune/assets/plugin-host/THIRD_PARTY_LICENSES.txt -text
+# Keep generated notice bytes stable for the provenance manifest.
+apps/rune/assets/plugin-host/THIRD_PARTY_LICENSES.txt text eol=lf
