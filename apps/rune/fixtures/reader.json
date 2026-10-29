@@ -1,5 +1,18 @@
 {
   "profile": "default",
+  "model_catalog": {
+    "provider":"openai", "model":"gpt-5",
+    "providers":[
+      {"slug":"openai", "name":"OpenAI", "authenticated":true,
+       "models":["gpt-5","gpt-4.1","o3"],
+       "capabilities":{"gpt-5":{"reasoning":true,"can_disable_reasoning":true,"fast":true,"ultrafast":false},"gpt-4.1":{"reasoning":false,"fast":false},"o3":{"reasoning":true,"can_disable_reasoning":false}}},
+      {"slug":"anthropic", "name":"Anthropic", "authenticated":true,
+       "models":["claude-sonnet-4-5","claude-haiku-4-5"],
+       "capabilities":{"claude-sonnet-4-5":{"reasoning":true,"can_disable_reasoning":true}}},
+      {"slug":"local", "name":"Local gateway", "authenticated":true,
+       "models":["local-assistant"],"capabilities":{"local-assistant":{"reasoning":false}}}
+    ]
+  },
   "profiles": [
     {"name": "default", "label": "Hermes", "description": "Your personal agent", "canonical_session": {"id": "bot-hermes", "preview": "Let's keep your plans and ideas in one place."}},
     {"name": "research", "label": "Research", "description": "A second identity for deeper research", "canonical_session": {"id": "bot-research", "preview": "The sources are ready to review."}},

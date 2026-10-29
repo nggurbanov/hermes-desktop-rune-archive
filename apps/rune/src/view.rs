@@ -2,6 +2,7 @@
 //! Rune example at 3f70cd6b675c89a8a7b64fc09b1bf2b455e0ad1a; see the modules.
 //! Hermes owns the pane composition, connection/profile identities and actions.
 
+pub(crate) mod composer;
 mod palette;
 mod shell;
 mod transcript;
@@ -21,17 +22,17 @@ pub fn app(s: &Viewer, cx: &mut Cx<Viewer>) -> El {
     let dark = s.theme.unwrap_or(system_dark);
     let k = rune_theme_opencode::kit(dark);
     let p = pal(dark);
+    let mut layer = Vec::new();
     let main = if s.connection_form {
         connection_form(s, k)
     } else {
-        workspace(s, p, k)
+        workspace(s, p, k, &mut layer)
     };
     let sidebar = match s.sidebar_tab {
         SidebarTab::Sessions => sessions_sidebar(s, p, k),
         SidebarTab::Bots => shell::bots_sidebar(s, p, k),
     };
     let split = shell::layout(s, cx, main, sidebar, tooling(k), k);
-    let mut layer = Vec::new();
     let menu = shell::context_menu(s, k, &mut layer);
     col()
         .key("hermes-window")
@@ -162,7 +163,7 @@ fn sessions_sidebar(s: &Viewer, p: &Pal, k: &Kit) -> El {
     sidebar.footer(shell::profile_rail(s, p, k)).build(k)
 }
 
-fn workspace(s: &Viewer, p: &Pal, k: &Kit) -> El {
+fn workspace(s: &Viewer, p: &Pal, k: &Kit, layer: &mut Vec<El>) -> El {
     let mut body = col()
         .key("workspace")
         .instant_changes()
@@ -245,7 +246,7 @@ fn workspace(s: &Viewer, p: &Pal, k: &Kit) -> El {
         );
     }
     body.child(history.grow(1.0).min_h(0.0))
-        .child(transcript::readonly_composer(p))
+        .child(composer::dock(s, p, k, layer))
 }
 
 fn empty(title: &str, detail: &str, k: &Kit) -> El {

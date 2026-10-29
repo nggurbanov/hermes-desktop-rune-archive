@@ -6,7 +6,7 @@ rust-version = "1.95"
 license = "MIT"
 
 [dependencies]
-rune = { git = "https://github.com/anomalyco/rune", rev = "bfb8facae2e4665e5e6d17afe85561884a7fd402" }
+rune = { git = "https://github.com/anomalyco/rune", rev = "bfb8facae2e4665e5e6d17afe85561884a7fd402", features = ["native-file-dialog"] }
 rune-kit = { git = "https://github.com/anomalyco/rune", rev = "bfb8facae2e4665e5e6d17afe85561884a7fd402", features = ["markdown", "mermaid"] }
 rune-theme-opencode = { git = "https://github.com/anomalyco/rune", rev = "bfb8facae2e4665e5e6d17afe85561884a7fd402" }
 serde = { version = "1", features = ["derive"] }

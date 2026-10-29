@@ -22,7 +22,8 @@
     "dev:rune": "cargo run --manifest-path apps/rune/Cargo.toml --",
     "test:rune": "cargo test --manifest-path apps/rune/Cargo.toml",
     "build:rune": "cargo build --manifest-path apps/rune/Cargo.toml --release",
-    "test:rune:ui": "node apps/rune/scripts/check-scenes.mjs"
+    "test:rune:ui": "node apps/rune/scripts/check-scenes.mjs",
+    "test:rune:composer": "node apps/rune/scripts/check-composer.mjs"
   },
   "repository": {
     "type": "git",

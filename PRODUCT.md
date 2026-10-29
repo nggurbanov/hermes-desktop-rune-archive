@@ -19,6 +19,12 @@ Port its element placement, navigation, actions and state semantics to native
 Rune; improve presentation using the original OpenCode Rune implementation.
 Structural conversation-focused redesign is a subsequent project phase.
 
+The user explicitly selected T3 Code's composer and model picker on 2026-10-29:
+multiline draft editor, attachments above, bottom model/reasoning/tier/access
+controls and a searchable provider rail with favorites. This is an approved
+exception to copying Hermes's composer arrangement. Hermes retains the action
+semantics and its dictation / speak replies / wake-word fan.
+
 ## Brand Personality
 
 Calm, clear, capable. The user's conversation and agent identity have priority;

@@ -27,3 +27,5 @@ jobs:
         run: cargo +1.95.0 build --locked --manifest-path apps/rune/Cargo.toml
       - name: Check synthetic native scenes and interactions
         run: node apps/rune/scripts/check-scenes.mjs
+      - name: Check composer and model picker interactions
+        run: node apps/rune/scripts/check-composer.mjs

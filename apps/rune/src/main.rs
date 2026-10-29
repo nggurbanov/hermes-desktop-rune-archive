@@ -1,4 +1,5 @@
 mod app;
+mod composer;
 mod gateway;
 mod view;
 
@@ -23,6 +24,11 @@ fn main() {
             ("reader", app::reader_scene),
             ("bots", app::bots_scene),
             ("layout", app::layout_scene),
+            ("composer", app::composer_scene),
+            ("models", app::models_scene),
+            ("reasoning", app::reasoning_scene),
+            ("permissions", app::permissions_scene),
+            ("voice", app::voice_scene),
             ("empty", app::empty_scene),
             ("error", app::error_scene),
         ],
@@ -70,6 +76,20 @@ fn check_connection() -> Result<(), String> {
         return Err("Choose --local-home PATH or --gateway URL".into());
     };
     let mut gateway = gateway::Gateway::connect(&connection)?;
+    let model_counts = if args.iter().any(|arg| arg == "--check-models") {
+        let profile = value("--profile").unwrap_or_else(|| "default".into());
+        let catalog = gateway.model_catalog(&profile)?;
+        Some((
+            catalog.providers.len(),
+            catalog
+                .providers
+                .iter()
+                .map(|p| p.models.len())
+                .sum::<usize>(),
+        ))
+    } else {
+        None
+    };
     let profiles = gateway.profiles()?;
     let profile = value("--profile").unwrap_or_else(|| "default".into());
     let sessions = gateway.sessions(&profile)?;
@@ -92,7 +112,9 @@ fn check_connection() -> Result<(), String> {
         serde_json::json!({ "connected": true, "profiles": profiles.len(),
         "sessions": sessions.len(), "history_messages": history.as_ref().map(|h| h.messages.len()),
         "earlier_history": history.as_ref().map(|h| h.has_more), "read_only": true,
-        "canonical_bot_history": check_bot })
+        "canonical_bot_history": check_bot,
+        "model_providers": model_counts.map(|counts| counts.0),
+        "models": model_counts.map(|counts| counts.1) })
     );
     Ok(())
 }

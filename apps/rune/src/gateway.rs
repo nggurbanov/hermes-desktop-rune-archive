@@ -13,8 +13,10 @@ use serde_json::{Value, json};
 use tungstenite::{Message, WebSocket, client::IntoClientRequest, stream::MaybeTlsStream};
 use url::Url;
 
+mod catalog;
 #[cfg(target_os = "linux")]
 mod local;
+pub use catalog::{CatalogModel, ModelCapabilities, ModelCatalog, ModelProvider};
 #[cfg(test)]
 mod tests;
 
@@ -195,9 +197,14 @@ impl Gateway {
     }
 
     pub fn profiles(&mut self) -> Result<Vec<Profile>, String> {
-        let value = self.rpc(
+        self.profiles_until(Instant::now() + TIMEOUT)
+    }
+
+    fn profiles_until(&mut self, deadline: Instant) -> Result<Vec<Profile>, String> {
+        let value = self.rpc_until(
             "profiles.list",
             json!({"profile": self.initial_profile, "include_sessions": true}),
+            deadline,
         )?;
         let rows = rows(&value, "profiles")?;
         let mut result = Vec::new();
@@ -356,51 +363,7 @@ impl Gateway {
             .append_pair("order", "latest")
             .append_pair("include_compacted", "true")
             .append_pair("inline_images", "false");
-        let mut headers = reqwest::header::HeaderMap::new();
-        match &self.auth {
-            Auth::Token(Some(token)) => {
-                url.query_pairs_mut().append_pair("token", token);
-            }
-            Auth::Token(None) => {}
-            #[cfg(target_os = "linux")]
-            Auth::Native(endpoint) => {
-                let home = self
-                    .profile_homes
-                    .get(profile)
-                    .ok_or("Refresh profiles before reading this profile's history")?;
-                let ticket = endpoint.ticket_until(home, "native-http", deadline)?;
-                headers.insert(
-                    "X-Hermes-Gateway-Ticket",
-                    ticket.parse().map_err(|_| "Invalid native HTTP ticket")?,
-                );
-            }
-        }
-        let remaining = deadline
-            .checked_duration_since(Instant::now())
-            .ok_or("History request timed out")?;
-        let response = self
-            .http
-            .get(url)
-            .headers(headers)
-            .timeout(remaining)
-            .send()
-            .map_err(|_| "History request failed (network, TLS or timeout)")?;
-        if !response.status().is_success() {
-            return Err(format!(
-                "History request refused (HTTP {})",
-                response.status().as_u16()
-            ));
-        }
-        let mut bytes = Vec::new();
-        response
-            .take((MAX_BODY + 1) as u64)
-            .read_to_end(&mut bytes)
-            .map_err(|_| "History response could not be read")?;
-        if bytes.len() > MAX_BODY {
-            return Err("History response exceeds the viewer's size limit".into());
-        }
-        let value: Value =
-            serde_json::from_slice(&bytes).map_err(|_| "Invalid history response")?;
+        let value = self.get_json(profile, url, deadline, "History")?;
         if value.get("profile").and_then(Value::as_str) != Some(profile) {
             return Err("History profile identity mismatch".into());
         }
@@ -424,14 +387,80 @@ impl Gateway {
         Ok(value)
     }
 
+    /// Both reader surfaces use the same profile-bound native HTTP credential
+    /// path. A REST fallback never switches to another owner or public token.
+    fn get_json(
+        &self,
+        profile: &str,
+        mut url: Url,
+        deadline: Instant,
+        label: &str,
+    ) -> Result<Value, String> {
+        let mut headers = reqwest::header::HeaderMap::new();
+        match &self.auth {
+            Auth::Token(Some(token)) => {
+                url.query_pairs_mut().append_pair("token", token);
+            }
+            Auth::Token(None) => {}
+            #[cfg(target_os = "linux")]
+            Auth::Native(endpoint) => {
+                let home = self
+                    .profile_homes
+                    .get(profile)
+                    .ok_or("Refresh profiles before reading this profile")?;
+                let ticket = endpoint.ticket_until(home, "native-http", deadline)?;
+                headers.insert(
+                    "X-Hermes-Gateway-Ticket",
+                    ticket.parse().map_err(|_| "Invalid native HTTP ticket")?,
+                );
+            }
+        }
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .ok_or_else(|| format!("{label} request timed out"))?;
+        let response = self
+            .http
+            .get(url)
+            .headers(headers)
+            .timeout(remaining)
+            .send()
+            .map_err(|_| format!("{label} request failed (network, TLS or timeout)"))?;
+        if !response.status().is_success() {
+            return Err(format!(
+                "{label} request refused (HTTP {})",
+                response.status().as_u16()
+            ));
+        }
+        let mut bytes = Vec::new();
+        response
+            .take((MAX_BODY + 1) as u64)
+            .read_to_end(&mut bytes)
+            .map_err(|_| format!("{label} response could not be read"))?;
+        if bytes.len() > MAX_BODY {
+            return Err(format!("{label} response exceeds the viewer's size limit"));
+        }
+        serde_json::from_slice(&bytes).map_err(|_| format!("Invalid {label} response"))
+    }
+
     fn rpc(&mut self, method: &str, params: Value) -> Result<Value, String> {
-        if !matches!(method, "profiles.list" | "session.list") {
+        self.rpc_until(method, params, Instant::now() + TIMEOUT)
+    }
+
+    fn rpc_until(
+        &mut self,
+        method: &str,
+        params: Value,
+        deadline: Instant,
+    ) -> Result<Value, String> {
+        if !matches!(method, "profiles.list" | "session.list" | "model.options") {
             return Err("This viewer permits read methods only".into());
         }
         self.sequence += 1;
         let id = self.sequence;
-        let deadline = Instant::now() + TIMEOUT;
-        socket_timeout(self.socket.get_mut(), TIMEOUT)?;
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .ok_or("Gateway read request timed out")?;
+        socket_timeout(self.socket.get_mut(), remaining)?;
         self.socket
             .send(Message::Text(
                 json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params})

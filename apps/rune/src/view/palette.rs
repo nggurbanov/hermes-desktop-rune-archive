@@ -22,7 +22,6 @@ pub struct Pal {
     pub accent: Color,
     pub border: Color,
     pub border_muted: Color,
-    pub ring: Color,
     pub shadow: Color,
     pub inline_code_bg: Color,
     pub avatar_fg: Color,
@@ -54,12 +53,6 @@ fn build(dark: bool) -> Pal {
         accent: c("text-text-accent"),
         border: c("border-border-base"),
         border_muted: c("border-border-muted"),
-        // --v2-elevation-raised: a 0.5px ring over two drop shadows.
-        ring: if dark {
-            c("alpha-light-16")
-        } else {
-            c("alpha-dark-8")
-        },
         shadow: if dark {
             c("alpha-dark-30")
         } else {

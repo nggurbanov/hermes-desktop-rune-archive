@@ -51,20 +51,24 @@
     "verifiedAt": "2026-10-29"
   },
   "runeCheckpoint": {
-    "phase": "native-read-only-viewer",
+    "phase": "native-reader-and-staged-composer",
     "verifiedAt": "2026-10-29",
     "frameworkRevision": "bfb8facae2e4665e5e6d17afe85561884a7fd402",
     "opencodeReferenceRevision": "3f70cd6b675c89a8a7b64fc09b1bf2b455e0ad1a",
-    "scope": "Partial read-only Hermes shell: Sessions/Bots, original navigation order, bottom profile scope, in-place/explicit-tab opens and fresh canonical Bot Chat reads. OpenCode supplies components and themes, not application composition.",
+    "scope": "Partial read-only Hermes shell plus the user-selected T3 Code composer/model picker in native Rune. External agent model catalog; in-memory scoped drafts, favorites and local attachment staging. OpenCode supplies components and themes; sending, applied launch settings and native audio remain pending.",
     "verified": [
       "Linux native build and formatting",
-      "22 Rust transport/controller tests",
+      "34 Rust transport/controller/composer tests",
       "10 native scene/interaction checks",
       "Actual retained Hermes renderer compared with native Rune; all screenshots synthetic",
       "Light/dark, 1024x768 and 1440x900 native renders",
-      "Real local gateway: 1 profile, 118 visible sessions and read-only ordinary history",
+      "Real local gateway: scoped profile/session/history reads and fresh agent model catalog (4 providers, 179 models at the final probe; live counts vary)",
       "Controlled transport: hidden canonical Bot Chat, compaction aliases, no recency fallback or session mutations",
-      "Native context menu, explicit conversation tabs, missing Bot Chat and Simple-mode recovery"
+      "Native context menu, explicit conversation tabs, missing Bot Chat and Simple-mode recovery",
+      "Actual Linux X11 window: immediate catalog search, keyboard model selection and minimum-window resize",
+      "Synthetic native composer/model-picker renders in both OpenCode appearances; model/attachment/voice surfaces contain no private user data",
+      "Independent catalog worker; stale-owner fencing, same-owner REST fallback and fresh secondary-profile native catalog tests",
+      "12 native composer scenarios: field, autofocus/filter/provider/favorites, physical Enter and shortcuts, staged settings, voice/Escape, scripted file choice and short dark window"
     ],
     "pending": [
       "Send, stream, stop, durable admission/replay and approval/clarify",
@@ -72,9 +76,12 @@
       "Full pane tree/presets/persistence and narrow-window behavior",
       "Terminal, files, review, rich previews and remaining routes",
       "SSH, OAuth, settings persistence, localization and native platform acceptance",
-      "OS accessibility bridge and existing JS GUI-plugin compatibility"
+      "OS accessibility bridge and existing JS GUI-plugin compatibility",
+      "Pinned/date/source/cron sidebar groups, filter menu, status states, full profile/fleet rail and prompt timeline; see screenshot-parity.md",
+      "Draft/favorite persistence, attachment upload, applied launch settings and real dictation/spoken replies/wake audio"
     ],
     "parityInventory": "apps/rune/docs/shell-parity.md",
-    "correction": "6001795 proved native transport but its UI was rejected as an OpenCode shell; no full Hermes parity claim."
+    "correction": "6001795 proved native transport but its UI was rejected as an OpenCode shell; no full Hermes parity claim.",
+    "screenshotInventory": "apps/rune/docs/screenshot-parity.md"
   }
 }

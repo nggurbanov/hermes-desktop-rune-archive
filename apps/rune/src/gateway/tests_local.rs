@@ -56,6 +56,15 @@ fn control_answer(stream: &mut std::os::unix::net::UnixStream, value: Value) {
 
 #[test]
 fn native_attachment_uses_only_identity_and_purpose_bound_transient_tickets() {
+    native_model_catalog(false);
+}
+
+#[test]
+fn fresh_native_catalog_hydrates_secondary_profile_before_http_fallback() {
+    native_model_catalog(true);
+}
+
+fn native_model_catalog(fresh: bool) {
     let home = Home::new();
     let work = home.0.join("profiles/work");
     fs::create_dir_all(&work).unwrap();
@@ -72,7 +81,12 @@ fn native_attachment_uses_only_identity_and_purpose_bound_transient_tickets() {
     let selected_home = home.0.clone();
     let work_home = work.clone();
     let private = thread::spawn(move || {
-        for verb in ["identify", "session-ticket", "session-ticket"] {
+        for index in 0..if fresh { 3 } else { 4 } {
+            let verb = if index == 0 {
+                "identify"
+            } else {
+                "session-ticket"
+            };
             let (mut stream, _) = control.accept().unwrap();
             let request = control_request(&mut stream);
             assert_eq!(request["verb"], verb);
@@ -121,21 +135,44 @@ fn native_attachment_uses_only_identity_and_purpose_bound_transient_tickets() {
                 Ok(response)
             })
             .unwrap();
+        if fresh {
+            let catalog = request(&mut ws, "model.options", "work");
+            assert_eq!(catalog["params"]["explicit_only"], true);
+            answer(&mut ws, &catalog, json!({"providers":[]}));
+        }
         let profiles = request(&mut ws, "profiles.list", "default");
         answer(
             &mut ws,
             &profiles,
             json!({"profiles":[{"name":"work","path":http_work}]}),
         );
-        let sessions = request(&mut ws, "session.list", "work");
-        answer(
-            &mut ws,
-            &sessions,
-            json!({"sessions":[{"session_id":"s","title":"Synthetic"}]}),
-        );
+        if !fresh {
+            let sessions = request(&mut ws, "session.list", "work");
+            answer(
+                &mut ws,
+                &sessions,
+                json!({"sessions":[{"session_id":"s","title":"Synthetic"}]}),
+            );
+            let (mut http, _) = listener.accept().unwrap();
+            let header = http_request(&mut http);
+            assert!(header.starts_with("GET /api/sessions/s/messages?profile=work&"));
+            assert!(!header.split("\r\n").next().unwrap().contains("ticket"));
+            assert!(
+                header
+                    .to_lowercase()
+                    .contains("x-hermes-gateway-ticket: fixture-native-http")
+            );
+            http_answer(
+                &mut http,
+                json!({"profile":"work","session_id":"s","messages":[{"role":"user","text":"Synthetic"}]}),
+            );
+            let catalog = request(&mut ws, "model.options", "work");
+            assert_eq!(catalog["params"]["explicit_only"], true);
+            answer(&mut ws, &catalog, json!({"providers":[]}));
+        }
         let (mut http, _) = listener.accept().unwrap();
         let header = http_request(&mut http);
-        assert!(header.starts_with("GET /api/sessions/s/messages?profile=work&"));
+        assert!(header.starts_with("GET /api/model/options?profile=work&explicit_only=1 "));
         assert!(!header.split("\r\n").next().unwrap().contains("ticket"));
         assert!(
             header
@@ -144,18 +181,24 @@ fn native_attachment_uses_only_identity_and_purpose_bound_transient_tickets() {
         );
         http_answer(
             &mut http,
-            json!({"profile":"work","session_id":"s","messages":[{"role":"user","text":"Synthetic"}]}),
+            json!({"providers":[{"slug":"fixture","name":"Fixture","models":["fixture-model"]}]}),
         );
     });
     let mut gateway = Gateway::connect(&Connection::Local {
         home: home.0.clone(),
     })
     .unwrap();
-    assert_eq!(gateway.profiles().unwrap()[0].name, "work");
-    assert_eq!(gateway.sessions("work").unwrap()[0].id, "s");
+    if !fresh {
+        assert_eq!(gateway.profiles().unwrap()[0].name, "work");
+        assert_eq!(gateway.sessions("work").unwrap()[0].id, "s");
+        assert_eq!(
+            gateway.history("work", "s").unwrap().messages[0].content,
+            "Synthetic"
+        );
+    }
     assert_eq!(
-        gateway.history("work", "s").unwrap().messages[0].content,
-        "Synthetic"
+        gateway.model_catalog("work").unwrap().providers[0].models[0].id,
+        "fixture-model"
     );
     private.join().unwrap();
     public.join().unwrap();

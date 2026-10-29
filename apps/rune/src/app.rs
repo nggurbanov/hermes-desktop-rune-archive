@@ -3,6 +3,7 @@ use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 
+use crate::composer::{Composer, DraftScope, Popup};
 use rune::{TextEdit, Tx, Waker};
 use rune_kit::PaneState;
 
@@ -42,6 +43,8 @@ struct BotOpen {
 }
 
 pub struct Viewer {
+    pub composer: Composer,
+    connection_epoch: u64,
     pub profiles: Vec<Profile>,
     pub sessions: Vec<Session>,
     pub messages: Vec<HistoryMessage>,
@@ -121,6 +124,8 @@ enum Update {
 impl Viewer {
     fn empty() -> Self {
         Self {
+            composer: Composer::new(),
+            connection_epoch: 0,
             profiles: vec![],
             sessions: vec![],
             messages: vec![],
@@ -253,6 +258,8 @@ impl Viewer {
         self.use_connection(Connection::Local { home });
     }
     fn use_connection(&mut self, connection: Connection) {
+        self.connection_epoch += 1;
+        self.composer.close();
         self.connection = Some(connection);
         self.connection_form = false;
         self.profiles.clear();
@@ -268,6 +275,36 @@ impl Viewer {
     }
     pub fn toggle_theme(&mut self, system_dark: bool) {
         self.theme = Some(!self.theme.unwrap_or(system_dark));
+    }
+
+    pub fn composer_scope(&self) -> DraftScope {
+        DraftScope {
+            connection: self.connection_epoch,
+            profile: self.profile.clone(),
+            session: self.selected_session.clone(),
+        }
+    }
+
+    pub fn open_composer(&mut self, popup: Popup) {
+        let scope = self.composer_scope();
+        self.row_menu = None;
+        self.composer.toggle_popup(scope.clone(), popup);
+        if popup == Popup::Models
+            && self.composer.popup.is_some()
+            && self.composer.catalog_for(&scope).is_none()
+            && !self.composer.catalog_loading_for(&scope)
+        {
+            self.reload_models();
+        }
+    }
+
+    pub fn reload_models(&mut self) {
+        if let Some(connection) = self.connection.clone() {
+            self.composer
+                .request_catalog(connection, self.composer_scope());
+        } else if !self.fixture {
+            self.composer.catalog_error = Some("Connect an agent to browse its models".into());
+        }
     }
     pub fn select_profile(&mut self, profile: String) {
         self.profile_picker = false;
@@ -742,10 +779,17 @@ impl Viewer {
                 );
             }
         }
+        if v["model_catalog"].is_object() {
+            let scope = self.composer_scope();
+            self.composer
+                .fixture_catalog(scope, &v["model_catalog"])
+                .expect("valid synthetic model catalog");
+        }
     }
 }
 
 pub fn setup(s: &mut Viewer, waker: Waker) {
+    s.composer.init_network(waker.clone());
     if s.fixture {
         return;
     }
@@ -845,6 +889,8 @@ pub fn setup(s: &mut Viewer, waker: Waker) {
 }
 
 pub fn poll(s: &mut Viewer, _: f64, tx: &mut Tx) -> bool {
+    let scope = s.composer_scope();
+    let composer_changed = s.composer.poll(&scope) | s.composer.dismiss_if_scope_changed(&scope);
     let mut replies = vec![];
     if let Some(network) = &s.network {
         while let Ok(reply) = network.receive.try_recv() {
@@ -852,7 +898,10 @@ pub fn poll(s: &mut Viewer, _: f64, tx: &mut Tx) -> bool {
         }
     }
     if replies.is_empty() {
-        return false;
+        if composer_changed {
+            tx.instant();
+        }
+        return composer_changed;
     }
     for reply in replies {
         s.apply(reply);
@@ -900,6 +949,42 @@ pub fn layout_scene(s: &mut Viewer) {
     reader_scene(s);
     s.inspector.set_open(true);
 }
+pub fn composer_scene(s: &mut Viewer) {
+    reader_scene(s);
+    let scope = s.composer_scope();
+    s.composer.draft_mut(scope.clone()).text.replace_text("Сравни эти варианты и помоги выбрать следующий шаг.\nХочу сохранить разговор и контекст агента.");
+    s.composer.draft_mut(scope.clone()).reasoning = Some("high".into());
+    s.composer.draft_mut(scope.clone()).approval_mode = Some("smart".into());
+    s.composer
+        .toggle_favorite(scope.connection, "openai", "gpt-5");
+    s.composer
+        .toggle_favorite(scope.connection, "anthropic", "claude-sonnet-4-5");
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("docs/images/reader-light.png");
+    let _ = s.composer.add_attachment(scope.clone(), path);
+    if let Some(draft) = s.composer.draft(&scope) {
+        for attachment in &draft.attachments {
+            if let Some(image) = &attachment.preview {
+                let _ = image.wait();
+            }
+        }
+    }
+}
+pub fn models_scene(s: &mut Viewer) {
+    composer_scene(s);
+    s.open_composer(Popup::Models);
+}
+pub fn reasoning_scene(s: &mut Viewer) {
+    composer_scene(s);
+    s.open_composer(Popup::Reasoning);
+}
+pub fn permissions_scene(s: &mut Viewer) {
+    composer_scene(s);
+    s.open_composer(Popup::Permissions);
+}
+pub fn voice_scene(s: &mut Viewer) {
+    composer_scene(s);
+    s.composer.voice_expanded = true;
+}
 pub fn empty_scene(s: &mut Viewer) {
     reader_scene(s);
     s.sessions.clear();
@@ -914,7 +999,17 @@ pub fn error_scene(s: &mut Viewer) {
 #[cfg(test)]
 mod tests;
 
-pub fn on_key(s: &mut Viewer, event: &rune::KeyEvent, _: &mut Tx) -> bool {
+pub fn on_key(s: &mut Viewer, event: &rune::KeyEvent, tx: &mut Tx) -> bool {
+    if crate::view::composer::on_key(s, event, tx) {
+        return true;
+    }
+    if matches!(&event.key, rune::Key::Escape)
+        && (s.composer.popup.is_some() || s.composer.voice_expanded)
+    {
+        s.composer.close();
+        tx.instant();
+        return true;
+    }
     if matches!(&event.key, rune::Key::Escape) && s.connection_form && s.can_cancel_connection() {
         s.cancel_connection();
         true

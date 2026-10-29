@@ -16,6 +16,11 @@ read-only increment is a starting slice, not a substitute for that migration.
    streaming/replay, stop generation, reconnect/history and approval/clarify.
    Port the existing client behavior contracts; do not reuse OpenCode's fixture
    send handler or silently lose explicit launch policy.
+   The user-selected T3 Code composer and model picker are now implemented as
+   local draft UI with a real scoped agent catalog, search/provider/favorite
+   filters, keyboard selection, capability-gated launch choices, native file
+   staging and the Hermes voice fan. Drafts/favorites are in memory; attachment
+   upload, settings application, send and audio execution remain pending.
 3. **Full Bot Mode and concurrent conversations.** Extend the read-only named
    Bot Chat registry navigation with writes, custom identity assets, groups,
    routines, connection/profile/session isolation, parallel live views, queue,

@@ -6,7 +6,7 @@ use std::{
 };
 use tungstenite::handshake::server::{Request, Response};
 
-fn request(socket: &mut WebSocket<TcpStream>, method: &str, profile: &str) -> Value {
+pub(super) fn request(socket: &mut WebSocket<TcpStream>, method: &str, profile: &str) -> Value {
     let message = socket.read().unwrap().into_text().unwrap();
     let request: Value = serde_json::from_str(&message).unwrap();
     assert_eq!(request["method"], method);
@@ -14,7 +14,7 @@ fn request(socket: &mut WebSocket<TcpStream>, method: &str, profile: &str) -> Va
     request
 }
 
-fn answer(socket: &mut WebSocket<TcpStream>, request: &Value, result: Value) {
+pub(super) fn answer(socket: &mut WebSocket<TcpStream>, request: &Value, result: Value) {
     socket
         .send(Message::Text(
             json!({"jsonrpc":"2.0", "id": request["id"], "result": result})
@@ -24,7 +24,7 @@ fn answer(socket: &mut WebSocket<TcpStream>, request: &Value, result: Value) {
         .unwrap();
 }
 
-fn http_request(stream: &mut TcpStream) -> String {
+pub(super) fn http_request(stream: &mut TcpStream) -> String {
     stream
         .set_read_timeout(Some(Duration::from_secs(3)))
         .unwrap();
@@ -41,7 +41,7 @@ fn http_request(stream: &mut TcpStream) -> String {
     header
 }
 
-fn http_answer(stream: &mut TcpStream, value: Value) {
+pub(super) fn http_answer(stream: &mut TcpStream, value: Value) {
     let body = value.to_string();
     write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
 }

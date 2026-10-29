@@ -68,6 +68,21 @@ rendering when visible state changes. Long lists are virtualized.
 
 ## Confirmed first increment
 
+### Composer reference override
+
+The user supplied T3 Code composer/model-picker screenshots and explicitly
+requested their composition. Use one rounded multiline editor, removable
+attachment tiles above the text, and a quiet bottom toolbar: model, reasoning
+and service tier, approval mode; attachment and voice controls and the primary
+action on the right. The picker has a narrow provider/favorites rail, search,
+selected rows with checkmarks, favorite toggles and provider sublabels.
+Keep the actual OpenCode light/dark palette and Rune controls. Do not copy T3's
+provider list or invent capabilities. Draft settings remain scoped to their
+connection/profile/conversation and are not the model used by existing history.
+Hermes approval modes remain Manual/Smart/Off. Its voice fan retains separate
+dictation, spoken-reply and wake-word controls; unsupported audio is unavailable,
+not a fake enabled toggle. Native file picks stage draft attachments only.
+
 Production native Rune code, real external connection, profiles, session list,
 and readable history. Loading, empty history, network/auth error, profile switch
 and long transcript states are in scope. Send/stream/stop, terminal, previews and

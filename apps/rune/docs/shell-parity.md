@@ -30,6 +30,12 @@ default arrangement; previews and secondary windows are later slices.
 This correction restores the reader's Hermes shell and canonical bot doorway.
 It does not establish full Hermes Desktop parity or completion of the migration.
 
+The user's subsequent full-window and voice-control screenshots expose more
+remaining work. See [the screenshot inventory](screenshot-parity.md) for precise
+sidebar/chrome/timeline gaps, ownership/API contracts, actionable continuation
+slices and the later T3 Code composer/model-picker direction. Its pending items
+are not covered by the reader's earlier verification claims.
+
 ## Visual evidence
 
 Reference captures use the retained compiled Hermes React renderer with fully
