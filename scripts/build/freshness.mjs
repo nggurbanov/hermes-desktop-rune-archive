@@ -8,7 +8,6 @@ import { isMain } from './frontend-common.mjs'
 const receiptName = 'hermes-build.json'
 // What `hermes update` leaves in a product it could not rebuild (STALE_MARKER in hermes_cli/webapp.py).
 const staleMarker = '.hermes-stale'
-const workspaces = { tui: 'ui-tui', web: 'web', desktop: 'apps/desktop' }
 // Another product's output under a workspace is never this product's input.
 const generated = new Set(['node_modules', 'dist', 'dist-webapp', 'build', 'release', '.cache', '.git', 'coverage', 'test-results', 'playwright-report'])
 
@@ -23,46 +22,22 @@ const osMetadata = name => {
     || base === 'Thumbs.db' || base === 'Desktop.ini' || base.startsWith('._')
 }
 
-// buildTui bundles these source roots (including the Ink source alias), not
-// the workspaces' documentation, test runners or other product recipes.
-const tuiInputs = [
-  ...['ui-tui', 'ui-tui/packages/hermes-ink', 'apps/shared'].flatMap(root => [
-    `${root}/src`, `${root}/package.json`, `${root}/tsconfig.json`,
-  ]),
-  'tsconfig.json', 'package.json', 'package-lock.json', '.npmrc', 'pm/lock.json',
-  'scripts/build/tui.mjs', 'scripts/build/frontend-common.mjs', 'scripts/build/freshness.mjs',
-  'ui-tui/scripts/gateway_bootstrap.py', 'ui-tui/scripts/clipboard_image.py',
-]
-
-// The browser renderer compiles Desktop and its shared package in a prepared
-// workspace. Release metadata (pyproject.toml, uv.lock, icons) is not its input.
-const webappInputs = [
-  'apps/desktop', 'apps/shared', 'package.json', 'package-lock.json', '.npmrc', 'pm/lock.json',
-  'scripts/build/webapp.mjs', 'scripts/build/node-deps.mjs', 'scripts/build/frontend-common.mjs',
-  'scripts/build/freshness.mjs',
-]
-
+// Only client-owned inputs participate in the desktop build. Backend versions
+// and dependency locks must not change the identity of this application.
 function productInputs(product) {
-  if (product === 'tui') return tuiInputs
-  if (product === 'webapp') return webappInputs
-  const workspace = workspaces[product]
-  if (!workspace) throw new Error(`Unknown frontend product: ${product}`)
+  if (!['desktop', 'webapp'].includes(product)) throw new Error(`Unknown frontend product: ${product}`)
   return [
-    workspace, 'apps/shared', 'package.json', 'package-lock.json', '.npmrc', 'pm/lock.json',
-    'scripts/build',
-    'scripts/generate-icons.mjs', 'scripts/generate_icons.py',
-    // The root install-stamp.json is runtime identity rewritten after every install; desktop's
-    // baked stamp is a prepared input.
-    'assets', 'pyproject.toml', 'uv.lock',
+    'apps/desktop', 'apps/shared', 'package.json', 'package-lock.json', '.npmrc',
+    ...['desktop', 'frontend-common', 'freshness', 'node-deps', 'electron-runtime', 'webapp']
+      .map(name => `scripts/build/${name}.mjs`),
   ]
 }
 
-function skipInput(product) {
+function skipInput() {
   return name => {
     // Build scripts are inputs; workspace build directories are outputs.
     const parts = name.split('/')
     return (!name.startsWith('scripts/') && parts.some(part => generated.has(part)))
-      || (product === 'tui' && (parts.includes('__tests__') || /\.(test|spec)(-d)?\.[cm]?[jt]sx?$/.test(name)))
       || parts.some(part => part.startsWith('.dist-') || part.startsWith('.staging-') || part === '__pycache__')
       || name.endsWith('.tsbuildinfo') || name.endsWith('.pyc')
   }
@@ -92,13 +67,13 @@ function treeHash(root, inputs, skip, contents = () => true) {
 }
 
 export function sourceHash(source, product) {
-  return treeHash(source, productInputs(product), skipInput(product))
+  return treeHash(source, productInputs(product), skipInput())
 }
 
 /** The present entries a product's source hash covers, for mirroring a prepared workspace. */
 export function sourceEntries(source, product) {
   const entries = []
-  walkTree(source, productInputs(product), skipInput(product), (name, kind) => {
+  walkTree(source, productInputs(product), skipInput(), (name, kind) => {
     if (kind !== 'missing') entries.push({ name, kind })
   })
   return entries

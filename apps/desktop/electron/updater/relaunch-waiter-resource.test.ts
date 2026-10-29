@@ -1,5 +1,5 @@
-// The sealed payload's repo snapshot has no scripts/, so the relaunch waiter
-// must be shipped by the packaging config at the path main resolves.
+// Packaged apps do not ship their source scripts, so the Windows relaunch
+// waiter is an explicit desktop resource at the path the native helper uses.
 
 import assert from 'node:assert/strict'
 import fs from 'node:fs'

@@ -1,7 +1,7 @@
 import os from 'node:os'
 import path from 'node:path'
 
-import { MOCK_REPLY } from '../../../tests-js/scripts/mock-server'
+import { MOCK_REPLY } from './support/mock-server'
 
 import { type MockBackendFixture, setupMockBackend, waitForAppReady } from './fixtures'
 import { expect, test } from './test'

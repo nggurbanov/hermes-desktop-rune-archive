@@ -11,7 +11,7 @@ import { REMOTE_MARKER_GATE_PY, REMOTE_MARKER_JUDGE_PY, WINDOWS_MARKER_JUDGE_PS 
 import { parseUpdateMarker } from './update-marker-judge'
 
 const execFile = promisify(execFileCallback)
-const corpusPath = path.resolve(__dirname, '../../../tests/fixtures/update_marker_corpus.json')
+const corpusPath = path.resolve(__dirname, '../test-fixtures/update_marker_corpus.json')
 
 // Feed every corpus judge case, with its injected process table, through the
 // exact Python an SSH remote runs: the remote reader obeys the shared contract.

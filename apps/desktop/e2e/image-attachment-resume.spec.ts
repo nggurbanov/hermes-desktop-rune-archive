@@ -14,8 +14,8 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
-import { writeEnvFile, writeMockProviderConfig } from '../../../tests-js/scripts/mock-provider-config'
-import { type MockServer, startMockServer } from '../../../tests-js/scripts/mock-server'
+import { writeEnvFile, writeMockProviderConfig } from './support/mock-provider-config'
+import { type MockServer, startMockServer } from './support/mock-server'
 
 import {
   buildAppEnv,

@@ -32,7 +32,7 @@ function installDesktopMock(state: DesktopBootstrapState) {
 
       return () => bootstrapListeners.delete(listener)
     }),
-    continueBootstrapLocal: vi.fn().mockResolvedValue({ ok: true }),
+    continueBootstrapLocal: vi.fn<() => Promise<{ ok: boolean; message?: string }>>().mockResolvedValue({ ok: true }),
     resetBootstrap: vi.fn().mockResolvedValue({ ok: true }),
     probeConnectionConfig: vi.fn(),
     testConnectionConfig: vi.fn(),
@@ -92,6 +92,22 @@ afterEach(() => {
 })
 
 describe('DesktopInstallOverlay first-run setup', () => {
+  it('offers connection and retry discovery without installing when the external runtime is absent', async () => {
+    const desktop = installDesktopMock(bootstrapState({
+      setupChoice: { platform: 'linux', activeRoot: '/external/hermes', local: 'unavailable', bundled: false }
+    }))
+
+    desktop.continueBootstrapLocal.mockResolvedValue({ ok: false, message: 'Install Hermes separately, then check again.' })
+
+    render(<DesktopInstallOverlay />)
+
+    fireEvent.click(await screen.findByText('Check for local Hermes'))
+    expect(await screen.findByText('Install Hermes separately, then check again.')).toBeTruthy()
+    expect(screen.getByText('Connect to existing Hermes')).toBeTruthy()
+    expect(screen.queryByText('Install Hermes locally')).toBeNull()
+    expect(screen.queryByText(/Will install to/i)).toBeNull()
+  })
+
   it('shows the remote/local choice without installer progress', async () => {
     installDesktopMock(
       bootstrapState({

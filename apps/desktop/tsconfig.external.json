@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.electron.json",
+  "compilerOptions": {
+    "composite": false,
+    "types": ["node", "electron"]
+  },
+  "include": ["contracts", "vitest.external.config.ts", "vitest.external-runtime.ts", "e2e/external-runtime.ts"],
+  "exclude": ["src"]
+}

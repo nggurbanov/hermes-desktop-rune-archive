@@ -82,60 +82,24 @@ test('resolveStamp falls back when neither CI nor git is available', () => {
   })
 })
 
-// ── buildStampPayload — the staged-desktop full schema ─────────────────────
-
 import { buildStampPayload } from './write-build-stamp.mjs'
 
-const baseStamp = {
-  commit: 'c'.repeat(40),
-  branch: 'main',
-  builtAt: '2026-08-14T00:00:00Z',
-  dirty: false,
-  source: 'ci'
-}
+const baseStamp = { commit: 'c'.repeat(40), branch: 'main', dirty: false, source: 'ci' }
 
-const runtime = {
-  repoDir: 'app', toolsDir: 'tools', storePython: 'tools/python/bin/python3',
-  sitePackages: 'venv/lib/python3.14/site-packages', commands: { hermes: 'bin/hermes' }
-}
-
-test('bundled stamp carries the builder contract and refuses an unstaged payload', () => {
-  const env = { HERMES_DESKTOP_VARIANT: 'bundled' }
-  assert.throws(() => buildStampPayload(baseStamp, env, 'darwin'), /payload/)
-  assert.deepEqual(buildStampPayload(baseStamp, env, 'darwin', { runtime }).runtime, runtime)
-  assert.equal(buildStampPayload(baseStamp, { HERMES_DESKTOP_VARIANT: 'light' }, 'darwin', { runtime }).runtime, undefined)
-})
-
-test('source builds declare the same artifact schema, without a payload', () => {
+test('client stamp records desktop provenance and never an embedded runtime', () => {
   const stamp = buildStampPayload(baseStamp, {})
-  assert.equal(stamp.payload, 'bootstrap')
-  assert.equal(stamp.distribution, 'desktop-app')
-  assert.equal(stamp.runtime, undefined)
-  assert.equal(stamp.tag, null)
+  assert.equal(stamp.schemaVersion, 1)
   assert.equal(stamp.commit, baseStamp.commit)
+  assert.equal(stamp.source, 'ci')
+  assert.equal(stamp.payload, 'standalone')
+  assert.equal(stamp.distribution, 'desktop-app')
+  assert.equal(stamp.updateMechanism, 'external')
+  assert.equal(stamp.runtime, undefined)
 })
 
-test('buildStampPayload keeps schemaVersion + provenance in the staged shape', () => {
-  const payload = buildStampPayload(baseStamp, {
-    HERMES_DESKTOP_VARIANT: 'bundled'
-  }, 'win32', { runtime })
-  assert.equal(payload.schemaVersion, 1)
-  assert.equal(payload.commit, baseStamp.commit)
-  assert.equal(payload.source, 'ci')
-  assert.equal(payload.tag, null)
-})
-
-test('commit builds retain exact provenance without entering an update channel', () => {
-  for (const platform of ['win32', 'darwin']) {
-    const env = { HERMES_DESKTOP_VARIANT: 'bundled', HERMES_BUILD_COMMIT: baseStamp.commit }
-    const payload = buildStampPayload(baseStamp, env, platform, { runtime })
-    assert.equal(payload.commit, baseStamp.commit)
-    assert.equal(payload.source, 'commit-build')
-    assert.equal(payload.branch, null)
-    assert.equal(payload.tag, null)
-    assert.equal(payload.updateMechanism, 'external')
-    assert.throws(() => buildStampPayload(baseStamp, { ...env, HERMES_BUILD_COMMIT: 'a'.repeat(40) }, platform, { runtime }), /commit/i)
-    assert.throws(() => buildStampPayload(baseStamp, { ...env, HERMES_PAYLOAD_TAG: 'v1.2.3' }, platform, { runtime }), /tag/i)
+test('agent bundle selectors cannot reintroduce a runtime into the client', () => {
+  for (const variant of ['bundled', 'bootstrap', 'light', 'store']) {
+    assert.throws(() => buildStampPayload(baseStamp, { HERMES_DESKTOP_VARIANT: variant }), /standalone/)
   }
+  assert.throws(() => buildStampPayload(baseStamp, { HERMES_BUILD_COMMIT: 'a'.repeat(40) }), /identity/)
 })
-

@@ -8,8 +8,8 @@
  * Prerequisite: `npm run build` must have been run so dist/ exists.
  */
 
-import { runDesktopChatSmoke } from '../../../tests-js/scripts/desktop-chat-smoke'
-import { BLOCKING_CLARIFY_QUESTION, BLOCKING_CLARIFY_TRIGGER } from '../../../tests-js/scripts/mock-server'
+import { runDesktopChatSmoke } from './support/desktop-chat-smoke'
+import { BLOCKING_CLARIFY_QUESTION, BLOCKING_CLARIFY_TRIGGER } from './support/mock-server'
 
 import { type MockBackendFixture, setupMockBackend, waitForAppReady } from './fixtures'
 import { expect, test } from './test'

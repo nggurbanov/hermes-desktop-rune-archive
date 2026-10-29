@@ -25,7 +25,7 @@ export const PRODUCT_IDENTITY: Readonly<ProductIdentity> =
 
 /** Pin before the first userData lookup and single-instance lock. Electron's
  * later display-name changes must not redirect an installed build's state.
- * Stable keeps its historical userData and runtime naming behavior.
+ * The standalone client never shares the official app's local state.
  */
 export function applyDesktopIdentity(
   app: {
@@ -35,10 +35,6 @@ export function applyDesktopIdentity(
   },
   identity: Readonly<ProductIdentity> = PRODUCT_IDENTITY
 ): string | null {
-  if (!identity.token && identity.appNamePascal === identity.artifactNamePascal) {
-    return null
-  }
-
   const userData: string = path.join(app.getPath('appData'), identity.appNamePascal)
   mkdirSync(userData, { recursive: true })
   app.setPath('userData', userData)

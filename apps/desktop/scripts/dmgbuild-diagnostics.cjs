@@ -22,7 +22,7 @@ function wrapDmgbuildExecFile(execFile, write = chunk => process.stderr.write(ch
     // Use the interpreter and module path from the supplier's launcher.
     // A PATH shim cannot intercept dmgbuild's absolute /usr/bin/hdiutil call.
     const vendor = path.dirname(file)
-    const diagnostic = path.resolve(__dirname, '../../../scripts/bundles/dmgbuild_diagnostics.py')
+    const diagnostic = path.join(__dirname, 'dmgbuild_diagnostics.py')
     const child = execFile.call(
       this,
       path.join(vendor, 'python', 'bin', 'python3'),

@@ -1,4 +1,4 @@
-import { APPROVAL_COMMAND_TRIGGER, MOCK_REPLY } from '../../../tests-js/scripts/mock-server'
+import { APPROVAL_COMMAND_TRIGGER, MOCK_REPLY } from './support/mock-server'
 
 import { type MockBackendFixture, setupMockBackend, waitForAppReady } from './fixtures'
 import { expect, test } from './test'

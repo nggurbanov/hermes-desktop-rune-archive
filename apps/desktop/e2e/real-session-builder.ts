@@ -2,8 +2,8 @@ import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process'
 import * as path from 'node:path'
 import { createInterface } from 'node:readline'
 
-const DESKTOP_ROOT = path.resolve(import.meta.dirname, '..')
-const REPO_ROOT = path.resolve(DESKTOP_ROOT, '..', '..')
+import { externalPythonRuntime } from './external-runtime'
+
 const DEFAULT_TIMEOUT_MS = 60_000
 
 interface JsonRpcError {
@@ -70,13 +70,16 @@ export class RealSessionBuilder {
   private readonly stderr: string[] = []
   private closed = false
 
-  private constructor(hermesHome: string) {
-    this.child = spawn('uv', ['run', '--active', '--no-sync', 'python', '-m', 'tui_gateway.entry'], {
-      cwd: REPO_ROOT,
+  private constructor(private readonly hermesHome: string) {
+    const runtime = externalPythonRuntime()
+    this.child = spawn(runtime.python, ['-B', '-m', 'tui_gateway.entry'], {
+      cwd: hermesHome,
       env: {
         ...process.env,
+        HOME: path.dirname(hermesHome),
         HERMES_HOME: hermesHome,
-        PYTHONPATH: REPO_ROOT,
+        HERMES_DISABLE_LAZY_INSTALLS: '1',
+        PYTHONPATH: runtime.root,
       },
       stdio: 'pipe',
     })
@@ -107,7 +110,7 @@ export class RealSessionBuilder {
 
     const created = await this.request<CreatedSession>('session.create', {
       cols: 120,
-      cwd: REPO_ROOT,
+      cwd: this.hermesHome,
       source: 'desktop',
       title: spec.title,
     })

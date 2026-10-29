@@ -848,19 +848,23 @@ function pickCanonicalConnection<T extends { connection: RegistryConnection; ord
 
 export interface UpdateEligibility {
   eligible: boolean
-  /** Present when not eligible: 'cloud-managed' (platform updates it). */
-  reason?: 'cloud-managed'
+  /** The owner of an installation manages updates outside this batch. */
+  reason?: 'cloud-managed' | 'external-local-runtime'
 }
 
 /**
  * Whether "Update all instances" may drive this connection. Hermes Cloud
  * instances are platform-managed — we never run `hermes update` against them.
- * Local, remote, and ssh sources are all eligible (reachability and busy
- * checks happen at dispatch time, not here).
+ * Local Hermes is independently installed and cannot use the desktop updater.
+ * Remote and SSH sources retain their explicit agent-management actions.
  */
 export function updateEligibility(connection: RegistryConnection): UpdateEligibility {
   if (connection.kind === 'cloud') {
     return { eligible: false, reason: 'cloud-managed' }
+  }
+
+  if (connection.kind === 'local') {
+    return { eligible: false, reason: 'external-local-runtime' }
   }
 
   return { eligible: true }

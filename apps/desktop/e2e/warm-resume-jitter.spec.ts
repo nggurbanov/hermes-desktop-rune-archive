@@ -30,8 +30,8 @@
  * Prerequisite: `npm run build` must have been run so dist/ exists.
  */
 
-import { writeEnvFile, writeMockProviderConfig } from '../../../tests-js/scripts/mock-provider-config'
-import { startMockServer } from '../../../tests-js/scripts/mock-server'
+import { writeEnvFile, writeMockProviderConfig } from './support/mock-provider-config'
+import { startMockServer } from './support/mock-server'
 
 import {
   buildAppEnv,

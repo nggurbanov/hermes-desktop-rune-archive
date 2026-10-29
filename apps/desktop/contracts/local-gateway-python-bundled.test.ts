@@ -4,10 +4,12 @@ import path from 'node:path'
 
 import { expect, test } from 'vitest'
 
-import type { InstallStamp } from './install-stamp'
-import { closeGatewayTicketBridges, createGatewayTicketResolver } from './local-gateway-python'
-import { shortSocketTmpDir } from './local-gateway.test-helpers'
-import { bundledPayload, payloadTicketRuntime } from './payload-backend'
+import { contractRuntime } from './runtime'
+
+import type { InstallStamp } from '../electron/install-stamp'
+import { closeGatewayTicketBridges, createGatewayTicketResolver } from '../electron/local-gateway-python'
+import { shortSocketTmpDir } from '../electron/local-gateway.test-helpers'
+import { bundledPayload, payloadTicketRuntime } from '../electron/payload-backend'
 
 // #138906 (RT-21): the Store/MSIX bundled backend is `kind: 'python'` but its command is the
 // payload's CLI shim (bin/hermes.exe), which rejects the ticket helper's `-P -u -c`. This runs
@@ -15,8 +17,7 @@ import { bundledPayload, payloadTicketRuntime } from './payload-backend'
 test.skipIf(process.platform === 'win32')('a bundled payload mints tickets with its interpreter, not the CLI shim', async () => {
   const home = await shortSocketTmpDir('gw-bundled-')
   const resources = await shortSocketTmpDir('gw-bundled-res-')
-  const repo = path.resolve('../..')
-  const python = process.env.HERMES_TEST_PYTHON || 'python3'
+  const { root: repo, python } = contractRuntime()
   const root = path.join(resources, 'agent-payload')
   await fs.mkdir(path.join(root, 'bin'), { recursive: true })
   await fs.mkdir(path.join(root, 'tools', 'python', 'bin'), { recursive: true })

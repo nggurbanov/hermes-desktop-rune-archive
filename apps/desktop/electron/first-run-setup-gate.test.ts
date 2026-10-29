@@ -10,6 +10,19 @@ const bootstrapBackend = {
   platform: 'linux'
 }
 
+test('an unavailable external runtime stays in connection setup until a remote is applied', async () => {
+  const prompts = []
+  const gate = createFirstRunSetupGate({ promptChoice: backend => prompts.push(backend), stuckAfterMs: 0 })
+  gate.continueLocal()
+
+  const pending = gate.wait({ kind: 'connection-required', local: 'unavailable' })
+
+  assert.equal(gate.hasWaiter(), true)
+  assert.equal(prompts.length, 1)
+  gate.abandonForRemoteApply()
+  assert.equal(await pending, 'remote-applied')
+})
+
 function delay(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms))
 }

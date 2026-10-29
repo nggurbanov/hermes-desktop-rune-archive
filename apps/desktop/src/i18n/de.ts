@@ -4289,6 +4289,9 @@ export const deOverrides = {
     connectExistingShort: 'Bestehendes verbinden',
     connectExistingDesc:
       'Ein Remote-Backend mit Session-Token oder Browser-Anmeldung verwenden. Es wird keine lokale Installation gestartet.',
+    retryLocalTitle: "Lokales Hermes suchen",
+    externalLocalDesc: "Installiere Hermes separat auf diesem Computer und prüfe erneut. Diese App installiert keinen Agenten.",
+    externalSetupDesc: "Verbinde dich mit deiner bestehenden Hermes-Installation auf diesem Gerät oder einem entfernten Rechner.",
     installLocalTitle: 'Hermes lokal installieren',
     installLocalDesc:
       'Hermes herunterladen, seine Python-Umgebung erstellen und das Backend auf diesem Computer ausführen.',

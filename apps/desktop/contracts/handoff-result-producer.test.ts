@@ -8,9 +8,11 @@ import { setTimeout as sleep } from 'node:timers/promises'
 
 import { test } from 'vitest'
 
-import { handoffResultPath, readAndConsumeHandoffResult } from './handoff-result'
-import { claimBridgeMarker, markerPath, parseUpdateMarker } from './update-marker'
-import { liveMarkerProbe } from './update-marker-gate'
+import { contractRuntime } from './runtime'
+
+import { handoffResultPath, readAndConsumeHandoffResult } from '../electron/handoff-result'
+import { claimBridgeMarker, markerPath, parseUpdateMarker } from '../electron/update-marker'
+import { liveMarkerProbe } from '../electron/update-marker-gate'
 
 async function stop(child: ChildProcess) {
   if (child.exitCode !== null || child.signalCode !== null) {
@@ -35,7 +37,7 @@ test.skipIf(process.platform === 'win32').each(['legacy', 'protocol-2'])(
     }
 
     // No launcher: the actual hand-off fails without invoking an update, gateway or app.
-    const script = path.resolve(__dirname, '../../../scripts/desktop-update/posix.sh')
+    const script = path.join(contractRuntime().root, 'scripts', 'desktop-update', 'posix.sh')
     const desktop = spawn('sleep', ['60'])
     const startedAt = Math.floor(Date.now() / 1000) - 10
     const runId = mode === 'protocol-2' ? 'receipt-test.bridge-2' : undefined

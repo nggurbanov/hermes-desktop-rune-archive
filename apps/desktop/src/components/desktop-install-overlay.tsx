@@ -453,7 +453,9 @@ export function DesktopInstallOverlay({ enabled = true }: DesktopInstallOverlayP
             <div className="min-w-0">
               <h2 className="text-xl font-semibold tracking-tight">{copy.setupChoiceTitle}</h2>
               <p className="mt-1.5 text-sm text-muted-foreground">
-                {localState === 'none' ? copy.setupChoiceDesc : copy.setupChoiceDescLocal}
+                {localState === 'unavailable'
+                  ? copy.externalSetupDesc
+                  : localState === 'none' ? copy.setupChoiceDesc : copy.setupChoiceDescLocal}
               </p>
             </div>
           </div>
@@ -484,7 +486,11 @@ export function DesktopInstallOverlay({ enabled = true }: DesktopInstallOverlayP
                     throw new Error(copy.localStartUnavailable)
                   }
 
-                  await desktop.continueBootstrapLocal()
+                  const result = await desktop.continueBootstrapLocal()
+
+                  if (!result.ok) {
+                    throw new Error(result.message || copy.localStartUnavailable)
+                  }
                 } catch (err) {
                   setLocalStart({ root: activeRoot, starting: false, error: errorMessage(err) })
                 }

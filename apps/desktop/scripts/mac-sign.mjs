@@ -1,7 +1,4 @@
-import path from 'node:path'
-
 import { createMacSignCache, identityTeam, looseMachOFiles } from './mac-sign-cache.mjs'
-import { rehashPayloadDigests } from './payload-digests.mjs'
 
 /**
  * @param {Pick<import('app-builder-lib').ElectronSignOptions, 'entitlements' | 'entitlementsInherit' | 'hardenedRuntime'> & { ignore: (file: string) => boolean }} policy
@@ -42,12 +39,7 @@ export function createMacSigner(policy, { env = process.env, makeCache = createM
       ignore: file => presigned.has(file) || ignored(file),
       // Batching defers child signatures until after all option callbacks.
       batchCodesignCalls: false,
-      optionsForFile: file => {
-        if (file === opts.app) {
-          rehashPayloadDigests(path.join(opts.app, 'Contents', 'Resources', 'agent-payload'))
-        }
-        return optionsForFile(file)
-      }
+      optionsForFile
     })
   }
 }

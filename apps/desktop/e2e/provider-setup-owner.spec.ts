@@ -4,6 +4,8 @@
  * Build dist/ separately, then run this spec with HERMES_DESKTOP_PYTHON pointing
  * at a dependency-complete interpreter. No OAuth account or inference is used.
  */
+import { externalPythonRuntime } from './external-runtime'
+
 import { type ChildProcess, spawn, spawnSync } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as http from 'node:http'
@@ -22,7 +24,6 @@ import {
 } from './test'
 
 const DESKTOP_ROOT = path.resolve(import.meta.dirname, '..')
-const REPO_ROOT = path.resolve(DESKTOP_ROOT, '..', '..')
 const REMOTE_ID = 'athena-fixture'
 const REMOTE_LABEL = 'Athena fixture'
 const PROFILE = 'leverage-ai'
@@ -45,7 +46,8 @@ function isolatedEnv(home: string, hermesHome: string): Record<string, string> {
     HOME: home,
     USERPROFILE: home,
     HERMES_HOME: hermesHome,
-    PYTHONPATH: REPO_ROOT,
+    HERMES_DISABLE_LAZY_INSTALLS: '1',
+    PYTHONPATH: externalPythonRuntime().root,
     PYTHONNOUSERSITE: '1',
     PYTHONDONTWRITEBYTECODE: '1',
     TMPDIR: process.env.TMPDIR ?? path.dirname(home),
@@ -71,15 +73,7 @@ function isolatedEnv(home: string, hermesHome: string): Record<string, string> {
 }
 
 function pythonBinary(): string {
-  const python =
-    process.env.HERMES_DESKTOP_PYTHON ??
-    path.join(REPO_ROOT, '.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python')
-
-  if (!fs.existsSync(python)) {
-    throw new Error('Set HERMES_DESKTOP_PYTHON to an isolated dependency-complete interpreter')
-  }
-
-  return python
+  return externalPythonRuntime().python
 }
 
 function verifyImports(python: string, env: Record<string, string>): string {
@@ -96,7 +90,7 @@ function verifyImports(python: string, env: Record<string, string>): string {
         'sys.__stdout__.write(json.dumps(paths))'
       ].join('\n')
     ],
-    { cwd: REPO_ROOT, env, encoding: 'utf8', timeout: 60_000 }
+    { cwd: externalPythonRuntime().root, env, encoding: 'utf8', timeout: 60_000 }
   )
 
   expect(probe.status, probe.stderr).toBe(0)
@@ -128,7 +122,7 @@ function configModel(python: string, env: Record<string, string>, home: string):
       'import json, pathlib, sys, yaml; print(json.dumps(yaml.safe_load(pathlib.Path(sys.argv[1]).read_text())["model"]))',
       path.join(home, 'config.yaml')
     ],
-    { cwd: REPO_ROOT, env, encoding: 'utf8', timeout: 10_000 }
+    { cwd: externalPythonRuntime().root, env, encoding: 'utf8', timeout: 10_000 }
   )
 
   expect(read.status, read.stderr).toBe(0)
@@ -169,7 +163,7 @@ async function startRemote(python: string, env: Record<string, string>, logPath:
     python,
     ['-m', 'hermes_cli.main', 'serve', '--isolated', '--host', '127.0.0.1', '--port', String(port), '--skip-build'],
     {
-      cwd: REPO_ROOT,
+      cwd: externalPythonRuntime().root,
       env: { ...env, HERMES_DASHBOARD_SESSION_TOKEN: REMOTE_TOKEN },
       stdio: ['ignore', log, log]
     }
@@ -338,7 +332,7 @@ test('Settings provider setup stays on its gateway/profile across A → B → A'
         HERMES_DESKTOP_PYTHON: python,
         HERMES_DESKTOP_USER_DATA_DIR: sandbox.userDataDir,
         HERMES_DESKTOP_IGNORE_EXISTING: '1',
-        HERMES_DESKTOP_HERMES_ROOT: REPO_ROOT,
+        HERMES_DESKTOP_HERMES_ROOT: externalPythonRuntime().root,
         HERMES_DESKTOP_APP_NAME: `ProviderOwnerE2E-${Date.now()}`,
         HERMES_DESKTOP_SKIP_QUIT_CONFIRM: '1'
       }

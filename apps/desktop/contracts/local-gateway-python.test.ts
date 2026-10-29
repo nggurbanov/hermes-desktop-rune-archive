@@ -4,17 +4,17 @@ import path from 'node:path'
 
 import { expect, test } from 'vitest'
 
-import { closeGatewayTicketBridges, mintGatewayTicketWithPython } from './local-gateway-python'
-import { shortSocketTmpDir } from './local-gateway.test-helpers'
+import { contractRuntime } from './runtime'
+
+import { closeGatewayTicketBridges, mintGatewayTicketWithPython } from '../electron/local-gateway-python'
+import { shortSocketTmpDir } from '../electron/local-gateway.test-helpers'
 
 // This exercises the real helper process and protocol on this host. The native
 // probe separately exercises Windows SID checks and HTTP/WS admission.
 test.skipIf(process.platform === 'win32')('Python ticket bridge pins profile, owner, protocol and purpose', async () => {
   const home = await shortSocketTmpDir('gw-bridge-')
   const mux = await shortSocketTmpDir('gw-bridge-mux-')
-  const root = path.resolve('../..')
-  // The JS-only CI runner has no repository venv; this helper uses stdlib only.
-  const python = process.env.HERMES_TEST_PYTHON || 'python3'
+  const { root, python } = contractRuntime()
   // Real serialized endpoints include control_home (null for the launch profile).
   // The bridge must merge the default rather than pass a duplicate Python keyword.
   const endpoint = { profile_id: home, instance_id: 'owner', runtime_protocol: 1, control_home: null }

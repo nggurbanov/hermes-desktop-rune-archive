@@ -1,40 +1,34 @@
 {
-  "name": "hermes-agent",
-  "version": "1.0.0",
-  "description": "An AI agent with advanced tool-calling capabilities, featuring a flexible toolsets system for organizing and managing tools.",
+  "name": "hermes-desktop-rune",
+  "version": "0.1.0-alpha.0",
+  "description": "Standalone desktop client for existing Hermes agents.",
   "private": true,
   "workspaces": [
-    "apps/*",
-    "ui-tui",
-    "ui-tui/packages/*",
-    "web",
-    "tests-js"
+    "apps/desktop",
+    "apps/shared"
   ],
   "scripts": {
-    "postinstall": "echo '✅ Node dependencies installed. Run: python run_agent.py --help'",
-    "install:root": "npm install --workspaces=false",
-    "install:web": "npm install --workspace web",
-    "install:tui": "npm install --workspace ui-tui",
-    "install:desktop": "npm install --workspace apps/desktop",
-    "audit:root": "npm audit --workspaces=false",
-    "audit:web": "npm audit --workspace web",
-    "audit:tui": "npm audit --workspace ui-tui",
-    "audit:fix:root": "npm audit fix --workspaces=false",
-    "audit:fix:web": "npm audit fix --workspace web",
-    "audit:fix:tui": "npm audit fix --workspace ui-tui",
-    "check": "npm run --ws check",
-    "fix": "npm run --ws fix",
-    "prepare": "node -e \"const {existsSync}=require('fs');const {spawnSync}=require('child_process');if(existsSync('.git'))spawnSync('lefthook',['install'],{stdio:'inherit',shell:true})\""
+    "dev": "npm run dev --workspace apps/desktop",
+    "build": "npm run build --workspace apps/desktop",
+    "pack": "npm run pack --workspace apps/desktop",
+    "dist": "npm run dist --workspace apps/desktop",
+    "typecheck": "npm run typecheck --workspace apps/desktop && npm run typecheck --workspace apps/shared",
+    "test": "npm run test --workspace apps/desktop",
+    "test:external": "npm run test:external --workspace apps/desktop",
+    "test:ui": "npm run test:ui --workspace apps/desktop",
+    "test:electron": "npm run test:desktop:platforms --workspace apps/desktop",
+    "check": "npm run typecheck && npm run test && npm run lint --workspaces",
+    "fix": "npm run fix --workspaces"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/NousResearch/Hermes-Agent.git"
+    "url": "git+https://github.com/nggurbanov/hermes-desktop-rune.git"
   },
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/NousResearch/Hermes-Agent/issues"
+    "url": "https://github.com/nggurbanov/hermes-desktop-rune/issues"
   },
-  "homepage": "https://github.com/NousResearch/Hermes-Agent#readme",
+  "homepage": "https://github.com/nggurbanov/hermes-desktop-rune#readme",
   "devDependencies": {
     "@eslint/js": "9.39.5",
     "eslint": "10.12.0",
@@ -42,7 +36,6 @@
     "eslint-plugin-react-hooks": "7.1.1",
     "eslint-plugin-unused-imports": "4.4.1",
     "globals": "17.13.0",
-    "lefthook": "2.2.1",
     "typescript": "6.0.3",
     "typescript-eslint": "8.71.1"
   },
@@ -80,8 +73,7 @@
     "node-pty@1.1.0": true,
     "electron-winstaller@5.4.0": true,
     "fsevents@2.3.3": true,
-    "get-windows@9.3.0": true,
-    "lefthook@2.2.1": true
+    "get-windows@9.3.0": true
   },
   "dependencies": {
     "js-yaml": "4.3.2",

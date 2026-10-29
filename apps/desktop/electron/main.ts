@@ -1,5 +1,6 @@
 import { type ChildProcess, execFileSync, spawn } from 'node:child_process'
 
+import { EXTERNAL_RUNTIME_REQUIRED_MESSAGE, isDesktopRuntimeRoot, resolveExternalRuntime } from './external-runtime'
 import type { GatewayEndpoint } from './local-gateway'
 import { configurePythonGatewayTicketClient, createLocalGatewayDials, createStaleGatewayRestarter, ensureLocalGateway, gatewayOwnerProfile, localGatewayDial, nativeGatewayHttpHeaders, redialLocalGateway, runGatewayEnsure, runGatewayOwnerRestart } from './local-gateway'
 import { closeGatewayTicketBridges, createGatewayTicketResolver } from './local-gateway-python'
@@ -42,7 +43,6 @@ import {
 } from 'electron'
 import type { Session } from 'electron'
 
-import { type ActiveRuntimeState, classifyActiveRuntime } from './active-runtime-state'
 import { HERMES_API_EXPECTED_404 } from './api-expected-404'
 import {
   destroyKeepaliveAgents,
@@ -54,16 +54,13 @@ import {
   withRetry
 } from './api-transport'
 import { appIconCandidates, resolveAppIcon, shouldOverrideDockIcon } from './app-icon'
-import { stageAppInstallerFile } from './app-installer-file'
 import { createAppRelauncher, relaunchApp } from './app-relaunch'
 import {
   appVersionInfo,
   type AppVersionInfo,
-  assertSourceUpdateChannel,
   nativeAboutVersion,
   packagedReleaseChannel
 } from './app-version'
-import { runAppInstallerChecker } from './appinstaller-checker'
 import { installApplicationMenuAfterFirstWindow } from './application-menu-startup'
 import { stopBackendChild as stopBackendChildImpl, waitForBackendExit } from './backend-child'
 import {
@@ -100,15 +97,12 @@ import {
   shouldLatchSshClientFailure,
   sshClientFailedError
 } from './backend-start-failure'
-import { describeBootstrapFailure } from './bootstrap-failure-copy'
 import {
   detectRemoteDisplay,
   isWindowsBinaryPathInWsl,
   isWslEnvironment,
   resolveLinuxPasswordStore
 } from './bootstrap-platform'
-import { decideBootstrapRepair } from './bootstrap-repair-guard'
-import { runBootstrap } from './bootstrap-runner'
 import { bootstrapSnapshot } from './bootstrap-state'
 import {
   BROWSER_WINDOW_HEIGHT,
@@ -126,7 +120,6 @@ import {
 } from './bundle-swap'
 import { CHALLENGE_PARTITION } from './challenge-window'
 import { registerChallengeWindowIpc } from './challenge-window-ipc'
-import { provisionCliLinks } from './cli-provision'
 import { readClipboardImagePng } from './clipboard-image'
 import { registerClipboardTextIpc } from './clipboard-ipc'
 import { closeStopFailureMessage, finishWindowsCloseStop, type RuntimeLock } from './close-stop-kill'
@@ -229,15 +222,9 @@ import {
 import { registryPrimaryBootRoute, resolveDesktopRemoteRoute, v1SshTerminalPoolKey } from './desktop-remote-route'
 import { type DesktopSharedMetrics, registerDesktopSharedMetrics } from './desktop-shared-metrics'
 import {
-  buildPosixCleanupScript,
-  buildWindowsCleanupScript,
   type DesktopUninstallResult,
-  modeRemovesAgent,
-  modeRemovesUserData,
   registerDesktopUninstallIpc,
   resolveRemovableAppPath,
-  shouldRemoveAppBundle,
-  uninstallArgsForMode,
   type UninstallSummaryDetails
 } from './desktop-uninstall'
 import { describeDevCdpDecision, resolveDevCdpPort } from './dev-cdp'
@@ -348,7 +335,6 @@ import { createNvidiaEglRecovery } from './linux-nvidia-egl-recovery'
 import { relaunchIfNoSandboxCameTooLate } from './linux-sandbox-relaunch'
 import { createLocalBackendLifecycle, waitForTeardown } from './local-backend-lifecycle'
 import { resolveIpcFileReadPath, resolveMediaStreamFile, resolvePreviewTargetPath } from './local-read-path'
-import { resolveDesktopClientVersion } from './local-runtime-version'
 import { localSkinProfileKey, registerLocalSkinIpc } from './local-skin'
 import { ACTIVE_LOG_POLL_MS, planLogRotation, reclaimActiveLogIfOversized } from './log-rotation'
 import { registerMachineProfile } from './machine-profile'
@@ -358,7 +344,6 @@ import {
   assertManagedUpdatePreflightClear,
   executeManagedRemoteUpdate,
   fenceManagedSshBootstrapPublication,
-  joinManagedUpdatesForApply,
   ManagedConnectionUpdateGate,
   managedSshDrainBlocker,
   managedSshRecoveryScopes,
@@ -412,12 +397,7 @@ import {
 import { wireOauthSessionResponse } from './oauth-session-response'
 import { listWindowsProcesses, reapPackageRootedProcesses } from './package-process-reap'
 import {
-  bundledPayload,
-  installIdForRoot,
-  type PayloadInfo,
-  payloadPythonPath,
-  payloadTicketRuntime,
-  requireBundledPayload
+  installIdForRoot
 } from './payload-backend'
 import { petOverlayClickThrough, shouldPopInOnOverlayClosed } from './pet-overlay'
 import { placePetOverlay, registerPetOverlayIpc } from './pet-overlay-ipc'
@@ -428,7 +408,6 @@ import {
   undialedSshRouteSeeds
 } from './plugin-profile-routes'
 import { createPortalSession, resolvePortalBaseUrl } from './portal-session'
-import { readPreUpdateBackupEnabled } from './pre-update-backup-config'
 import { registerPreparedSubmissions } from './prepared-submissions'
 import { capturePreviewContents } from './preview-capture'
 import { onPreviewWatchOwnerDestroyed, sendPreviewFileChangedToOwner } from './preview-file-watch'
@@ -561,7 +540,7 @@ import {
 } from './session-windows'
 import { ensureLoginShellPath } from './shell-path'
 import { removeStaleSingletonLock } from './singleton-lock'
-import { createSourcePythonBackend, resolveSourceInstallationBackend, type SourceBackend } from './source-backend'
+import { createSourcePythonBackend, resolveSourceInstallationBackend } from './source-backend'
 import { resolveSourcePython } from './source-python'
 import { registerSpellcheckDictionaryIpc } from './spellcheck-dictionary-ipc'
 import { resolveSshBinary } from './ssh-binary'
@@ -591,7 +570,6 @@ import {
 } from './translucency'
 import { registerMachineUiPreferences } from './ui-preferences-ipc'
 import {
-  UPDATE_HANDOFF_DWELL_MS,
   UPDATE_WAIT_POLL_MS,
   UPDATE_WAIT_TIMEOUT_MS,
   waitForUpdateClearance
@@ -606,51 +584,26 @@ import {
   waitForPoolUpdateClearance
 } from './update-hold-wiring'
 import {
-  describeSkippedPrewrite,
-  readLiveUpdateMarker,
-  updateHandoffConflict,
-  writeUpdateMarker
+  readLiveUpdateMarker
 } from './update-marker'
 import { heldWaitMessage, holdTicker } from './update-marker-gate'
 import { updateConnectionsBeforeLocal } from './update-order'
 import {
-  resolveUpdaterMechanism,
   type UpdaterApplyResultWire,
-  type UpdaterStatusWire,
-  type UpdaterStrategy
+  type UpdaterStatusWire
 } from './updater'
 import {
   launcherInstallRoot,
-  observeUpdaterHandoff,
-  repairMacUpdaterHelper,
-  resolveInstallationLauncher,
   resolveStagedUpdaterBinary,
   resolveVenvDir,
-  spawnUpdaterProcess,
-  stagedUpdaterSupportsPrewrittenMarker,
   userLauncherInstallRoot
 } from './updater-process'
-import { AppInstallerStrategy } from './updater/app-installer'
-import { createChannelAppInstallerStrategy } from './updater/app-installer'
-import { ChannelResolver, type ChannelTarget } from './updater/channel'
-import { inspectRunningChannelApp } from './updater/channel-native'
-import { ChannelStrategy } from './updater/channel-strategy'
-import { verifyPreparedChannelInstaller } from './updater/channel-windows-host'
-import { type CheckoutStrategy, createCheckoutStrategy } from './updater/checkout'
-import { readSourceUpdate, sourceChannelName, type SourceUpdate } from './updater/checkout-source'
 import { ExternalStrategy } from './updater/external'
 import { readUpdatesFeedBaseFromConfig, resolveFeedBaseUrl } from './updater/feed-config'
-import { createChannelMacStrategy, createMacStrategy } from './updater/mac-client'
-import { UpdateOperation } from './updater/operation'
 import {
   type ConsumedRelaunch,
-  consumePendingRelaunch,
-  registerUpdateRelaunch,
-  type RelaunchRegistration
+  consumePendingRelaunch
 } from './updater/relaunch'
-import { startUpdateRelaunchWaiter } from './updater/relaunch-waiter'
-import { preflightStateDb } from './updater/state-db-preflight'
-import { createStoreStrategy } from './updater/store-client'
 import { filenameFromUrl } from './url-filename'
 import { isExternalVenvHolder, isHermesOwnedVenvDaemon } from './venv-holder-select'
 import { fetchMarketplaceThemes, searchMarketplaceThemes } from './vscode-marketplace'
@@ -682,7 +635,7 @@ import {
   windowSize
 } from './window-state'
 import { hiddenWindowsChildOptions } from './windows-child-options'
-import { buildPathExtCandidates, chooseUpdaterArgs, resolveVenvHermesCommand } from './windows-hermes-path'
+import { buildPathExtCandidates, resolveVenvHermesCommand } from './windows-hermes-path'
 import {
   connectWindowsRemote,
   detectRemotePlatform,
@@ -3400,7 +3353,6 @@ function writeZoomState(zoomLevel) {
 function resolveUpdateRoot() {
   const candidates = [
     process.env.HERMES_DESKTOP_HERMES_ROOT && path.resolve(process.env.HERMES_DESKTOP_HERMES_ROOT),
-    !IS_PACKAGED && isHermesSourceRoot(SOURCE_REPO_ROOT) ? SOURCE_REPO_ROOT : null,
     isHermesSourceRoot(ACTIVE_HERMES_ROOT) ? ACTIVE_HERMES_ROOT : null
   ].filter(Boolean)
 
@@ -3417,267 +3369,13 @@ function emitUpdateProgress(payload) {
   }
 }
 
-async function checkUpdates(opts: { force?: boolean } = {}): Promise<UpdaterStatusWire> {
-  // A packaged install delegates to the update owner named by its stamp.
-  let strategy: UpdaterStrategy | null = null
-
-  try {
-    strategy = await resolvePackagedUpdateStrategy()
-
-    if (strategy) {
-      return await strategy.check(opts)
-    }
-  } catch (error) {
-    return {
-      supported: true,
-      mechanism: strategy?.mechanism,
-      error: 'check-failed',
-      message: error instanceof Error ? error.message : String(error),
-      fetchedAt: Date.now()
-    }
-  }
-
-  // Checkout install: dispatch through the strategy layer — one mechanism,
-  // one stamp, no direct body path. The flow lives in updater/checkout.ts;
-  // this is the only production door to the checkout arms.
-  return resolveCheckoutUpdateStrategy().check(opts)
+async function checkUpdates(): Promise<UpdaterStatusWire> {
+  return desktopUpdater.check()
 }
 
 let updateInFlight = false
-
-// ── bundled / App Installer helpers ─────────────────────────────────────────
-
-/**
- * Keep the native updater instance alive across check, download and install.
- * Its identity comes from the packaged app, not its optional Python payload.
- */
-const updateOperation: UpdateOperation = new UpdateOperation(createPackagedUpdateStrategy)
-
+const desktopUpdater = new ExternalStrategy({ source: INSTALL_STAMP?.source, payload: 'standalone' })
 const desktopMetrics: DesktopSharedMetrics = registerDesktopSharedMetrics()
-
-function resolvePackagedUpdateStrategy(): Promise<UpdaterStrategy | null> {
-  return updateOperation.resolve()
-}
-
-async function createPackagedUpdateStrategy(): Promise<UpdaterStrategy | null> {
-  const mechanism = resolveUpdaterMechanism({
-    platform: process.platform,
-    updateMechanism: INSTALL_STAMP?.updateMechanism,
-    source: INSTALL_STAMP?.source
-  })
-
-  if (mechanism === 'windows-handoff' || mechanism === 'posix-handoff') {
-    return null
-  }
-
-  if (INSTALL_STAMP?.channelBuild && (mechanism === 'electron-updater' || mechanism === 'app-installer')) {
-    const build = INSTALL_STAMP.channelBuild
-    const installed = await inspectRunningChannelApp(build)
-
-    // Platform/arch/signing are the channel's own preconditions. The Python
-    // payload is not: electron-updater swaps the .app without it, and the
-    // darwin Light channel build ships none (write-build-stamp.mjs). The
-    // strategy that consumes the payload (app-installer) demands it itself.
-    if (
-      (process.platform !== 'darwin' && process.platform !== 'win32') ||
-      (process.arch !== 'arm64' && process.arch !== 'x64')
-    ) {
-      throw new Error('Channel updates require a supported packaged application')
-    }
-
-    return new ChannelStrategy({
-      build,
-      mechanism,
-      resolver: new ChannelResolver({
-        build,
-        platform: process.platform,
-        arch: process.arch,
-        signer: installed.signer
-      }),
-      nativeFactory: (target: ChannelTarget): UpdaterStrategy => createNativePackagedStrategy(mechanism, target)
-    })
-  }
-
-  return createNativePackagedStrategy(mechanism)
-}
-
-function createNativePackagedStrategy(
-  mechanism: UpdaterStrategy['mechanism'],
-  target?: ChannelTarget
-): UpdaterStrategy {
-  if (mechanism === 'electron-updater') {
-    const deps: Parameters<typeof createMacStrategy>[0] = {
-      channel: resolveUpdaterChannelFromStamp(),
-      light: isLightVariant(),
-      feedBaseUrl: resolveDesktopFeedBaseUrl(),
-      appVersion: app.getVersion(),
-      log: rememberLog,
-      emitProgress: emitUpdateProgress,
-      beforeInstall: teardownBundledBackend,
-      onInstallFailure: restoreBundledBackend
-    }
-
-    return target ? createChannelMacStrategy(deps, target) : createMacStrategy(deps)
-  }
-
-  if (mechanism === 'app-installer') {
-    const payload: PayloadInfo = requireBundledPayload(mechanism)
-
-    const deps: ConstructorParameters<typeof AppInstallerStrategy>[0] = {
-      python: payload.storePython,
-      // The checker is bundled core code, run with the payload python.
-      module: 'hermes_cli.windows_appinstaller_update',
-      run: (python, module) =>
-        runAppInstallerChecker(python, module, {
-          env: { ...process.env, PYTHONPATH: payloadPythonPath(payload) },
-          onStderr: stderr => console.error(`[app-installer] checker stderr: ${stderr.slice(0, 400)}`)
-        }),
-      channel: resolveUpdaterChannelFromStamp(),
-      light: isLightVariant(),
-      feedBaseUrl: resolveDesktopFeedBaseUrl(),
-      installer: {
-        prepare: url => stageAppInstallerFile(url, path.join(app.getPath('userData'), 'updates')),
-        open: file => shell.openPath(file)
-      },
-      teardownBundledBackend,
-      restoreBundledBackend,
-      emitUpdateProgress,
-      appVersion: INSTALL_STAMP?.channelBuild?.windowsVersion ?? app.getVersion(),
-      quit: () => app.quit(),
-      registerPendingRelaunch: (fromVersion: string): Promise<RelaunchRegistration> =>
-        registerUpdateRelaunch(app, fromVersion, {
-          // The relaunch mechanism: a detached waiter, external to the dying
-          // process. It snapshots the OLD package, signals the handshake,
-          // waits for this process to exit and for the OS to swap the
-          // installed package version, then activates the NEW package.
-          // Electron's app.relaunch would re-execute the OLD package's
-          // binary and can hold the swap open, so it is not used. The
-          // script is staged to a temp dir and resolved absolutely so
-          // nothing inherited from the package holds the swap open.
-          relaunch: () =>
-            startUpdateRelaunchWaiter(PRODUCT_IDENTITY.msixAppIdWithOrg, process.resourcesPath, rememberLog)
-        })
-    }
-
-    return target
-      ? createChannelAppInstallerStrategy(deps, target, verifyPreparedChannelInstaller)
-      : new AppInstallerStrategy(deps)
-  }
-
-  if (mechanism === 'microsoft-store') {
-    const payload: PayloadInfo = requireBundledPayload(mechanism)
-
-    return createStoreStrategy({
-      python: payload.storePython,
-      module: 'hermes_cli.windows_store_update',
-      pythonPath: payloadPythonPath(payload),
-      env: process.env,
-      windowHandle: () => (BrowserWindow.getFocusedWindow() ?? mainWindow)?.getNativeWindowHandle() ?? null,
-      appVersion: app.getVersion(),
-      teardown: teardownBundledBackend,
-      restore: restoreBundledBackend,
-      emitProgress: emitUpdateProgress,
-      quit: () => app.quit(),
-      registerPendingRelaunch: (fromVersion: string): Promise<RelaunchRegistration> =>
-        registerUpdateRelaunch(app, fromVersion, {
-          relaunch: () =>
-            startUpdateRelaunchWaiter(
-              PRODUCT_IDENTITY.storeMsix!.identityName,
-              process.resourcesPath,
-              rememberLog,
-              1860
-            )
-        })
-    })
-  }
-
-  return new ExternalStrategy(INSTALL_STAMP)
-}
-
-/**
- * The checkout updater strategy (windows-handoff / posix-handoff). The flow
- * lives in updater/checkout.ts; this is the composition root that hands it
- * the app shell's impure edges. The public checkUpdates/applyUpdates
- * entrypoints dispatch only through this strategy — there is no other
- * production path to the checkout arms.
- */
-function resolveCheckoutUpdateStrategy(): CheckoutStrategy {
-  return createCheckoutStrategy({
-    hermesHome: HERMES_HOME,
-    isWindows: IS_WINDOWS,
-    isMac: IS_MAC,
-    defaultUpdateBranch: DEFAULT_UPDATE_BRANCH,
-    updateHandoffDwellMs: UPDATE_HANDOFF_DWELL_MS,
-    readSourceUpdate: async (
-      updateRoot: string,
-      opts: { force?: boolean; setChannel?: 'main' | 'stable' }
-    ): Promise<SourceUpdate | null> =>
-      readSourceUpdate({
-        python: await findPythonForRoot(updateRoot),
-        git: resolveGitBinary(),
-        updateRoot,
-        hermesHome: HERMES_HOME,
-        branchConfigPath: DESKTOP_UPDATE_CONFIG_PATH,
-        force: opts.force,
-        setChannel: opts.setChannel
-      }),
-    resolveUpdateRoot,
-    resolveUpdaterBinary,
-    remoteGatewayActive: globalRemoteActive,
-
-    emitUpdateProgress,
-    rememberLog,
-    startHermes,
-    stopBackendsForUpdate,
-    repairMacUpdaterHelper: updater => repairMacUpdaterHelper(updater, { isMac: IS_MAC, log: rememberLog }),
-    preflightStateDb: async (home: string, log: (message: string) => void): Promise<void> => {
-      const root: string = resolveUpdateRoot()
-
-      // `updates.pre_update_backup: off` is the CLI's opt-out for the whole
-      // pre-update backup family; the Desktop's emergency snapshot honours it
-      // too (4de06d1dbf7b). An unreadable answer keeps the snapshot.
-      if (
-        !(await readPreUpdateBackupEnabled(
-          resolveHermesBackend(['config', 'get', 'updates.pre_update_backup', '--json']),
-          home
-        ))
-      ) {
-        log('[updates] emergency state.db backup disabled by updates.pre_update_backup')
-
-        return
-      }
-
-      // PM-managed checkouts carry no venv of their own: the installation
-      // launcher owns interpreter and generation selection there — same
-      // contract as readSourceUpdate and the hand-off script.
-      const managed: boolean = directoryExists(path.join(root, 'pm'))
-
-      const launcher: string | null = managed ? resolveInstallationLauncher(root, IS_WINDOWS, HERMES_HOME) : null
-
-      if (managed && !launcher) {
-        const message =
-          `state.db pre-flight failed: the installation launcher under ${root} is missing. ` +
-          'Update cancelled before backend shutdown. Repair this installation before retrying.'
-
-        log(`[updates] ${message}`)
-        throw new Error(message)
-      }
-
-      await preflightStateDb({
-        python: managed ? null : await findPythonForRoot(root),
-        launcher,
-        script: path.join(root, 'hermes_cli', 'backup_sqlite.py'),
-        home,
-        log
-      })
-    },
-    runningAppBundle,
-    markQuittingForHandoff: () => {
-      isQuittingForHandoff = true
-    },
-    quit: () => app.quit()
-  })
-}
 
 /**
  * The App Installer feed base URL for a bundled MSIX install: config.yaml's
@@ -4337,158 +4035,9 @@ async function releaseBackendLock(updateRoot: string, tag: string): Promise<{ un
   return { unlocked: false }
 }
 
-// applyUpdates — hand off to the installer's --update flow, then exit.
-//
-// The desktop is a pure consumer: it does NOT git pull / pip install / rebuild
-// itself (the old open-coded git dance lived here and drifted from
-// `hermes update`). Instead we spawn the staged Hermes-Setup binary with
-// --update and quit, so it can run `hermes update` (which refuses while we
-// hold the venv shim) and rebuild the desktop with our exe already gone.
-//
-// Detection (checkUpdates / commit changelog / "N behind") stays in the UI;
-// only this apply action changed.
+// Application updates never invoke the connected agent's installer or updater.
 async function applyUpdates(): Promise<UpdaterApplyResultWire> {
-  return updateOperation.apply(async (): Promise<UpdaterApplyResultWire> => {
-    updateInFlight = true
-    let handedOff: boolean = false
-
-    try {
-      // The local handoff asks the window to exit and the update scripts only
-      // wait so long for that PID — never start that deadline while quit would
-      // still be gated on a managed SSH update or its recovery transaction
-      // (before-quit joins the same operations; the updater must not race them).
-      // Bounded (review H3): a refusal leaves the remote operations running.
-      const managedBusy = await joinManagedUpdatesForApply(
-        () => [...managedConnectionUpdates.values(), ...managedConnectionRecoveries.values()],
-        rememberLog
-      )
-
-      if (managedBusy) {
-        return managedBusy
-      }
-
-      const packaged: UpdaterStrategy | null = await resolvePackagedUpdateStrategy()
-      const strategy: UpdaterStrategy = packaged ?? resolveCheckoutUpdateStrategy()
-      const result: UpdaterApplyResultWire = await desktopMetrics.trackUpdateApply(packaged, strategy)
-      handedOff = result.handedOff === true
-
-      return result
-    } finally {
-      if (!handedOff) {
-        updateInFlight = false
-      }
-    }
-  })
-}
-
-async function handOffWindowsBootstrapRecovery(reason) {
-  if (!IS_WINDOWS || !IS_PACKAGED) {
-    return false
-  }
-
-  // A bundled install does not own %LOCALAPPDATA%\hermes — the updater
-  // would try to heal a tree the app never created. The payload IS the
-  // runtime; recovery means reinstalling the app, not spawning the
-  // updater. (ensureRuntime's bundled guard also short-circuits before
-  // this call; this is the belt-and-suspenders check.)
-  if (installShape() === 'bundled') {
-    rememberLog('[bootstrap] refusing updater recovery hand-off on a bundled install; reinstall the app')
-
-    return false
-  }
-
-  const updater = resolveUpdaterBinary()
-
-  if (!updater) {
-    return false
-  }
-
-  const handoffConflict = await updateHandoffConflict(HERMES_HOME)
-
-  if (handoffConflict) {
-    // Same hazard as applyUpdates (#75778): a live foreign updater already
-    // owns the marker. Spawning another here would overwrite its claim and
-    // race a second updater over the same install tree. The live updater
-    // is already working on this exact install and will restart us when
-    // it finishes, so treat this the same as a successful hand-off instead
-    // of clobbering it with our own.
-    rememberLog(`[bootstrap] refusing recovery hand-off: ${handoffConflict.message}`)
-    isQuittingForHandoff = true
-    setTimeout(() => {
-      app.quit()
-    }, UPDATE_HANDOFF_DWELL_MS)
-
-    return true
-  }
-
-  const updateRoot = resolveUpdateRoot()
-  const { branch: configuredBranch } = readDesktopUpdateConfig()
-
-  // Recovery can run without Python. Keep the chosen branch; do not guess a replacement.
-  const branch: string = configuredBranch || DEFAULT_UPDATE_BRANCH
-
-  const updaterArgs: string[] = chooseUpdaterArgs({ runtimeUsable: await isSourceRuntimeUsable(updateRoot) }, branch)
-
-  await stopBackendsForUpdate()
-
-  const child = spawnUpdaterProcess(updater, updaterArgs, {
-    cwd: HERMES_HOME,
-    env: {
-      ...process.env,
-      HERMES_HOME,
-      HERMES_INSTALL_ROOT: updateRoot
-    },
-    detached: true,
-    stdio: 'ignore'
-  })
-
-  // Same marker pre-write as applyUpdates — see comment there. The recovery
-  // hand-off has the same window where the renderer can respawn a backend
-  // before the updater writes its own marker, and the same stale-updater
-  // exclusion: a pre-#74782 binary would refuse its own pre-written claim and
-  // strand the very recovery meant to heal the install.
-  //
-  // Exclusive create only (A7 rule 3): over any existing marker the pre-write
-  // is skipped — the staged updater claims (and reclaims) for itself.
-  if (Number.isInteger(child.pid) && stagedUpdaterSupportsPrewrittenMarker(updater)) {
-    const prewrite = await writeUpdateMarker(HERMES_HOME, child.pid)
-
-    if (!prewrite.ok) {
-      rememberLog(`[bootstrap] skipping marker pre-write: ${describeSkippedPrewrite(prewrite)}`)
-    }
-  } else if (Number.isInteger(child.pid)) {
-    rememberLog(
-      `[bootstrap] skipping marker pre-write: staged updater predates self-adopt (${updater}); it would refuse its own claim`
-    )
-  }
-
-  rememberLog(
-    `[bootstrap] handed off ${reason} recovery to updater: ${updater} ${updaterArgs.join(' ')}; exiting desktop to release app.asar`
-  )
-  // Same dwell as the in-app update hand-off (#50419): give the updater's
-  // window time to appear before we vanish, so the recovery doesn't look like
-  // a crash and provoke a mid-recovery relaunch. The dwell doubles as the
-  // hand-off settle window (#66753): a spawn error or early updater death
-  // returns false so the caller falls through to its next recovery path
-  // instead of quitting into nothing.
-  const dwellStartedAt = Date.now()
-  const handoffOutcome = await observeUpdaterHandoff(child, UPDATE_HANDOFF_DWELL_MS)
-
-  if (!handoffOutcome.ok) {
-    rememberLog(`[bootstrap] recovery hand-off not viable, staying alive: ${handoffOutcome.message}`)
-
-    return false
-  }
-
-  isQuittingForHandoff = true
-  setTimeout(
-    () => {
-      app.quit()
-    },
-    Math.max(0, UPDATE_HANDOFF_DWELL_MS - (Date.now() - dwellStartedAt))
-  )
-
-  return true
+  return desktopUpdater.apply()
 }
 
 // The running app's .app bundle (packaged macOS): execPath is
@@ -4546,26 +4095,6 @@ function readBootstrapMarker() {
 // "already installed" off the filesystem alone, not just the marker.
 async function isSourceRuntimeUsable(root: string): Promise<boolean> {
   return (await resolveSourceInstallationBackend(root, [], { hermesHome: HERMES_HOME })) !== null
-}
-
-function activeRuntimeState(backend: SourceBackend | null): ActiveRuntimeState {
-  // We DELIBERATELY do NOT verify that the checkout is currently at the
-  // pinned commit -- users update via the in-app update path or `hermes
-  // update`, which moves HEAD legitimately. The marker only attests "a
-  // desktop-managed bootstrap ran here at least once"; runtime usability is
-  // what decides whether we can actually launch.
-  const state: ActiveRuntimeState = classifyActiveRuntime(
-    readBootstrapMarker(),
-    BOOTSTRAP_MARKER_SCHEMA_VERSION,
-    backend !== null
-  )
-
-  // The canonical install stamp (written next to the runtime by the bootstrap)
-  // tells the UI where this runtime came from. Prefer it over the marker so
-  // the Runtime row reflects the actual install provenance.
-  state.canonicalInstallStamp = readCanonicalInstallStamp()
-
-  return state
 }
 
 /** Read the checkout-owned install stamp in the canonical runtime root
@@ -4844,190 +4373,68 @@ function writeDefaultProjectDir(dir) {
 const installedRuntimeGate = createInstalledRuntimeGate(process.env, rememberLog)
 
 async function resolveHermesBackend(backendArgs: string[]): Promise<ResolvedHermesBackend> {
-  const payload = bundledPayload(process.resourcesPath)
+  const published = userLauncherInstallRoot(IS_WINDOWS, HERMES_HOME)
 
-  if (payload) {
-    if (!IS_WINDOWS) {
-      provisionCliLinks(payload.commands, path.join(os.homedir(), '.local', 'bin'), rememberLog)
-    }
+  const backend = await resolveExternalRuntime<ResolvedHermesBackend>({
+    desktopRoot: SOURCE_REPO_ROOT,
+    overrideRoot: process.env.HERMES_DESKTOP_HERMES_ROOT,
+    overrideCommand: process.env.HERMES_DESKTOP_HERMES,
+    installedRoots: [ACTIVE_HERMES_ROOT, published?.root],
+    pathCommand: process.env.HERMES_DESKTOP_IGNORE_EXISTING === '1' ? null : findOnPath('hermes'),
+    resolveRoot: async (root, explicit) => {
+      if (explicit) {
+        if (!isHermesSourceRoot(root)) { return null }
 
-    return {
-      kind: 'python',
-      label: `bundled payload at ${payload.root}`,
-      command: payload.shim,
-      args: [...backendArgs],
-      env: { ...buildDesktopBackendEnv(), HERMES_RUNTIME_DIR: payload.toolsDir },
-      ...payloadTicketRuntime(payload),
-      root: payload.repoDir,
-      bootstrap: false,
-      shell: false,
-      local: 'bundled'
-    }
-  }
-
-  // 1. Explicit override -- HERMES_DESKTOP_HERMES_ROOT points at a developer
-  //    checkout. Honour it as-is (no bootstrap; the user is driving).
-  const overrideRoot: string | undefined =
-    process.env.HERMES_DESKTOP_HERMES_ROOT && path.resolve(process.env.HERMES_DESKTOP_HERMES_ROOT)
-
-  if (overrideRoot && isHermesSourceRoot(overrideRoot)) {
-    const backend: SourceBackend | null = createSourcePythonBackend(
-      overrideRoot,
-      await findPythonForRoot(overrideRoot),
-      backendArgs
-    )
-
-    if (backend) {
-      return backend
-    }
-  }
-
-  // 2. Development source -- when running `npm run dev` from a checkout, the
-  //    cloned repo at SOURCE_REPO_ROOT takes precedence over ACTIVE and any
-  //    installed `hermes` on PATH so local Python edits are actually exercised.
-  //    (In dev with no checkout, SOURCE_REPO_ROOT won't pass isHermesSourceRoot.)
-  if (!IS_PACKAGED && isHermesSourceRoot(SOURCE_REPO_ROOT)) {
-    const backend: SourceBackend | null = createSourcePythonBackend(
-      SOURCE_REPO_ROOT,
-      await findPythonForRoot(SOURCE_REPO_ROOT),
-      backendArgs
-    )
-
-    if (backend) {
-      return backend
-    }
-  }
-
-  // 3. HERMES_DESKTOP_HERMES — an explicit deployment override (the Nix wrapper), not a PATH
-  //    candidate; the pinned backend is the only valid runtime there. Resolve it before any
-  //    mutable install (older release, other Python env). It carries the root its launcher reports.
-  const hermesOverride: string | undefined = process.env.HERMES_DESKTOP_HERMES
-  let hermesCommand: string | null = null
-
-  if (hermesOverride) {
-    const resolvedOverride: string | null = findOnPath(hermesOverride)
-
-    if (resolvedOverride) {
-      hermesCommand = resolvedOverride
-    } else if (!isWindowsBinaryPathInWsl(hermesOverride, { isWsl: IS_WSL })) {
-      hermesCommand = hermesOverride
-    } else {
-      rememberLog(`Ignoring Windows Hermes override under WSL: ${hermesOverride}`)
-    }
-
-    if (hermesCommand) {
-      if (looksLikeDesktopAppBinary(hermesCommand)) {
-        rememberLog(`Ignoring desktop app executable on PATH while resolving Hermes CLI: ${hermesCommand}`)
-        hermesCommand = null
-      } else {
-        const unwrapped: Awaited<ReturnType<typeof unwrapWindowsVenvHermesCommand>> =
-          await unwrapWindowsVenvHermesCommand(hermesCommand, backendArgs)
-
-        if (unwrapped) {
-          return unwrapped
-        }
-
-        const shellForProbe: boolean = isCommandScript(hermesCommand)
-
-        if (
-          shouldTrustHermesOverride(hermesOverride) ||
-          (await verifyHermesCli(hermesCommand, { shell: shellForProbe }))
-        ) {
-          return {
-            label: `existing Hermes CLI at ${hermesCommand}`,
-            command: hermesCommand,
-            args: backendArgs,
-            bootstrap: false,
-            env: {},
-            kind: 'command',
-            shell: shellForProbe,
-            local: 'installed', root: await launcherInstallRoot(hermesCommand) // ticket minting needs it (#138774)
-          }
-        }
-
-        rememberLog(
-          `Ignoring existing Hermes CLI at ${hermesCommand}: --version probe failed; falling through to bootstrap.`
-        )
-      }
-    }
-  }
-
-  // 4. ACTIVE_HERMES_ROOT — the canonical install at
-  //    %LOCALAPPDATA%\\hermes\\hermes-agent (Windows) or ~/.hermes/hermes-agent.
-  //    A valid bootstrap marker proves Desktop finished the first-run install
-  //    flow, but marker provenance is NOT the same thing as runtime usability:
-  //    the CLI can publish the same installation launcher, and older desktop
-  //    builds could leave a healthy install behind without the marker. If the
-  //    active runtime is usable, launch it directly; only fall through to
-  //    bootstrap when the runtime itself is unusable.
-  //    HERMES_DESKTOP_IGNORE_EXISTING=1 skips this rung (see backend-resolution).
-  const activeBackend: SourceBackend | null = await installedRuntimeGate.resolve(ACTIVE_HERMES_ROOT, () =>
-    resolveSourceInstallationBackend(ACTIVE_HERMES_ROOT, backendArgs, { hermesHome: HERMES_HOME })
-  )
-
-  const activeRuntime: ActiveRuntimeState = activeRuntimeState(activeBackend)
-
-  if (activeBackend && !bootstrapRepairRequested) {
-    if (!activeRuntime.hasValidMarker) {
-      rememberLog(
-        `[bootstrap] Active Hermes runtime at ${ACTIVE_HERMES_ROOT} is usable but the bootstrap marker is missing or stale; skipping first-run bootstrap.`
-      )
-    }
-
-    return activeBackend
-  }
-
-  if (bootstrapRepairRequested) {
-    rememberLog('[bootstrap] repair requested; bypassing the usable active runtime to re-run the installer')
-  } else {
-    // 5. A source install outside ACTIVE_HERMES_ROOT (install.sh --dir, a
-    //    setup-hermes.sh clone), found through the launcher it published at a
-    //    fixed user-bin location: a Finder/Dock launch inherits a PATH without
-    //    ~/.local/bin. The reported root is then resolved and probed like any
-    //    installed runtime; HERMES_DESKTOP_IGNORE_EXISTING=1 skips it too.
-    const userInstall: ReturnType<typeof userLauncherInstallRoot> = userLauncherInstallRoot(IS_WINDOWS, HERMES_HOME)
-
-    if (userInstall) {
-      const userBackend: SourceBackend | null = await installedRuntimeGate.resolve(userInstall.root, () =>
-        resolveSourceInstallationBackend(userInstall.root, backendArgs, { hermesHome: HERMES_HOME })
-      )
-
-      if (userBackend) {
-        rememberLog(`[boot] Using Hermes install at ${userInstall.root} (published launcher ${userInstall.launcher})`)
-
-        return userBackend
+        return createSourcePythonBackend(root, await findPythonForRoot(root), backendArgs)
       }
 
-      rememberLog(`[bootstrap] Hermes install at ${userInstall.root} (from ${userInstall.launcher}) is not usable`)
-    } else {
-      rememberLog(`[bootstrap] no usable Hermes install at ${ACTIVE_HERMES_ROOT} and no published user-bin launcher`)
-    }
-  }
+      return installedRuntimeGate.resolve(root, () =>
+        resolveSourceInstallationBackend(root, backendArgs, { hermesHome: HERMES_HOME }))
+    },
+    resolveCommand: async (selected, explicit) => {
+      const command = findOnPath(selected) || selected
 
-  // 6. Nothing usable yet -- signal the bootstrap runner that we need to
-  //    clone+install. Phase 1D's bootstrap-runner consumes this sentinel
-  //    and drives install.ps1 stages with a progress UI. Until 1D lands,
-  //    callers see the sentinel and surface it as a user-facing error
-  //    explaining what's missing.
-  //
-  //    We deliberately do NOT throw here -- throwing inside
-  //    resolveHermesBackend was the old "no payload" path and forced the
-  //    user into a dead end. With the bootstrap protocol, "no install yet"
-  //    is a recoverable state the GUI can drive through.
-  return {
-    kind: 'bootstrap-needed',
-    label: 'Hermes Agent not installed yet; bootstrap required',
+      if (isDesktopRuntimeRoot(command, SOURCE_REPO_ROOT) || looksLikeDesktopAppBinary(command)
+          || isWindowsBinaryPathInWsl(command, { isWsl: IS_WSL })) {
+        return null
+      }
+
+      const unwrapped = await unwrapWindowsVenvHermesCommand(command, backendArgs)
+
+      if (unwrapped) { return unwrapped }
+
+      const shellForProbe = isCommandScript(command)
+
+      if (!(explicit && shouldTrustHermesOverride(selected))
+          && !(await verifyHermesCli(command, { shell: shellForProbe }))) {
+        return null
+      }
+
+      return {
+        label: `existing Hermes CLI at ${command}`,
+        command,
+        args: backendArgs,
+        bootstrap: false,
+        env: {},
+        kind: 'command',
+        shell: shellForProbe,
+        local: 'installed',
+        root: await launcherInstallRoot(command)
+      }
+    }
+  })
+
+  return backend ?? {
+    kind: 'connection-required',
+    label: EXTERNAL_RUNTIME_REQUIRED_MESSAGE,
     command: null,
     args: backendArgs,
-    bootstrap: true,
+    bootstrap: false,
     env: {},
     shell: false,
-    // Hints for the bootstrap runner / UI layer:
     activeRoot: ACTIVE_HERMES_ROOT,
-    installStamp: INSTALL_STAMP, // may be null in dev
-    isPackaged: IS_PACKAGED,
     platform: process.platform,
-    local: 'none'
+    local: 'unavailable'
   }
 }
 
@@ -5057,138 +4464,19 @@ async function ensureRuntime(
   localBackendLifecycle.assertCanStart()
   assertStillOwned()
 
-  if (!backend.bootstrap) {
-    rememberLog(`[backend] using ${backend.label}`)
-    await advanceBootProgress('runtime.external', `Using ${backend.label}`, 32)
+  // The user can install Hermes independently while connection setup is open.
+  const resolved = backend.kind === 'connection-required' ? await resolveHermesBackend(backend.args) : backend
+  assertStillOwned()
 
-    return backend
+  if (!resolved.command || resolved.bootstrap) {
+    throw new Error(EXTERNAL_RUNTIME_REQUIRED_MESSAGE)
   }
 
-  // backend.kind === 'bootstrap-needed' means resolveHermesBackend couldn't
-  // find anything to spawn. Hand off to the bootstrap runner which drives the
-  // platform installer, writes the bootstrap-complete marker on success, then
-  // we re-resolve to get the now-installed backend.
-  //
-  // Phase 1D status: bootstrap runs but events go to desktop.log only
-  // (renderer window isn't created until later in startBackend). Phase 1E
-  // will rewire startup to spawn the window first and route bootstrap events
-  // to a renderer-side install overlay.
-  //
-  // The artifact kind forbids bootstrap even when a caller requests repair.
-  if (backend.kind === 'bootstrap-needed' && installShape() === 'bundled') {
-    rememberLog('[bootstrap] REFUSING installer on a bundled install; payload missing or damaged — reinstall the app')
+  hideFirstRunSetupChoice()
+  rememberLog(`[backend] using ${resolved.label}`)
+  await advanceBootProgress('runtime.external', `Using ${resolved.label}`, 32)
 
-    const bundledError: Error & { isBootstrapFailure?: boolean } = new Error(
-      'This app bundles its own Hermes runtime, but the runtime files are missing or damaged. Reinstall Hermes Desktop to restore it.'
-    )
-
-    bundledError.isBootstrapFailure = true
-    bootstrapFailure = bundledError
-    throw bundledError
-  }
-
-  if (backend.kind === 'bootstrap-needed') {
-    rememberLog('[bootstrap] no Hermes install found; starting first-launch bootstrap')
-
-    if (await handOffWindowsBootstrapRecovery('bootstrap-needed')) {
-      const handoffError: Error & { isBootstrapFailure?: boolean; bootstrapHandedOff?: boolean } = new Error(
-        'Hermes recovery was handed off to Hermes Setup. The desktop will restart when recovery completes.'
-      )
-
-      handoffError.isBootstrapFailure = true
-      handoffError.bootstrapHandedOff = true
-      bootstrapFailure = handoffError
-      throw handoffError
-    }
-
-    // Eagerly flip the bootstrap UI state to 'active' so the renderer
-    // shows the install overlay BEFORE the runner finishes fetching the
-    // manifest (which on slow networks can take tens of seconds and would
-    // otherwise leave the user staring at the generic 'Preparing' splash).
-    // We emit a synthetic manifest with an empty stages list -- the real
-    // manifest event will overwrite it once install.ps1 -Manifest returns.
-    try {
-      broadcastBootstrapEvent({
-        type: 'manifest',
-        stages: [],
-        protocolVersion: null
-      })
-    } catch {
-      void 0
-    }
-
-    localBackendLifecycle.assertCanStart()
-    bootstrapAbortController = new AbortController()
-
-    // The repair request has been honoured by reaching the installer; clear it
-    // so a later boot isn't forced through bootstrap again.
-    bootstrapRepairRequested = false
-    bootstrapRepairAttempt = 0
-
-    const bootstrapResult = await runBootstrap({
-      installStamp: backend.installStamp,
-      activeRoot: backend.activeRoot,
-      sourceRepoRoot: SOURCE_REPO_ROOT,
-      hermesHome: HERMES_HOME,
-      logRoot: path.join(HERMES_HOME, 'logs'),
-      abortSignal: bootstrapAbortController.signal,
-      onEvent: ev => {
-        // Tee every bootstrap event to (a) the desktop log for forensics
-        // and (b) the renderer for live progress UI. Either may be absent;
-        // tolerate both gracefully so a renderer crash doesn't stall the
-        // bootstrap and a log-write failure doesn't suppress the UI signal.
-        try {
-          rememberLog(`[bootstrap] ${JSON.stringify(ev)}`)
-        } catch {
-          void 0
-        }
-
-        try {
-          broadcastBootstrapEvent(ev)
-        } catch {
-          void 0
-        }
-      },
-      writeMarker: writeBootstrapMarker,
-      gitBinary: resolveGitBinary()
-    })
-
-    bootstrapAbortController = null
-
-    if (bootstrapResult.cancelled) {
-      const cancelledError = new Error('Hermes install was cancelled.') as any
-      cancelledError.isBootstrapFailure = true
-      cancelledError.bootstrapCancelled = true
-      bootstrapFailure = cancelledError
-      throw cancelledError
-    }
-
-    if (!bootstrapResult.ok) {
-      // Plain lead sentence + trailing "Details:" line; the install overlay
-      // shows this verbatim and offers Reload and retry / Open logs itself.
-      const bootstrapError = new Error(
-        describeBootstrapFailure(bootstrapResult.failedStage, bootstrapResult.error)
-      ) as any
-
-      bootstrapError.isBootstrapFailure = true
-      bootstrapError.failedStage = bootstrapResult.failedStage || null
-      // Latch the failure so subsequent startHermes() calls return this
-      // same error without re-running install.ps1.  Cleared by the
-      // hermes:bootstrap:reset IPC (renderer's "Reload and retry").
-      bootstrapFailure = bootstrapError
-      throw bootstrapError
-    }
-
-    rememberLog('[bootstrap] bootstrap complete; marker written. Re-resolving backend.')
-
-    // Resolve the newly published launcher after the installer completes.
-    return ensureRuntime(
-      await installedRuntimeGate.afterInstall(() => resolveHermesBackend(backend.args)),
-      assertStillOwned
-    )
-  }
-
-  throw new Error(`Unexpected bootstrap backend: ${backend.kind}`)
+  return resolved
 }
 
 // Assemble a single-file multipart/form-data body (FastAPI `UploadFile`
@@ -14407,7 +13695,7 @@ ipcMain.handle('hermes:backend:recycle', async (_event, profile) => {
 ipcMain.handle('hermes:bootstrap:reset', async () => {
   // Renderer's "Reload and retry" path. Clear the latched failure and
   // reset connection state so the next startHermes() call restarts the
-  // full backend flow (including a fresh runBootstrap pass).
+  // connection discovery flow without modifying the installed agent.
   rememberLog('[bootstrap] reset requested by renderer; clearing latched failure')
   await teardownPrimaryBackendAndWait()
   bootstrapFailure = null
@@ -14418,69 +13706,11 @@ ipcMain.handle('hermes:bootstrap:reset', async () => {
 
   return { ok: true }
 })
-ipcMain.handle('hermes:bootstrap:repair', async (): Promise<{ ok: boolean; bundled?: boolean; error?: string }> => {
-  // A bundled install's payload is immutable and sealed at build time —
-  // "repair" would re-run the installer against a separate
-  // %LOCALAPPDATA%\hermes tree the app doesn't own. The only repair for a
-  // damaged bundle is reinstalling the app itself. Refuse without touching
-  // bootstrapRepairRequested so a stale renderer can't drive an install.
-  if (installShape() === 'bundled') {
-    rememberLog('[bootstrap] repair refused on a bundled install; repair means reinstalling the app')
-
-    return { ok: false, error: 'bundled-immutable' }
-  }
-
-  // Forceful repair: force the next startHermes() through the full installer
-  // (refreshing a broken/partial venv) and clear any latched failure + live
-  // connection. The renderer reloads afterwards to re-drive the boot flow.
-  //
-  // We do NOT delete the bootstrap marker here. Repair is also reachable from
-  // transient backend errors on a perfectly healthy install, and deleting the
-  // marker in that case stranded the app in first-run setup with no way back
-  // (#72166). The explicit flag carries the intent instead.
-  bootstrapRepairAttempt += 1
-
-  // Probe the live backend process so the guard can distinguish "venv is
-  // genuinely broken" (force reinstall) from "backend is just transiently
-  // stalled under GIL pressure" (#74874 — `event loop stalled` followed by
-  // `ws ready frame send failed`, then renderer keeps reporting dead).
-  const primaryProc = backendConnectionState.getProcess()
-
-  const primaryBackendAlive = Boolean(
-    primaryProc &&
-    (primaryProc as { exitCode?: number | null }).exitCode === null &&
-    (primaryProc as { signalCode?: string | null }).signalCode === null
-  )
-
-  const repairDecision = decideBootstrapRepair({
-    attempt: bootstrapRepairAttempt,
-    maxSoftAttempts: MAX_BOOTSTRAP_REPAIR_SOFT_ATTEMPTS,
-    primaryBackendAlive
-  })
-
-  rememberLog(
-    `[bootstrap] repair requested by renderer; forcing reinstall + clearing latched failure ` +
-      `(attempt=${repairDecision.attempt}/${MAX_BOOTSTRAP_REPAIR_SOFT_ATTEMPTS}, ` +
-      `primaryBackendAlive=${primaryBackendAlive}, ` +
-      `hardReinstall=${repairDecision.hardReinstall}): ${repairDecision.reason}`
-  )
-
-  // The guard may decide the install is healthy enough that a restart
-  // (without touching the venv) is the right answer. Translate that into
-  // the existing flag: if the guard said "soft restart", we skip the
-  // "bypass active runtime" path inside startHermes() and fall through
-  // to the normal restart branch, which just kills the current child
-  // and respawns it against the same venv. See #74874 — this is what
-  // breaks the infinite reinstall loop the user hit.
-  bootstrapRepairRequested = repairDecision.hardReinstall
-  bootstrapFailure = null
-  backendStartFailure = null
-  remoteReauthFailure = null
-  getFirstRunSetupGate().resetForRepair()
-  await teardownPrimaryBackendAndWait()
-
-  return { ok: true }
-})
+ipcMain.handle('hermes:bootstrap:repair', async () => ({
+  ok: false,
+  error: 'external-runtime',
+  message: 'Repair the separately installed Hermes agent with its own installer. Desktop does not modify that installation.'
+}))
 
 registerUpdateHoldIpc(ipcMain, {
   isPrimaryBootSender: event =>
@@ -14493,11 +13723,18 @@ registerUpdateHoldIpc(ipcMain, {
 })
 
 ipcMain.handle('hermes:bootstrap:continue-local', async () => {
-  rememberLog('[bootstrap] local install selected by renderer; continuing first-launch bootstrap')
+  const backend = await resolveHermesBackend([])
+
+  if (!backend.command) {
+    return { ok: false, error: 'runtime-missing', message: EXTERNAL_RUNTIME_REQUIRED_MESSAGE }
+  }
+
+  rememberLog('[connection] existing local Hermes selected')
   continueFirstRunLocalBootstrap()
 
   return { ok: true }
 })
+
 ipcMain.handle('hermes:bootstrap:cancel', async () => {
   // Renderer's Cancel button during first-launch install. Abort the running
   // install script (SIGTERM via the runner's abortSignal). runBootstrap
@@ -14520,7 +13757,7 @@ ipcMain.handle('hermes:local-backend:probe', async () => {
   // or a click that has not confirmed the install.
   const backend = await resolveHermesBackend([])
 
-  return { bootstrapNeeded: backend?.kind === 'bootstrap-needed' }
+  return { bootstrapNeeded: false, available: Boolean(backend.command) }
 })
 ipcMain.handle('hermes:connection-config:get', async (_event, profile) =>
   sanitizeDesktopConnectionConfig(readDesktopConnectionConfig(), profile)
@@ -15151,9 +14388,9 @@ ipcMain.handle('hermes:connections:update-managed', async (_event, rawId) => req
 
 // Fan out `hermes update` to every eligible registered connection at once.
 // Cloud entries are excluded (platform-managed); each dispatch reports
-// independently so one dead LAN box can't wedge the batch. Local reuses the
-// app's own update pipeline; Desktop-managed SSH uses the transactional
-// drain/update/restore lifecycle; URL remotes POST their backend updater.
+// independently so one dead LAN box can't wedge the batch. Local Hermes is
+// externally managed; SSH uses its transactional drain/update/restore lifecycle,
+// and URL remotes POST their backend updater.
 ipcMain.handle('hermes:connections:update-all', async (_event, payload) => {
   const registry = readDesktopConnectionsRegistry()
 
@@ -15166,9 +14403,7 @@ ipcMain.handle('hermes:connections:update-all', async (_event, payload) => {
     Array.isArray((payload as any)?.excludeIds) ? (payload as any).excludeIds.map((id: unknown) => String(id)) : []
   )
 
-  // Remote entries settle before the local handoff runs: the local updater
-  // waits on the window PID exiting, so a still-running managed SSH update
-  // would eat into (or outlive) that deadline. Order of results is preserved.
+  // Preserve result ordering while each connection reports its own ownership policy.
   const results = await updateConnectionsBeforeLocal(
     registry.connections.filter(connection => !excludeIds.has(connection.id)),
     async (connection: RegistryConnection) => {
@@ -15176,18 +14411,15 @@ ipcMain.handle('hermes:connections:update-all', async (_event, payload) => {
       const eligibility = updateEligibility(connection)
 
       if (!eligibility.eligible) {
-        return { ...base, ok: false, skipped: true, reason: eligibility.reason }
+        return {
+          ...base, ok: false, skipped: true, reason: eligibility.reason,
+          ...(eligibility.reason === 'external-local-runtime'
+            ? { detail: 'Update this separately installed Hermes agent outside the desktop app.' }
+            : {})
+        }
       }
 
       try {
-        if (connection.kind === 'local') {
-          // The app-managed runtime updates through the same pipeline as the
-          // Settings → Updates button (marker + venv gate + relaunch flow).
-          const result: any = await applyUpdates()
-
-          return { ...base, ok: result?.ok !== false, detail: result?.message || 'update started' }
-        }
-
         if (connection.kind === 'ssh') {
           return managedSshUpdateAllRow(base, await requestManagedSshUpdate(connection.id))
         }
@@ -17128,7 +16360,7 @@ const disposeTerminalSession = terminalIpc.disposeTerminalSession
 ipcMain.handle(
   'hermes:updates:check',
   async (_event: Electron.IpcMainInvokeEvent, opts?: { force?: boolean }): Promise<UpdaterStatusWire> =>
-    checkUpdates({ force: Boolean(opts?.force) }).catch((error: Error): UpdaterStatusWire => ({
+    checkUpdates().catch((error: Error): UpdaterStatusWire => ({
       supported: true,
       branch: readDesktopUpdateConfig().branch,
       error: 'check-failed',
@@ -17146,11 +16378,7 @@ ipcMain.handle('hermes:updates:apply', async (_event, payload) =>
 )
 
 // About ▸ Updates channel selector; source checkouts only (packages bake their channel).
-ipcMain.handle('hermes:updates:channel:set', async (_event, name: unknown): Promise<UpdaterStatusWire> => {
-  assertSourceUpdateChannel(INSTALL_STAMP)
-
-  return resolveCheckoutUpdateStrategy().check({ force: true, setChannel: sourceChannelName(name) })
-})
+ipcMain.handle('hermes:updates:channel:set', async (): Promise<UpdaterStatusWire> => checkUpdates())
 
 function resolveHermesVersion(scope: { connectionId?: string; profile?: string } = {}): Promise<string> {
   return resolveGatewayVersion(path => handleHermesApiRequest({ ...scope, path, timeoutMs: 5000 }))
@@ -17174,7 +16402,7 @@ const checkRendererSkew = createBundleSkewChecker(
 )
 
 async function detectRendererSkew() {
-  return checkRendererSkew(resolveUpdateRoot())
+  return checkRendererSkew(IS_PACKAGED ? app.getAppPath() : SOURCE_REPO_ROOT)
 }
 
 // Re-resolve the focused window's live Hermes version just before showing the native About
@@ -17199,7 +16427,7 @@ ipcMain.handle('hermes:version', async (_event, scope?: { connectionId?: string;
   const [skew, version, clientVersion] = await Promise.all([
     detectRendererSkew(),
     resolveHermesVersion(scope),
-    resolveDesktopClientVersion(INSTALL_STAMP, resolveUpdateRoot(), HERMES_HOME, app.getVersion())
+    Promise.resolve(appVersionInfo(INSTALL_STAMP, '', app.getVersion()).appVersion)
   ])
 
   return {
@@ -17300,47 +16528,9 @@ export function isInstallerCreatedCheckout(root: string | null = ACTIVE_HERMES_R
   }
 }
 
-/** Classify what this build carries (embedded / light / external). The stamp's
- *  `payload` decides the first two; an external build classifies its root via
- *  the canonical-root checkout stamp plus the bootstrap marker, or the app
- *  stamp's `source`, so About's Runtime row names
- *  git/docker/nix/desktop-bootstrap instead of a bare "external". */
+/** Hermes installations are always external to this desktop product. */
 function resolveHermesRuntime() {
-  const stamp = INSTALL_STAMP as InstallStamp | null
-
-  if (stamp?.payload === 'light') {
-    return { type: 'light' }
-  }
-
-  if (stamp?.payload === 'bundled') {
-    return { type: 'embedded' }
-  }
-
-  const root = resolveUpdateRoot()
-  const canonicalStamp = readCanonicalInstallStamp()
-
-  // A desktop first-launch bootstrap is attested by the bootstrap-complete
-  // marker, not by the stamp: the stamp is the checkout's own identity
-  // (source: git, written by the Python completion tail).
-  if (canonicalStamp?.updateMechanism === 'self' && readBootstrapMarker()) {
-    return { type: 'desktop-bootstrap', root }
-  }
-
-  const source = stamp?.source
-
-  if (source === 'git') {
-    return { type: 'git', root }
-  }
-
-  if (source === 'nix') {
-    return { type: 'nix', root: null }
-  }
-
-  if (source === 'docker') {
-    return { type: 'docker', root: null }
-  }
-
-  return { type: 'unknown' }
+  return { type: 'external' }
 }
 
 // ===========================================================================
@@ -17363,7 +16553,7 @@ function uninstallVenvPython(): string {
 function fallbackUninstallSummary(): UninstallSummaryDetails {
   return {
     hermes_home: HERMES_HOME,
-    agent_installed: isHermesSourceRoot(ACTIVE_HERMES_ROOT) && fileExists(uninstallVenvPython()),
+    agent_installed: false,
     gui_installed: true,
     source_built_artifacts: [],
     packaged_app_paths: [],
@@ -17375,183 +16565,20 @@ function fallbackUninstallSummary(): UninstallSummaryDetails {
 }
 
 async function probeUninstallSummary(): Promise<UninstallSummaryDetails> {
-  const py: string = uninstallVenvPython()
-  const agentRoot: string = ACTIVE_HERMES_ROOT
-
-  if (!fileExists(py)) {
-    return fallbackUninstallSummary()
-  }
-
-  return new Promise<UninstallSummaryDetails>((resolve: (value: UninstallSummaryDetails) => void): void => {
-    let stdout: string = ''
-    let settled: boolean = false
-
-    const done: (value: UninstallSummaryDetails) => void = (value: UninstallSummaryDetails): void => {
-      if (settled) {
-        return
-      }
-
-      settled = true
-      resolve(value)
-    }
-
-    try {
-      const child: ChildProcess = spawn(
-        py,
-        ['-m', 'hermes_cli.main', 'uninstall', '--gui-summary'],
-        hiddenWindowsChildOptions({
-          cwd: agentRoot,
-          env: { ...process.env, HERMES_HOME, NO_COLOR: '1' },
-          stdio: ['ignore', 'pipe', 'ignore']
-        })
-      )
-
-      child.stdout.on('data', (chunk: Buffer): void => {
-        stdout += chunk.toString()
-      })
-      child.on('error', (): void => done(fallbackUninstallSummary()))
-      child.on('exit', (code: number | null): void => {
-        if (code !== 0) {
-          return done(fallbackUninstallSummary())
-        }
-
-        try {
-          const line: string = stdout.trim().split('\n').filter(Boolean).pop() || '{}'
-          const parsed: UninstallSummaryDetails = JSON.parse(line)
-          // The app bundle the renderer would be removing on *this* machine,
-          // resolved from the running exe (the Python probe only knows the
-          // standard locations, not where THIS build actually runs from).
-          parsed.running_app_path = resolveRemovableAppPath(process.execPath, process.platform, process.env)
-          done(parsed)
-        } catch {
-          done(fallbackUninstallSummary())
-        }
-      })
-      setTimeout((): void => done(fallbackUninstallSummary()), 8000)
-    } catch {
-      done(fallbackUninstallSummary())
-    }
-  })
+  return fallbackUninstallSummary()
 }
 
-async function runDesktopUninstall(mode: string): Promise<DesktopUninstallResult> {
-  let uninstallArgs: string[]
-
-  try {
-    uninstallArgs = uninstallArgsForMode(mode)
-  } catch (error) {
-    return { ok: false, error: 'invalid-mode', message: error.message }
+async function runDesktopUninstall(): Promise<DesktopUninstallResult> {
+  return {
+    ok: false,
+    error: 'externally-managed',
+    message: 'Remove Hermes Desktop Rune with your operating system or package manager. Connected Hermes installations are managed separately.'
   }
-
-  const venvPy = uninstallVenvPython()
-
-  if (!fileExists(venvPy)) {
-    return {
-      ok: false,
-      error: 'agent-missing',
-      message: `Can't run the uninstaller: no Hermes agent venv at ${VENV_ROOT}.`
-    }
-  }
-
-  // Interpreter choice (Finding 3): lite/full rmtree the venv that holds the
-  // running python.exe. On Windows a running .exe is mandatory-locked, so the
-  // rmtree must NOT be driven by the venv's own interpreter — use a system
-  // Python with PYTHONPATH=<agentRoot> so `import hermes_cli` resolves from
-  // source while the venv is torn down. gui-only doesn't touch the venv, so the
-  // venv python is fine there. If no system Python exists (the Windows edge
-  // case), fall back to the venv python — gui-only is unaffected; lite/full may
-  // leave venv remnants the user can delete, which we log.
-  let py = venvPy
-  let pythonPath = null
-
-  if (modeRemovesAgent(mode)) {
-    const sysPy = await findSystemPython()
-
-    if (sysPy) {
-      py = sysPy
-      pythonPath = ACTIVE_HERMES_ROOT
-    } else if (IS_WINDOWS) {
-      rememberLog(
-        '[uninstall] no system Python found for lite/full on Windows; falling back ' +
-          'to the venv python — venv files locked by the running interpreter may ' +
-          'remain and need manual deletion.'
-      )
-    }
-  }
-
-  const appPath = resolveRemovableAppPath(process.execPath, process.platform, process.env)
-  const removeBundle = shouldRemoveAppBundle(IS_PACKAGED, appPath) ? appPath : null
-
-  // CRITICAL (Windows): tear down every backend the desktop owns and wait for
-  // the venv shim to unlock BEFORE the cleanup script runs. lite/full delete
-  // the venv, and even gui-only removes the install tree's GUI artifacts — a
-  // live backend grandchild (gateway / pty / REPL) holding a mandatory file
-  // lock would make the script's rmdir half-fail (#37532 for the update path).
-  // Reuses the incident-hardened update teardown; no-op on macOS/Linux.
-  try {
-    await releaseBackendLock(ACTIVE_HERMES_ROOT, 'uninstall')
-  } catch (error) {
-    rememberLog(`[uninstall] backend teardown errored (continuing): ${error.message}`)
-  }
-
-  const scriptArgs = {
-    desktopPid: process.pid,
-    pythonExe: py,
-    pythonPath,
-    agentRoot: ACTIVE_HERMES_ROOT,
-    uninstallArgs,
-    appPath: removeBundle,
-    hermesHome: HERMES_HOME
-  }
-
-  let scriptPath
-  let runner
-  let runnerArgs
-
-  try {
-    if (IS_WINDOWS) {
-      scriptPath = path.join(app.getPath('temp'), `hermes-uninstall-${Date.now()}.cmd`)
-      fs.writeFileSync(scriptPath, buildWindowsCleanupScript(scriptArgs))
-      runner = process.env.ComSpec || 'cmd.exe'
-      runnerArgs = ['/c', scriptPath]
-    } else {
-      scriptPath = path.join(app.getPath('temp'), `hermes-uninstall-${Date.now()}.sh`)
-      fs.writeFileSync(scriptPath, buildPosixCleanupScript(scriptArgs), { mode: 0o755 })
-      runner = '/bin/bash'
-      runnerArgs = [scriptPath]
-    }
-  } catch (error) {
-    return { ok: false, error: 'script-write-failed', message: error.message }
-  }
-
-  try {
-    const child = spawn(runner, runnerArgs, {
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: true
-    })
-
-    child.unref()
-  } catch (error) {
-    return { ok: false, error: 'spawn-failed', message: error.message }
-  }
-
-  rememberLog(
-    `[uninstall] launched detached cleanup (${mode}): ${scriptPath} ` +
-      `(removesAgent=${modeRemovesAgent(mode)} removesUserData=${modeRemovesUserData(mode)} bundle=${removeBundle || 'none'})`
-  )
-
-  // Give the renderer a beat to show its "uninstalling…" state, then quit so
-  // the venv python shim + app bundle unlock and the cleanup script can run.
-  isQuittingForHandoff = true
-  setTimeout(() => app.quit(), 800)
-
-  return { ok: true, mode, willRemoveAppBundle: Boolean(removeBundle), scriptPath }
 }
 
 registerDesktopUninstallIpc({
   ipcMain,
-  stamp: INSTALL_STAMP,
+  stamp: { payload: 'standalone', updateMechanism: 'external' },
   fallbackSummary: fallbackUninstallSummary,
   probeSummary: probeUninstallSummary,
   runUninstall: runDesktopUninstall,
@@ -17567,20 +16594,16 @@ ipcMain.handle('hermes:vscode-theme:fetch', async (_event, id) => fetchMarketpla
 ipcMain.handle('hermes:vscode-theme:search', async (_event, query) => searchMarketplaceThemes(String(query || ''), 20))
 
 // ---------------------------------------------------------------------------
-// hermes:// deep links (e.g. hermes://blueprint/morning-brief?time=08:00,
-// hermes://mcp/install?name=NAME&config=B64 — the vendor "Add to Hermes"
-// button, or hermes://plugin/install?repo=owner/repo). Dev
-// (`HERMES_DESKTOP_DEV_SERVER`) registers hermes-dev:// instead — bare
-// Electron or a stale OS handler often owns hermes:// on dev machines.
+// This fork registers its own protocol scheme so the official Hermes app
+// keeps its links. Development uses the same scheme with a -dev suffix.
 // Parsing is generic ({kind, name, params}); the renderer routes per kind
 // and anything install-shaped requires explicit user confirmation there.
 // A docs/dashboard "Send to App" button opens this URL; we route it into the
 // running app. Three delivery paths: macOS 'open-url',
 // Win/Linux running-app 'second-instance' (argv), Win/Linux cold-start argv.
 // ---------------------------------------------------------------------------
-const HERMES_PROTOCOL = DEV_SERVER ? 'hermes-dev' : 'hermes'
-/** Schemes accepted when parsing inbound URLs (dev accepts both). */
-const DEEPLINK_SCHEMES = DEV_SERVER ? ['hermes-dev', 'hermes'] : ['hermes']
+const HERMES_PROTOCOL = DEV_SERVER ? `${PRODUCT_IDENTITY.protocolScheme}-dev` : PRODUCT_IDENTITY.protocolScheme
+const DEEPLINK_SCHEMES = DEV_SERVER ? [HERMES_PROTOCOL, PRODUCT_IDENTITY.protocolScheme] : [HERMES_PROTOCOL]
 let _pendingDeepLink = null
 let _rendererReadyForDeepLink = false
 // Set by sendOpenUpdatesRequested() when the renderer cannot hear it yet.
@@ -17754,7 +16777,7 @@ if (!isPrimaryInstance) {
     // SSH-started sessions). Checked before deep links so a carried `hermes://`
     // URL still routes normally when no flag is present.
     if (hasClosePreviewFlag(argv)) {
-      handleDeepLink('hermes://close-preview')
+      handleDeepLink(`${HERMES_PROTOCOL}://close-preview`)
     }
 
     const url = _extractDeepLink(argv)

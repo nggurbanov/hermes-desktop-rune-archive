@@ -3724,6 +3724,9 @@ export const zhOverrides = {
     connectExistingDesc: '使用会话令牌或浏览器登录连接远程后端。不会启动本地安装。',
     setupChoiceDescLocal: '在这台电脑上安装 Hermes，或连接到已在运行的 Hermes 网关。',
 
+    retryLocalTitle: "检查本地 Hermes",
+    externalLocalDesc: "请在此电脑上单独安装 Hermes，然后重新检查。此应用不会安装代理。",
+    externalSetupDesc: "连接此设备或远程机器上已有的 Hermes。",
     installLocalTitle: '本地安装 Hermes',
     installLocalDesc: '下载 Hermes，创建 Python 环境，并在这台电脑上运行后端。',
     useLocalTitle: '使用这台电脑上的 Hermes',

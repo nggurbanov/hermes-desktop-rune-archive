@@ -3312,6 +3312,9 @@ catalog: CatalogTranslations
     installLocalTitle: string
     installLocalDesc: string
     useLocalTitle: string
+    retryLocalTitle: string
+    externalLocalDesc: string
+    externalSetupDesc: string
     useLocalDesc: string
     bundledLocalDesc: string
     localStartUnavailable: string

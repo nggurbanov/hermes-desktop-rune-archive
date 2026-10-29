@@ -9,20 +9,21 @@
  * shared word must surface that profile's marker and never the other one's,
  * across default → ssprobe-b → default.
  *
- * Prerequisite: `npm run build` (dist/) and the repo's `.venv`.
+ * Prerequisite: `npm run build` (dist/) and the selected external Hermes runtime.
  */
+
+import { externalPythonRuntime } from './external-runtime'
 
 import { spawnSync } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
-import { writeEnvFile, writeMockProviderConfig } from '../../../tests-js/scripts/mock-provider-config'
-import { startMockServer } from '../../../tests-js/scripts/mock-server'
+import { writeEnvFile, writeMockProviderConfig } from './support/mock-provider-config'
+import { startMockServer } from './support/mock-server'
 
 import { buildAppEnv, createSandbox, launchDesktop, type MockBackendFixture, type Sandbox, waitForAppReady } from './fixtures'
 import { type ElectronApplication, expect, type Page, test } from './test'
 
-const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..', '..')
 const PROFILE_B = 'ssprobe-b'
 const MARKER = { default: 'alphaonlymarker', [PROFILE_B]: 'bravoonlymarker' } as const
 
@@ -40,12 +41,12 @@ function seedSession(sandbox: Sandbox, home: string, sessionId: string, marker: 
     'db.close()'
   ].join('\n')
 
-  const python = path.join(REPO_ROOT, '.venv', 'bin', 'python')
+  const python = externalPythonRuntime().python
 
-  const result = spawnSync(python, ['-c', script, home, sessionId, marker], {
-    cwd: REPO_ROOT,
+  const result = spawnSync(python, ['-B', '-c', script, home, sessionId, marker], {
+    cwd: externalPythonRuntime().root,
     encoding: 'utf8',
-    env: { ...process.env, HERMES_HOME: sandbox.hermesHome, HOME: sandbox.root, PYTHONPATH: REPO_ROOT }
+    env: { ...buildAppEnv(sandbox), PYTHONPATH: externalPythonRuntime().root }
   })
 
   if (result.status !== 0) {

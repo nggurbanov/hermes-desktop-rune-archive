@@ -18,7 +18,7 @@ import zipfile
 
 
 def main() -> None:
-    repository = Path(__file__).resolve().parents[4]
+    repository = Path(sys.argv[2]).resolve(strict=True)
     temp = Path(sys.argv[1])
     root = Path(os.environ["HERMES_HOME"]) / "hermes-agent"
     root.mkdir(parents=True)

@@ -1143,12 +1143,15 @@ test('roster: collapse also folds a third same-box connection from a per-profile
 
 // --- updateEligibility ---
 
-test('update fan-out: cloud is platform-managed, everything else eligible', () => {
+test('update fan-out skips platform-managed and separately installed local agents', () => {
   assert.deepEqual(updateEligibility({ id: 'c', kind: 'cloud', label: 'Cloud' }), {
     eligible: false,
     reason: 'cloud-managed'
   })
-  assert.equal(updateEligibility({ id: 'local', kind: 'local', label: 'x' }).eligible, true)
+  assert.deepEqual(updateEligibility({ id: 'local', kind: 'local', label: 'x' }), {
+    eligible: false,
+    reason: 'external-local-runtime'
+  })
   assert.equal(updateEligibility({ id: 'r', kind: 'remote', label: 'x' }).eligible, true)
   assert.equal(updateEligibility({ id: 's', kind: 'ssh', label: 'x' }).eligible, true)
 })

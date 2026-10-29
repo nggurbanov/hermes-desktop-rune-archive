@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "upstream": {
+    "repository": "https://github.com/NousResearch/hermes-agent",
+    "commit": "ef75bc708867e3884cb40a91363be6dc6fddc034"
+  },
+  "migrationOrder": [
+    "standalone-electron",
+    "rune-parity",
+    "conversation-redesign"
+  ],
+  "protocolArtifacts": {
+    "apps/shared/src/gateway-contract.generated.ts": "b5af98bec667d9d42f92c9f0ed2107947fd9faea0d06cd9f0a00cc31f17cd6b7",
+    "apps/shared/src/gateway-contract.openrpc.json": "056ab7cbbcc5fe0acd140292c2f224ccb7e8abf222153b9cc43e33b8aaa3292c",
+    "apps/desktop/src/lib/desktop-slash-registry.json": "1afb3758d6e1bc4a819fb70898bdd80aa9950161e829f46a5132310dfeda5af3"
+  },
+  "acceptance": [
+    "fresh desktop-only install, build and package",
+    "launch with no local Hermes installed",
+    "connect external local Hermes with native tickets",
+    "connect existing remote gateway URL",
+    "connect installed Hermes over SSH",
+    "send, stream, stop, approval, reconnect and durable history",
+    "profiles and canonical Bot Chat isolation",
+    "closing app does not stop canonical gateway"
+  ],
+  "status": "extraction-in-progress",
+  "checkpoint": {
+    "phase": "standalone-electron-foundation",
+    "verified": [
+      "client-only workspace install",
+      "desktop-only source export build and typecheck",
+      "Linux unpacked package without agent payload",
+      "no-local-agent Electron startup and remote setup",
+      "external discovery and standalone packaging unit contracts"
+    ],
+    "pending": [
+      "compatible external Hermes local, URL and SSH acceptance",
+      "Windows and macOS native package verification",
+      "remaining agent-home preference/plugin ownership review",
+      "obsolete server tree and legacy CI removal"
+    ]
+  }
+}

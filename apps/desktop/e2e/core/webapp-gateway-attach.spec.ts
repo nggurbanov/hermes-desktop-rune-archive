@@ -39,7 +39,6 @@ import {
   DESKTOP_ROOT,
   launchCoreApp,
   recordWebSockets,
-  REPO_ROOT,
   sandboxProcesses,
   send,
   storedSessionForMarker,
@@ -49,13 +48,13 @@ import {
 import { assertTranscriptOracle, installDuplicateSampler } from './oracle'
 import { shellQuote } from './process-census'
 import { gate, startScriptedProvider } from './provider'
+import { externalPythonRuntime } from '../external-runtime'
 
 const nonce = Math.random().toString(36).slice(2, 8).replace(/[^a-z0-9]/g, 'x').padEnd(4, 'q')
 const U = (n: number) => `U${n}-webapp${nonce}`
 const A = (n: number) => `A${n}-webapp${nonce}`
 const AI = (n: number) => `A${n}i-webapp${nonce}`
 
-const PYTHON = process.env.HERMES_E2E_PYTHON || 'python3'
 /** A signed-in Webapp tab acts as the machine owner, the OS subject native Desktop's ticket carries
  * (`gateway/owner_identity.py`): sign-in decides who may open the Webapp, it names no second user. */
 const OWNER_SUBJECT = `uid:${process.getuid?.()}`
@@ -83,9 +82,10 @@ function alive(pid: number): boolean {
 
 /** `hermes <args>` in the sandbox, as an operator runs it. */
 function hermesCli(sandbox: CoreSandbox, args: string[]): { code: number | null; output: string } {
-  const result = spawnSync(PYTHON, ['-m', 'hermes_cli.main', ...args], {
-    cwd: REPO_ROOT,
-    env: coreAppEnv(sandbox),
+  const runtime = externalPythonRuntime()
+  const result = spawnSync(runtime.python, ['-B', '-m', 'hermes_cli.main', ...args], {
+    cwd: runtime.root,
+    env: { ...coreAppEnv(sandbox), PYTHONPATH: runtime.root },
     encoding: 'utf8',
     timeout: 180_000
   })
@@ -461,9 +461,10 @@ function signInGateYaml(port: number, publicUrl: string, user: string, passwordH
 
 /** A Python one-liner in the sandbox, as the gateway's own interpreter runs it. */
 function python(sandbox: CoreSandbox, code: string, ...args: string[]): string {
-  const result = spawnSync(PYTHON, ['-c', code, ...args], {
-    cwd: REPO_ROOT,
-    env: coreAppEnv(sandbox),
+  const runtime = externalPythonRuntime()
+  const result = spawnSync(runtime.python, ['-B', '-c', code, ...args], {
+    cwd: runtime.root,
+    env: { ...coreAppEnv(sandbox), PYTHONPATH: runtime.root },
     encoding: 'utf8'
   })
 

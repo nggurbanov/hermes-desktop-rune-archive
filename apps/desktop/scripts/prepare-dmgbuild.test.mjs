@@ -13,10 +13,10 @@ test('packager selects either same-OS payload architecture but refuses foreign O
   assert.throws(() => packagingTargetArch(`${process.platform}-ia32`), /same-OS/)
 })
 
-test('explicit PM supplier is copied with paired Python; missing runtime fails before publication', () => {
+test('explicit supplier is copied with paired Python; missing runtime fails before publication', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dmgbuild-prepare-'))
   try {
-    const vendor = path.join(root, 'pm-tools/vendor')
+    const vendor = path.join(root, 'tools/vendor')
     const binary = path.join(vendor, 'dmgbuild')
     const python = path.join(vendor, 'python/bin/python3')
     fs.mkdirSync(path.dirname(python), { recursive: true })
@@ -33,4 +33,9 @@ test('explicit PM supplier is copied with paired Python; missing runtime fails b
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }
+})
+
+
+test('default packaging never provisions a Hermes Python environment for DMGs', () => {
+  assert.throws(() => prepareDmgbuild({ source: '/source', out: '/output', cache: '/cache' }), /use zip/)
 })

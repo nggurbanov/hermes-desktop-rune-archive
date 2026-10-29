@@ -44,7 +44,7 @@ import {
   setupMockBackend,
   waitForAppReady,
 } from './fixtures'
-import { INTERIM_TEXTS, restartMockServer } from '../../../tests-js/scripts/mock-server'
+import { INTERIM_TEXTS, restartMockServer } from './support/mock-server'
 
 // ─── Helpers ──────────────────────────────────────────────────────────
 

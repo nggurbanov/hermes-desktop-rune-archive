@@ -3033,6 +3033,9 @@ export const ruOverrides = {
     connectExistingShort: 'Подключить существующий',
     connectExistingDesc:
       'Используйте удалённый бэкенд с сессионным токеном или входом через браузер. Локальная установка не начнётся.',
+    retryLocalTitle: "Проверить локальный Hermes",
+    externalLocalDesc: "Установите Hermes на этот компьютер отдельно, затем проверьте ещё раз. Это приложение не устанавливает агента.",
+    externalSetupDesc: "Подключитесь к существующему Hermes на этом устройстве или удалённом компьютере.",
     installLocalTitle: 'Установить Hermes локально',
     installLocalDesc: 'Скачайте Hermes, создайте его Python-окружение и запустите бэкенд на этом компьютере.',
     localStartUnavailable: 'Не удалось начать локальную установку. Перезапустите Hermes Desktop и попробуйте снова.',

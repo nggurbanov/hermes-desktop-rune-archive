@@ -9,13 +9,13 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
-import { writeEnvFile, writeMockProviderConfig } from '../../../tests-js/scripts/mock-provider-config'
+import { writeEnvFile, writeMockProviderConfig } from './support/mock-provider-config'
 import {
   MOCK_REPLY,
   startMockServer,
   VERIFICATION_STOP_TEXT,
   VERIFICATION_STOP_TRIGGER,
-} from '../../../tests-js/scripts/mock-server'
+} from './support/mock-server'
 
 import {
   buildAppEnv,

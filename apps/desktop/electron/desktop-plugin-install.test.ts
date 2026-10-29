@@ -153,7 +153,7 @@ interface DetectionCase {
 const DETECTION_CASES = (
   JSON.parse(
     fs.readFileSync(
-      path.resolve(here, '..', '..', '..', 'tests', 'fixtures', 'plugin_component_detection.json'),
+      path.resolve(here, '..', 'test-fixtures', 'plugin_component_detection.json'),
       'utf8'
     )
   ) as { cases: DetectionCase[] }

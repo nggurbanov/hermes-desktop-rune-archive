@@ -2,8 +2,8 @@ import * as path from 'node:path'
 
 import { type TestInfo } from '@playwright/test'
 
-import { writeEnvFile, writeMockProviderConfig } from '../../../tests-js/scripts/mock-provider-config'
-import { MOCK_REPLY, type MockServer, type MockServerOptions, startMockServer } from '../../../tests-js/scripts/mock-server'
+import { writeEnvFile, writeMockProviderConfig } from './support/mock-provider-config'
+import { MOCK_REPLY, type MockServer, type MockServerOptions, startMockServer } from './support/mock-server'
 
 import {
   buildAppEnv,

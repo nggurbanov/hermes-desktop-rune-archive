@@ -17,7 +17,7 @@ import {
   BATCH_CLARIFY_TRIGGER,
   SINGLE_BATCH_CLARIFY_QUESTIONS,
   SINGLE_BATCH_CLARIFY_TRIGGER
-} from '../../../tests-js/scripts/mock-server'
+} from './support/mock-server'
 
 import { type MockBackendFixture, setupMockBackend, waitForAppReady } from './fixtures'
 import { expect, test } from './test'

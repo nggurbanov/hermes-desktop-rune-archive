@@ -12,13 +12,14 @@
 
 /**
  * The desktop artifact kind — which runtime story this artifact tells:
+ *  - 'standalone': client only; connects to independently installed Hermes.
  *  - 'bootstrap': no runtime in the artifact; first launch bootstraps a
  *    local install (the default; also what non-desktop stamps carry).
  *  - 'bundled': the agent runtime ships inside the artifact resources.
  *  - 'light': no runtime at all; remote connections only.
  * Selected at build time by HERMES_DESKTOP_VARIANT (unset = bootstrap).
  */
-export type ArtifactKind = 'bootstrap' | 'bundled' | 'light'
+export type ArtifactKind = 'standalone' | 'bootstrap' | 'bundled' | 'light'
 
 /** Relative paths declared by the PM bundle builder, below agent-payload. */
 export interface PayloadRuntime {

@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-import { writeMockProviderConfig } from '../../../tests-js/scripts/mock-provider-config'
+import { writeMockProviderConfig } from './support/mock-provider-config'
 
 import { setupMockBackend, waitForAppReady } from './fixtures'
 import { expect, test } from './test'

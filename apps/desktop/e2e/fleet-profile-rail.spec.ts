@@ -9,16 +9,18 @@
  * does, against a real backend — not a stub.
  *
  * Prerequisite: `npm run build` must have been run so dist/ exists, and the
- * repo's Python venv (`.venv`) must exist for both backends.
+ * selected external Hermes runtime must support both backends.
  */
 
-import { type ChildProcess, spawn, spawnSync } from 'node:child_process'
+import { type ChildProcess, spawn } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as net from 'node:net'
 import * as path from 'node:path'
 
-import { writeEnvFile, writeMockProviderConfig } from '../../../tests-js/scripts/mock-provider-config'
-import { startMockServer } from '../../../tests-js/scripts/mock-server'
+import { externalPythonRuntime } from './external-runtime'
+
+import { writeEnvFile, writeMockProviderConfig } from './support/mock-provider-config'
+import { startMockServer } from './support/mock-server'
 
 import {
   buildAppEnv,
@@ -30,8 +32,6 @@ import {
 } from './fixtures'
 import { type ElectronApplication, expect, type Page, test } from './test'
 
-const DESKTOP_ROOT = path.resolve(import.meta.dirname, '..')
-const REPO_ROOT = path.resolve(DESKTOP_ROOT, '..', '..')
 
 const REMOTE_LABEL = 'Homelab'
 const REMOTE_ID = 'homelab'
@@ -43,21 +43,6 @@ interface RemoteGateway {
   close: () => Promise<void>
 }
 
-function findHermesBinary(): string {
-  const venv = path.join(REPO_ROOT, '.venv', 'bin', 'hermes')
-
-  if (fs.existsSync(venv)) {
-    return venv
-  }
-
-  const result = spawnSync('which', ['hermes'], { encoding: 'utf8' })
-
-  if (result.status === 0 && result.stdout.trim()) {
-    return result.stdout.trim()
-  }
-
-  throw new Error('hermes binary not found: create the repo venv (uv sync) or put hermes on PATH')
-}
 
 async function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -96,13 +81,14 @@ async function startRemoteGateway(root: string, mockUrl: string, profiles: strin
   const url = `http://127.0.0.1:${port}`
 
   const child: ChildProcess = spawn(
-    findHermesBinary(),
-    ['serve', '--host', '127.0.0.1', '--port', String(port), '--skip-build'],
+    externalPythonRuntime().python,
+    ['-B', '-m', 'hermes_cli.main', 'serve', '--host', '127.0.0.1', '--port', String(port), '--skip-build'],
     {
-      cwd: REPO_ROOT,
+      cwd: externalPythonRuntime().root,
       detached: true,
       env: {
-        ...process.env,
+        ...buildAppEnv({ root, hermesHome: home, userDataDir: path.join(root, 'remote-userdata'), cleanup: () => undefined }),
+        PYTHONPATH: externalPythonRuntime().root,
         HERMES_HOME: home,
         HERMES_DASHBOARD_SESSION_TOKEN: REMOTE_TOKEN,
       },

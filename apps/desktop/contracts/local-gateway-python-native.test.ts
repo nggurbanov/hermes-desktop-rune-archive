@@ -7,7 +7,9 @@ import path from 'node:path'
 
 import { expect, test, vi } from 'vitest'
 
-import { closeGatewayTicketBridges, createGatewayTicketResolver } from './local-gateway-python'
+import { contractRuntime } from './runtime'
+
+import { closeGatewayTicketBridges, createGatewayTicketResolver } from '../electron/local-gateway-python'
 
 const observed = vi.hoisted(() => ({ helpers: 0 }))
 vi.mock('node:child_process', async importOriginal => {
@@ -22,8 +24,7 @@ vi.mock('node:child_process', async importOriginal => {
 
 test.skipIf(process.platform !== 'win32')('native pipe tickets reuse one helper and revalidate every owner', async () => {
   const home = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'ticket-bridge-')))
-  const root = path.resolve(import.meta.dirname, '../../..')
-  const python = process.env.HERMES_TEST_PYTHON || 'python'
+  const { root, python } = contractRuntime()
   const env = { ...process.env, PYTHONPATH: root, HERMES_HOME: home, PYTHONUTF8: '1' }
 
   const code = `

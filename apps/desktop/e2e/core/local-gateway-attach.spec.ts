@@ -31,7 +31,6 @@ import {
   currentSessionId,
   launchCoreApp,
   recordWebSockets,
-  REPO_ROOT,
   sandboxProcesses,
   send,
   stopSandboxGateway,
@@ -41,12 +40,12 @@ import {
 } from './harness'
 import { assertTranscriptOracle, installDuplicateSampler } from './oracle'
 import { startScriptedProvider } from './provider'
+import { externalPythonRuntime } from '../external-runtime'
 
 const nonce = Math.random().toString(36).slice(2, 8).replace(/[^a-z0-9]/g, 'x').padEnd(4, 'q')
 const U = (n: number) => `U${n}-attach${nonce}`
 const A = (n: number) => `A${n}-attach${nonce}`
 
-const PYTHON = process.env.HERMES_E2E_PYTHON || (process.platform === 'win32' ? 'python' : 'python3')
 const PACKAGED_EXE = process.env.HERMES_E2E_PACKAGED_EXE || ''
 
 function gatewayState(sandbox: CoreSandbox): Record<string, any> {
@@ -69,12 +68,13 @@ function alive(pid: number): boolean {
 
 /** `hermes gateway run`, detached and windowless, as a login item / console starts it. */
 async function startGatewayFirst(sandbox: CoreSandbox): Promise<{ pid: number; log: string }> {
+  const runtime = externalPythonRuntime()
   const log = path.join(sandbox.root, 'gateway-run.log')
   const out = fs.openSync(log, 'a')
 
-  const child = spawn(PYTHON, ['-m', 'hermes_cli.main', 'gateway', 'run'], {
-    cwd: REPO_ROOT,
-    env: coreAppEnv(sandbox),
+  const child = spawn(runtime.python, ['-B', '-m', 'hermes_cli.main', 'gateway', 'run'], {
+    cwd: runtime.root,
+    env: { ...coreAppEnv(sandbox), PYTHONPATH: runtime.root },
     detached: true,
     windowsHide: true,
     stdio: ['ignore', out, out]

@@ -26,11 +26,12 @@ import * as path from 'node:path'
 
 import { _electron, type ElectronApplication, type Page } from '@playwright/test'
 
-import { waitForChatReady } from '../../../tests-js/scripts/desktop-chat-smoke'
-import { writeEnvFile, writeMockProviderConfig } from '../../../tests-js/scripts/mock-provider-config'
-import { type MockServerOptions, startMockServer } from '../../../tests-js/scripts/mock-server'
+import { waitForChatReady } from './support/desktop-chat-smoke'
+import { writeEnvFile, writeMockProviderConfig } from './support/mock-provider-config'
+import { type MockServerOptions, startMockServer } from './support/mock-server'
 
 import { resolveElectronBinary } from './electron-binary'
+import { externalRuntimeEnvironment } from './external-runtime'
 import { stopSandboxGatewayDaemons } from './run-tmp-reaper'
 import { installErrorBannerGuard } from './test'
 
@@ -184,14 +185,16 @@ function writeEmptyConfig(hermesHome: string): void {
  * Key env vars:
  *  - HERMES_HOME → sandbox hermes-home (isolated config/sessions)
  *  - HERMES_DESKTOP_USER_DATA_DIR → sandbox electron-user-data
- *  - HERMES_DESKTOP_IGNORE_EXISTING=1 → skip the installed runtime
- *    (we want the dev checkout at REPO_ROOT)
- *  - HERMES_DESKTOP_HERMES_ROOT → REPO_ROOT (dev checkout resolution)
+ *  - Existing runtime selectors choose an external Hermes installation.
  *  - HERMES_DESKTOP_APP_NAME → unique-ish per test (avoids single-instance lock)
  *  - XDG_RUNTIME_DIR → ensure Electron has a writable runtime dir on Linux
  */
 export function buildAppEnv(sandbox: Sandbox, extra: Record<string, string> = {}): Record<string, string> {
   const clean = stripCredentials(process.env)
+  delete clean.HERMES_DESKTOP_IGNORE_EXISTING
+  delete clean.HERMES_DESKTOP_HERMES_ROOT
+  delete clean.HERMES_DESKTOP_HERMES
+  delete clean.HERMES_DESKTOP_PYTHON
 
   // XDG_RUNTIME_DIR is needed for Electron on Linux when running in a
   // headless/CI context — without it the zygote may fail to initialize.
@@ -207,8 +210,8 @@ export function buildAppEnv(sandbox: Sandbox, extra: Record<string, string> = {}
   return {
     ...clean,
     HERMES_HOME: sandbox.hermesHome,
+    HERMES_DISABLE_LAZY_INSTALLS: '1',
     HERMES_DESKTOP_USER_DATA_DIR: sandbox.userDataDir,
-    HERMES_DESKTOP_IGNORE_EXISTING: '1',
     // One `hermes serve` per host, and profile roots are HOME-anchored
     // (`~/.hermes/profiles`, the default profile's own home): without both of
     // these a local e2e run attaches to the developer's running backend or
@@ -217,7 +220,9 @@ export function buildAppEnv(sandbox: Sandbox, extra: Record<string, string> = {}
     // either, so only local runs ever took that path.
     HERMES_DESKTOP_ISOLATED_BACKEND: '1',
     HOME: sandbox.root,
-    HERMES_DESKTOP_HERMES_ROOT: REPO_ROOT,
+    USERPROFILE: sandbox.root,
+    PYTHONDONTWRITEBYTECODE: '1',
+    ...externalRuntimeEnvironment(),
     HERMES_DESKTOP_APP_NAME: `HermesE2E-${Date.now()}`,
     // `app.close()` in teardown must exit even when a spec leaves a turn
     // mid-flight — otherwise the quit confirmation waits on a click that no
@@ -421,7 +426,7 @@ export interface DeadBackendOptions {
    * When true, inject a fake boot error via HERMES_DESKTOP_BOOT_FAKE_ERROR
    * so the backend resolution itself "fails" with a controlled error message.
    * This is the only reliable way to trigger BootFailureOverlay in dev mode
-   * (the real backend always resolves via SOURCE_REPO_ROOT).
+   * without depending on an installed runtime's startup failure modes.
    */
   fakeError?: boolean
 }

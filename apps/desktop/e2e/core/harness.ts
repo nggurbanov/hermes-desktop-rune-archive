@@ -19,6 +19,7 @@ import { _electron, type ElectronApplication, expect, type Page } from '@playwri
 
 import { resolveElectronBinary } from '../electron-binary'
 import { stopSandboxGatewayDaemons } from '../run-tmp-reaper'
+import { externalPythonRuntime, externalRuntimeEnvironment } from '../external-runtime'
 
 import { type ProcInfo, sandboxProcessesOf } from './process-census'
 
@@ -145,13 +146,12 @@ export function coreAppEnv(sandbox: CoreSandbox, extra: Record<string, string> =
     ...env,
     PATH: `${sandbox.bin}${path.delimiter}${env.PATH ?? ''}`,
     HOME: sandbox.home,
+    USERPROFILE: sandbox.home,
+    PYTHONDONTWRITEBYTECODE: '1',
     HERMES_HOME: sandbox.hermesHome,
+    HERMES_DISABLE_LAZY_INSTALLS: '1',
     HERMES_DESKTOP_USER_DATA_DIR: sandbox.userDataDir,
-    HERMES_DESKTOP_IGNORE_EXISTING: '1',
-    HERMES_DESKTOP_HERMES_ROOT: REPO_ROOT,
-    // setup-pm exports an install-scoped interpreter, not a checkout .venv.
-    // The Desktop override must be explicit because the sandbox strips HERMES_*.
-    ...(process.env.HERMES_E2E_PYTHON ? { HERMES_DESKTOP_PYTHON: process.env.HERMES_E2E_PYTHON } : {}),
+    ...externalRuntimeEnvironment(),
     HERMES_DESKTOP_APP_NAME: `HermesCoreE2E-${path.basename(sandbox.root)}`,
     HERMES_DESKTOP_SKIP_QUIT_CONFIRM: '1',
     // Never repoint the user's OS hermes:// handler (HKCU on Windows) at a test checkout.
@@ -246,15 +246,12 @@ export function stopSandboxGateway(
   sandbox: CoreSandbox,
   { interrupt = false }: { interrupt?: boolean } = {}
 ): { code: number | null; output: string } {
-  const [backend] = backendProcesses(sandbox)
-  // argv[0], unquoted (a Windows command line quotes a path with spaces).
-  const python = /^"([^"]+)"|^(\S+)/.exec(backend?.cmdline ?? '')?.slice(1).find(Boolean) || 'python3'
+  const runtime = externalPythonRuntime()
+  const args = ['-B', '-m', 'hermes_cli.main', 'gateway', 'stop', ...(interrupt ? ['--yes'] : [])]
 
-  const args = ['-m', 'hermes_cli.main', 'gateway', 'stop', ...(interrupt ? ['--yes'] : [])]
-
-  const result = spawnSync(python, args, {
-    cwd: REPO_ROOT,
-    env: coreAppEnv(sandbox),
+  const result = spawnSync(runtime.python, args, {
+    cwd: runtime.root,
+    env: { ...coreAppEnv(sandbox), PYTHONPATH: runtime.root },
     encoding: 'utf8',
     timeout: 90_000
   })

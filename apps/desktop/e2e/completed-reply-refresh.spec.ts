@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 
-import { MOCK_REPLY } from '../../../tests-js/scripts/mock-server'
+import { MOCK_REPLY } from './support/mock-server'
 
 import { setupMockBackend, waitForAppReady } from './fixtures'
 

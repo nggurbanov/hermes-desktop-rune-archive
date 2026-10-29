@@ -1059,6 +1059,16 @@ describe('applyUpdates terminal state', () => {
     expect(notifySpy).not.toHaveBeenCalled()
   })
 
+  it('shows standalone release guidance without offering an agent update command', async () => {
+    const message = 'Get desktop updates from github.com/nggurbanov/hermes-desktop-rune/releases.'
+    applyMock.mockResolvedValue({ ok: true, manual: true, mechanism: 'external', message })
+
+    await applyUpdates()
+
+    expect($updateApply.get().message).toBe(message)
+    expect($updateApply.get().command).toBeNull()
+  })
+
   it('lands on the guiSkew terminal state for a GUI/backend skew (AppImage/.deb/.rpm), without claiming a GUI update', async () => {
     // Linux: backend updated, but the running desktop package was NOT replaced.
     // Must NOT toast "loads next launch" — that's the dishonest message #45205

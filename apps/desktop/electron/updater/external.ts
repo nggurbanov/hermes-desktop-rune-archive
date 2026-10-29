@@ -8,16 +8,28 @@ import type { InstallStamp } from '../install-stamp'
 import type { UpdaterApplyResultWire, UpdaterStatusWire } from './index'
 
 export const EXTERNAL_UNSUPPORTED_MESSAGE = 'Updates are managed by the package owner outside this app.'
+export const STANDALONE_UPDATE_MESSAGE =
+  'Get desktop updates from github.com/nggurbanov/hermes-desktop-rune/releases. Update connected Hermes agents separately.'
 
 export const COMMIT_BUILD_UPDATE_MESSAGE: string =
   "This build doesn't get updates. Ask the developer who gave it to you for a new build."
 
 export class ExternalStrategy {
-  constructor(private readonly stamp: Pick<InstallStamp, 'source'> | null = null) {}
+  constructor(private readonly stamp: Pick<InstallStamp, 'source'> & Partial<Pick<InstallStamp, 'payload'>> | null = null) {}
   readonly mechanism = 'external' as const
   readonly supported = false
 
   async check(): Promise<UpdaterStatusWire> {
+    if (this.stamp?.payload === 'standalone') {
+      return {
+        supported: false,
+        mechanism: 'external',
+        reason: 'standalone',
+        message: STANDALONE_UPDATE_MESSAGE,
+        fetchedAt: Date.now()
+      }
+    }
+
     return {
       supported: false,
       mechanism: 'external',
@@ -28,6 +40,10 @@ export class ExternalStrategy {
   }
 
   async apply(): Promise<UpdaterApplyResultWire> {
+    if (this.stamp?.payload === 'standalone') {
+      return { ok: true, manual: true, mechanism: 'external', message: STANDALONE_UPDATE_MESSAGE }
+    }
+
     if (this.stamp?.source === 'commit-build') {
       return { ok: false, mechanism: 'external', error: 'commit-build', message: COMMIT_BUILD_UPDATE_MESSAGE }
     }

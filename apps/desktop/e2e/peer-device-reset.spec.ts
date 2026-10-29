@@ -1,14 +1,16 @@
 /**
  * A generic peer window inherits its initial owner, not a permanent New session
  * target. Exercise two real gateways; only inference uses the shared mock.
- * Requires the built desktop and a repo venv (or HERMES_DESKTOP_PYTHON).
+ * Requires the built desktop and a separately selected Hermes runtime.
  */
+import { externalPythonRuntime } from './external-runtime'
+
 import { type ChildProcess, spawn } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as net from 'node:net'
 import * as path from 'node:path'
 
-import { MOCK_REPLY, startMockServer } from '../../../tests-js/scripts/mock-server'
+import { MOCK_REPLY, startMockServer } from './support/mock-server'
 
 import {
   buildAppEnv,
@@ -16,10 +18,9 @@ import {
   launchDesktop,
   type Sandbox,
 } from './fixtures'
-import { writeEnvFile, writeMockProviderConfig } from '../../../tests-js/scripts/mock-provider-config'
+import { writeEnvFile, writeMockProviderConfig } from './support/mock-provider-config'
 import { collectErrorBanners, type ElectronApplication, expect, installErrorBannerGuard, type Page, test } from './test'
 
-const REPO_ROOT = path.resolve(import.meta.dirname, '../../..')
 const LOCAL_LABEL = 'This device'
 const REMOTE_LABEL = 'E2E remote'
 const REMOTE_ID = 'e2e-remote'
@@ -27,18 +28,7 @@ const REMOTE_TOKEN = 'e2e-peer-disposable-token'
 const REMOTE_PROFILE = 'ai-dev'
 
 function pythonBinary(): string {
-  if (process.env.HERMES_DESKTOP_PYTHON) {
-    return process.env.HERMES_DESKTOP_PYTHON
-  }
-
-  const suffix = process.platform === 'win32' ? ['Scripts', 'python.exe'] : ['bin', 'python']
-  const candidate = ['.venv', 'venv'].map(dir => path.join(REPO_ROOT, dir, ...suffix)).find(file => fs.existsSync(file))
-
-  if (!candidate) {
-    throw new Error('Create the repo Python venv or set HERMES_DESKTOP_PYTHON before running this spec')
-  }
-
-  return candidate
+  return externalPythonRuntime().python
 }
 
 // Do not inherit profile selection, provider secrets, a dev-server URL, or
@@ -71,7 +61,7 @@ function isolatedEnv(sandbox: Sandbox): Record<string, string> {
     USERPROFILE: sandbox.root,
     HERMES_HOME: sandbox.hermesHome,
     HERMES_DESKTOP_PYTHON: pythonBinary(),
-    PYTHONPATH: REPO_ROOT,
+    PYTHONPATH: externalPythonRuntime().root,
     // On Linux CI, DISPLAY belongs to Xvfb rather than the host Wayland seat.
     ...(process.platform === 'linux' ? { XDG_SESSION_TYPE: 'x11', ELECTRON_OZONE_PLATFORM_HINT: 'x11' } : {}),
   }
@@ -172,7 +162,7 @@ const peerTest = test.extend<{ gateways: { app: ElectronApplication; source: Pag
       const port = await freePort()
       const remoteUrl = `http://127.0.0.1:${port}`
       child = spawn(pythonBinary(), ['-m', 'hermes_cli.main', 'serve', '--host', '127.0.0.1', '--port', String(port), '--skip-build'], {
-        cwd: REPO_ROOT,
+        cwd: externalPythonRuntime().root,
         detached: process.platform !== 'win32',
         env: { ...isolatedEnv(remote), HERMES_DASHBOARD_SESSION_TOKEN: REMOTE_TOKEN },
         stdio: ['ignore', 'pipe', 'pipe'],

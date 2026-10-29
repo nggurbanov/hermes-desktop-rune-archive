@@ -740,16 +740,15 @@ export async function applyUpdates(opts: DesktopUpdateApplyOptions = {}): Promis
   try {
     const result = await bridge.apply(opts)
 
-    // CLI install with no staged updater: not an error — the user just runs
-    // `hermes update` themselves. Land on a dedicated manual state so the
-    // overlay shows the command + copy button instead of a dead retry loop.
+    // A manual desktop update may offer a release page rather than a shell
+    // command. Never invent an agent-update command for the client.
     if (result?.manual) {
       $updateApply.set({
         ...IDLE,
         applying: false,
         stage: 'manual',
-        message: result.message ?? result.command ?? 'hermes update',
-        command: result.command ?? 'hermes update'
+        message: result.message ?? result.command ?? 'Install the latest desktop release.',
+        command: result.command ?? null
       })
 
       return result

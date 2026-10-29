@@ -15,7 +15,8 @@ import * as path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import * as zlib from 'node:zlib'
 
-import { type CoreSandbox, REPO_ROOT } from './harness'
+import { type CoreSandbox } from './harness'
+import { externalPythonRuntime } from '../external-runtime'
 
 export interface RemoteBackend {
   url: string
@@ -29,28 +30,6 @@ export interface RemoteBackend {
   logTail: () => string
   /** True when `hide` paths are really invisible to the backend (see startRemoteBackend). */
   hidden: boolean
-}
-
-function python(): string {
-  const selected = process.env.HERMES_E2E_PYTHON
-
-  if (selected) {
-    if (!fs.existsSync(selected)) {
-      throw new Error(`selected E2E Python does not exist: ${selected}`)
-    }
-
-    return selected
-  }
-
-  for (const venv of ['.venv', 'venv']) {
-    const candidate = path.join(REPO_ROOT, venv, 'bin', 'python')
-
-    if (fs.existsSync(candidate)) {
-      return candidate
-    }
-  }
-
-  throw new Error(`no selected E2E Python or checkout venv under ${REPO_ROOT} (source ./activate in an isolated HERMES_HOME)`)
 }
 
 function freePort(): Promise<number> {
@@ -140,6 +119,7 @@ export async function startRemoteBackend(
   sandbox: CoreSandbox,
   { hide = [] }: { hide?: string[] } = {}
 ): Promise<RemoteBackend> {
+  const runtime = externalPythonRuntime()
   const port = await freePort()
   const token = crypto.randomBytes(24).toString('base64url')
   const url = `http://127.0.0.1:${port}`
@@ -159,7 +139,7 @@ export async function startRemoteBackend(
     }
   }
 
-  const argv = [python(), '-m', 'hermes_cli.main', 'serve', '--host', '127.0.0.1', '--port', String(port)]
+  const argv = [runtime.python, '-B', '-m', 'hermes_cli.main', 'serve', '--host', '127.0.0.1', '--port', String(port)]
   const hiding = hidingCommand(hide, argv)
   const [command, ...args] = hiding ?? argv
 
@@ -169,9 +149,10 @@ export async function startRemoteBackend(
       env: {
         ...env,
         PATH: `${sandbox.bin}${path.delimiter}${env.PATH ?? ''}`,
-        PYTHONPATH: REPO_ROOT,
+        PYTHONPATH: runtime.root,
         HOME: sandbox.home,
         HERMES_HOME: sandbox.hermesHome,
+        HERMES_DISABLE_LAZY_INSTALLS: '1',
         HERMES_DASHBOARD_SESSION_TOKEN: token,
         GIT_NO_LAZY_FETCH: '1'
       },

@@ -25,6 +25,14 @@ describe('normalizeHermesOpenString', () => {
     expect(normalizeHermesOpenString('hermes://open/settings/plugins')).toBe('/settings/plugins')
   })
 
+  it('accepts the standalone protocol for plugin and generic navigation', () => {
+    expect(normalizeHermesOpenString('hermes-rune://index-network/intent/1?focus=true')).toBe(
+      '/index-network/intent/1?focus=true'
+    )
+    expect(normalizeHermesOpenString('hermes-rune://open/settings/plugins')).toBe('/settings/plugins')
+    expect(normalizeHermesOpenString('hermes-rune://plugin/install')).toBeNull()
+  })
+
   it('rejects reserved hermes kinds and unsafe paths', () => {
     expect(normalizeHermesOpenString('hermes://blueprint/morning-brief')).toBeNull()
     expect(normalizeHermesOpenString('hermes://plugin/install')).toBeNull()

@@ -4280,6 +4280,9 @@ export const esOverrides = {
     connectExistingShort: 'Conectar existente',
     connectExistingDesc:
       'Usa un backend remoto con un token de sesión o inicio de sesión en el navegador. No se iniciará ninguna instalación local.',
+    retryLocalTitle: "Buscar Hermes local",
+    externalLocalDesc: "Instala Hermes por separado en este equipo y vuelve a comprobarlo. Esta aplicación no instala un agente.",
+    externalSetupDesc: "Conecta con tu instalación existente de Hermes en este dispositivo o en un equipo remoto.",
     installLocalTitle: 'Instalar Hermes localmente',
     installLocalDesc: 'Descarga Hermes, crea su entorno de Python y ejecuta el backend en este equipo.',
     localStartUnavailable: 'No se pudo iniciar la instalación local. Reinicia Hermes Desktop e inténtalo de nuevo.',

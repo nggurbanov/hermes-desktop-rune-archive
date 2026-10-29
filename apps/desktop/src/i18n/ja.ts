@@ -2786,6 +2786,9 @@ export const jaOverrides = {
     connectExistingShort: '既存環境に接続',
     connectExistingDesc:
       'セッショントークンまたはブラウザーサインインでリモートバックエンドを使用します。ローカルインストールは開始されません。',
+    retryLocalTitle: "ローカルの Hermes を確認",
+    externalLocalDesc: "このコンピューターに Hermes を別途インストールしてから、もう一度確認してください。このアプリはエージェントをインストールしません。",
+    externalSetupDesc: "このデバイスまたはリモートマシンにある既存の Hermes に接続します。",
     installLocalTitle: 'Hermes をローカルにインストール',
     installLocalDesc: 'Hermes をダウンロードし、Python 環境を作成して、このコンピューターでバックエンドを実行します。',
     localStartUnavailable:

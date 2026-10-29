@@ -161,7 +161,7 @@ function resolveInstallKind({
     return 'nix'
   }
 
-  if (payload === 'bundled' || payload === 'light') {
+  if (payload === 'bundled' || payload === 'light' || payload === 'standalone') {
     return 'bundled'
   }
 

@@ -77,6 +77,7 @@ function captureIpc(stamp: DesktopUninstallIpcDeps['stamp']): CapturedIpc {
 
 test('excluded artifact owners block every uninstall IPC before a Python probe or destructive callback', async (): Promise<void> => {
   const stamps: Array<Partial<InstallStamp>> = [
+    { payload: 'standalone' },
     { distribution: 'nix' },
     { source: 'nix' },
     { payload: 'bundled', updateMechanism: 'electron-updater' },

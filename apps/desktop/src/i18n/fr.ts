@@ -4299,6 +4299,9 @@ export const frOverrides = {
     connectExistingShort: 'Connecter un existant',
     connectExistingDesc:
       'Utilisez un backend distant avec un jeton de session ou une connexion par navigateur. Aucune installation locale ne démarrera.',
+    retryLocalTitle: "Rechercher Hermes en local",
+    externalLocalDesc: "Installez Hermes séparément sur cet ordinateur, puis réessayez. Cette application n’installe pas d’agent.",
+    externalSetupDesc: "Connectez-vous à votre installation Hermes existante sur cet appareil ou sur une machine distante.",
     installLocalTitle: 'Installer Hermes localement',
     installLocalDesc: 'Téléchargez Hermes, créez son environnement Python et exécutez le backend sur cet ordinateur.',
     localStartUnavailable: "L'installation locale n'a pas pu démarrer. Redémarrez Hermes Desktop et réessayez.",

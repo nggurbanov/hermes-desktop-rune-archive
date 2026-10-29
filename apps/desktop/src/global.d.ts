@@ -705,7 +705,7 @@ declare global {
       getBootstrapState: () => Promise<DesktopBootstrapState>
       /** Resolve This device without starting an install. Missing on an older preload. */
       probeLocalBackend?: () => Promise<{ bootstrapNeeded: boolean }>
-      continueBootstrapLocal: () => Promise<{ ok: boolean }>
+      continueBootstrapLocal: () => Promise<{ ok: boolean; error?: string; message?: string }>
       recycleBackend?: (profile?: null | string) => Promise<{ ok: boolean }>
       resetBootstrap: () => Promise<{ ok: boolean }>
       // The blocked boot screen's actions (an earlier update still holds the install).
@@ -1576,7 +1576,7 @@ export interface DesktopBootstrapSetupChoice {
   platform: string
   activeRoot: string
   /** What the local card represents: 'none' = installer offer; the rest = use existing. */
-  local: 'none' | 'installed' | 'bundled'
+  local: 'none' | 'installed' | 'bundled' | 'unavailable'
   /** This artifact is a bundled install (payload ships in-app). */
   bundled: boolean
 }

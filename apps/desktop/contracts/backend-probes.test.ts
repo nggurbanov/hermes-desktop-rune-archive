@@ -6,14 +6,14 @@ import path from 'node:path'
 
 import { test } from 'vitest'
 
-import { canImportHermesCli } from './backend-probes'
+import { contractRuntime } from './runtime'
 
-const REPO: string = path.resolve(import.meta.dirname, '../../..')
+import { canImportHermesCli } from '../electron/backend-probes'
 
-const PYTHON: string =
-  process.env.HERMES_PYTHON || process.env.UV_PYTHON || (process.platform === 'win32' ? 'python' : 'python3')
+const { root: REPO, python: PYTHON } = contractRuntime()
 
 interface RuntimeFixture {
+  root: string
   python: string
   site: string
   dependencies: string
@@ -40,7 +40,15 @@ test('the real bootstrap supplies ruamel-only dependencies and rejects foreign-p
   const setup: string = `
 import json, os, re, shutil, subprocess, sys, tomllib, venv
 from pathlib import Path
-root, temp = map(Path, sys.argv[1:])
+repository, temp = map(Path, sys.argv[1:])
+root = temp / 'external-runtime-copy'
+root.mkdir()
+for name in ('hermes_cli', 'hermes_platform', 'pm', 'agent', 'tools', 'gateway', 'tui_gateway', 'cron', 'plugins'):
+    shutil.copytree(repository / name, root / name,
+                    ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+for source in repository.glob('*.py'):
+    shutil.copy2(source, root / source.name)
+shutil.copy2(repository / 'pyproject.toml', root / 'pyproject.toml')
 sys.path.insert(0, str(root))
 from pm.environments import install_state_dir, runtime_facts_path, site_packages
 seed = temp / 'seed'
@@ -61,7 +69,7 @@ site.mkdir(parents=True)
 from pm.lock import Facts
 Facts(runtime_facts_path(root)).record_state('venv', 'fixture', [], environment=selected)
 python = seed / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
-print(json.dumps({'python': str(python), 'site': str(site), 'dependencies': str(dependencies)}))
+print(json.dumps({'root': str(root), 'python': str(python), 'site': str(site), 'dependencies': str(dependencies)}))
 `
 
   try {
@@ -75,10 +83,10 @@ print(json.dumps({'python': str(python), 'site': str(site), 'dependencies': str(
       })
     ) as RuntimeFixture
 
-    assert.equal(await canImportHermesCli(fixture.python, { cwd: REPO, env }), true)
+    assert.equal(await canImportHermesCli(fixture.python, { cwd: fixture.root, env }), true)
     assert.equal(
       await canImportHermesCli(fixture.python, {
-        cwd: REPO,
+        cwd: fixture.root,
         env: { ...env, PYTHONHOME: path.join(temp, 'foreign-home') }
       }),
       true,
@@ -90,7 +98,7 @@ print(json.dumps({'python': str(python), 'site': str(site), 'dependencies': str(
     fs.symlinkSync(fixture.dependencies, foreign, process.platform === 'win32' ? 'junction' : 'dir')
     assert.equal(
       await canImportHermesCli(fixture.python, {
-        cwd: REPO,
+        cwd: fixture.root,
         env: { ...env, PYTHONPATH: foreign }
       }),
       false,
@@ -98,7 +106,7 @@ print(json.dumps({'python': str(python), 'site': str(site), 'dependencies': str(
     )
     assert.equal(
       await canImportHermesCli(fixture.python, {
-        cwd: REPO,
+        cwd: fixture.root,
         env: { ...env, PYTHONHOME: path.join(temp, 'foreign-home') }
       }),
       false

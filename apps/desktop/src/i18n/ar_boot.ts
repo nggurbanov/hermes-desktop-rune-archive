@@ -232,6 +232,9 @@ export const arBoot = {
     }
   },
   install: {
+    retryLocalTitle: 'البحث عن Hermes محلي',
+    externalLocalDesc: 'ثبّت Hermes بشكل منفصل على هذا الكمبيوتر، ثم تحقّق مجددًا. هذا التطبيق لا يثبّت وكيلًا.',
+    externalSetupDesc: 'اتصل بتثبيت Hermes الموجود على هذا الجهاز أو على جهاز بعيد.',
     stageStates: {
       pending: 'قيد الانتظار',
       running: 'جار التثبيت',

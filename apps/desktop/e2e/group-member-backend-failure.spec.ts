@@ -2,7 +2,7 @@ import {
   PROVIDER_FAILURE_TRIGGER,
   TOOL_THEN_FAILURE_TEXT,
   TOOL_THEN_FAILURE_TRIGGER
-} from '../../../tests-js/scripts/mock-server'
+} from './support/mock-server'
 
 import { type MockBackendFixture, setupMockBackend, waitForAppReady } from './fixtures'
 import { expect, test } from './test'

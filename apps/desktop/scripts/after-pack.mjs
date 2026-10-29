@@ -1,9 +1,8 @@
 /**
  * after-pack.mjs — electron-builder afterPack hook.
  *
- * Per-platform post-pack work on the unpacked app: payload relocation, nested
- * Chromium + wheel signing on macOS, PE signature sanitizing and batch signing
- * on Windows. The exe identity stamp lives in after-extract.mjs (#105629).
+ * Per-platform post-pack work on the unpacked client: macOS icon and locale
+ * restoration, and PE signature sanitizing and batch signing on Windows. The exe identity stamp lives in after-extract.mjs (#105629).
  *
  * electron-builder passes a context with:
  *   - electronPlatformName: 'win32' | 'darwin' | 'linux'
@@ -12,15 +11,10 @@
  */
 
 import path from 'node:path'
-import fs from 'node:fs'
 import { copyFile, mkdir, readdir } from 'node:fs/promises'
-import { runPython } from '../../../scripts/build/python.mjs'
 
 import { assertPackagedBackendReadyArtifact, resolvePackagedAsarPath } from './backend-ready-artifact.mjs'
 import { batchSignAppTree } from './batch-sign-binaries.mjs'
-import { rehashPayloadDigests } from './payload-digests.mjs'
-import { resolveSigningIdentity, signNestedChromium } from './sign-nested-chromium.mjs'
-import { signWheelZipMembers } from './sign-wheel-zips.mjs'
 import { sanitizeTree } from './sanitize-pe-signatures.mjs'
 
 /**
@@ -69,37 +63,9 @@ export default async function afterPack(context) {
   const asarPath = resolvePackagedAsarPath(context)
   assertPackagedBackendReadyArtifact(asarPath)
   console.log(`[after-pack] verified backend readiness parser in ${asarPath}`)
-  const resources = platform === 'darwin'
-    ? path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`, 'Contents', 'Resources')
-    : path.join(context.appOutDir, 'resources')
-  const payload = path.join(resources, 'agent-payload')
-  if (platform !== 'win32' && fs.existsSync(path.join(payload, 'manifest.json'))) {
-    runPython([
-      path.resolve(import.meta.dirname, '../../../scripts/bundles/payload.py'), 'relocate', payload], { stdio: 'inherit' })
-  }
   if (platform === 'darwin') {
     await restoreLegacyMacIcon(context)
     await restoreMacLocaleMarkers(context)
-    if (fs.existsSync(payload)) {
-      const entitlements = path.join(import.meta.dirname, '..', 'electron', 'entitlements.mac.inherit.plist')
-      const { identity, keychain } = await resolveSigningIdentity(context.packager)
-      const nested = signNestedChromium(payload, { entitlements, identity, keychain })
-      console.log(
-        `[after-pack] repaired ${nested.repaired} framework links; signed ${nested.signed} nested chromium targets` +
-          (identity ? ` as ${identity}` : ' (no Developer ID in the builder keychain)')
-      )
-      // uv-cache wheel zips carry Mach-O members the notary validates but
-      // electron-osx-sign cannot reach; sign them in place (see module doc).
-      const wheels = signWheelZipMembers(payload, { identity, keychain })
-      if (wheels.signed > 0) {
-        console.log(
-          `[after-pack] signed ${wheels.signed} Mach-O members across ${wheels.wheels} payload wheel zips` +
-            (identity ? ` as ${identity}` : ' (no Developer ID in the builder keychain)'))
-      }
-      // The macOS signer refreshes this again before sealing the outer app.
-      // Unsigned builds end here and still need final-byte facts.
-      rehashPayloadDigests(payload)
-    }
     return
   }
   if (platform === 'linux') {
@@ -139,5 +105,4 @@ export default async function afterPack(context) {
     config: context.packager.config,
     resourcesDir: context.packager.buildResourcesDir,
   })
-  rehashPayloadDigests(payload)
 }

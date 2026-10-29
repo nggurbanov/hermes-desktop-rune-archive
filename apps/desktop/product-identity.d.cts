@@ -1,21 +1,23 @@
 interface ProductIdentity {
-  /** True when this artifact is Hermes Light (remote-only client). */
+  /** Legacy shape retained for client consumers; standalone supports local and remote. */
   light: boolean
   /** True for a Store-submission build (Windows Store packaging identity). */
   store: boolean
-  /** Display name. e.g. "Hermes Light" */
+  /** Desktop display name. */
   displayName: string
-  /** OS-level app identity. e.g. "com.nousresearch.hermes-light" */
+  /** Independent OS-level app identity. */
   appId: string
-  /** app name in pascal case. e.g. "HermesLight" */
+  /** App name in Pascal case. */
   appNamePascal: string
   /** Artifact prefix stays compatible with release archive consumers. */
   artifactNamePascal: string
   /** Windows GUI executable stem; not the payload CLI launcher path. */
   windowsExecutableName: string
-  /** Exposed payload CLI command. */
+  /** Desktop executable name, never the agent CLI command. */
   cliName: string
-  /** OS-level app identity w/ org prefix. e.g. "NousResearch.HermesLight" */
+  /** App-specific deep links never replace the official hermes:// handler. */
+  protocolScheme: string
+  /** Windows package identity. */
   msixAppIdWithOrg: string
   /** R2 identity token on channel builds; absent on legacy products. */
   readonly token?: string

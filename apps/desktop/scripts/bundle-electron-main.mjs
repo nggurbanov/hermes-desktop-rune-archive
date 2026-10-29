@@ -14,7 +14,7 @@ const repoRoot = resolve(import.meta.dirname, '../../..')
 function productIdentity(source, stamp) {
   const variant = stamp.updateMechanism === 'microsoft-store' ? 'store'
     : stamp.payload === 'bootstrap' ? '' : stamp.payload
-  if (!['', 'bundled', 'light', 'store'].includes(variant)) {
+  if (!['', 'standalone', 'bundled', 'light', 'store'].includes(variant)) {
     throw new Error(`Invalid desktop stamp payload: ${stamp.payload}`)
   }
   return execFileSync(process.execPath, ['-e', 'console.log(JSON.stringify(require(process.argv[1])))',

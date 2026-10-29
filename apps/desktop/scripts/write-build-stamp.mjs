@@ -1,15 +1,12 @@
 /**
- * Write the desktop artifact stamp for source, bundled and Light builds.
+ * Write provenance for the standalone desktop client.
  * bundle-electron-main.mjs bakes it into the running code. The packaged
  * sidecar exists only to detect replacement of that artifact by an update.
- * PM's bundle builder supplies relative launch paths for bundled artifacts.
  * Provenance comes from CI, local git, or an explicit unknown-source stamp.
  */
 
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs"
-import { resolve, join, relative, posix } from "path"
-import productIdentity from "../product-identity.cjs"
-import { channelBuildRequest } from "../../../scripts/msix-shared.mjs"
+import { mkdirSync, readFileSync, writeFileSync } from "fs"
+import { resolve, join, relative } from "path"
 import { validateBundleEnvironment } from "./bundle-env.mjs"
 import { execFileSync } from "child_process"
 
@@ -67,11 +64,8 @@ export function fromLocalGit(repoRoot = REPO_ROOT, execFn = tryExec) {
 }
 
 export function fromFallback(branch = FALLBACK_BRANCH) {
-  // Non-git builds (ZIP download, bootstrap installer without a resolvable
-  // HEAD) cannot determine a real commit.  Use a placeholder so local /
-  // personal builds can still complete.  The desktop bootstrap treats the
-  // all-zero commit as "unknown" and falls back to an unpinned branch
-  // bootstrap instead of trying to fetch a non-existent GitHub commit.
+  // Source archives can still be built; the placeholder explicitly records
+  // that their commit provenance is unknown.
   return {
     commit: FALLBACK_COMMIT,
     branch: branch || FALLBACK_BRANCH,
@@ -90,12 +84,6 @@ export function resolveStamp({
   execFn = tryExec,
   fallbackBranch = FALLBACK_BRANCH
 } = {}) {
-  const channelBuild = channelBuildRequest(env)
-  if (channelBuild) {
-    const local = fromLocalGit(repoRoot, execFn)
-    if (!local || local.commit !== channelBuild.commit || local.dirty) throw new Error('Channel build identity does not match clean checkout HEAD')
-    return { ...local, branch: null, source: 'channel-build', baseVersion: channelBuild.sourceVersion, channelBuild }
-  }
   if (env.HERMES_BUILD_COMMIT) {
     if (!/^[a-f0-9]{40}$/.test(env.HERMES_BUILD_COMMIT) || env.HERMES_PAYLOAD_TAG) {
       throw new Error('Commit builds require an exact full SHA without a release tag')
@@ -113,42 +101,10 @@ export function isFallbackCommit(commit) {
   return typeof commit === "string" && /^0{7,40}$/.test(commit)
 }
 
-/** Qualify desktop CLI files before the immutable runtime paths are baked.
- * Canonical command keys remain stable for backend consumers; public aliases
- * come from the declared filenames, never those internal keys. The canonical
- * files stay beside them: the agent's own terminal puts <payload>/bin first on
- * PATH (pm.environments.activate_dependencies) and runs bare `hermes`, while
- * only the qualified names are published (MSIX aliases, ~/.local/bin links).
- */
-export function stageDesktopLaunchers(root, identity = productIdentity) {
-  const file = join(root, 'manifest.json')
-  const manifest = JSON.parse(readFileSync(file, 'utf8'))
-  const windows = manifest.target.startsWith('win32')
-  const commands = {}
-  const launchers = []
-  for (const [name, source] of Object.entries(manifest.runtime.commands)) {
-    const alias = name.replace(/^hermes(?=-|$)/, identity.cliName)
-    const destination = posix.join(posix.dirname(source), `${alias}${windows ? '.exe' : ''}`)
-    if (source !== destination && existsSync(join(root, source))) {
-      copyFileSync(join(root, source), join(root, destination))
-    }
-    if (!existsSync(join(root, destination))) throw new Error(`Missing desktop launcher: ${destination}`)
-    commands[name] = destination
-    launchers.push(alias)
-  }
-  manifest.runtime.commands = commands
-  manifest.launchers = launchers
-  writeFileSync(file, JSON.stringify(manifest, null, 2) + '\n')
-  return manifest
-}
-
-/** Electron and the embedded CLI must see the same immutable provenance. */
+/** The sidecar identifies only this desktop artifact. */
 export function writeDesktopStamp(outDir, built) {
   const json = JSON.stringify(built, null, 2) + "\n"
   mkdirSync(outDir, { recursive: true })
-  if (built.payload === 'bundled') {
-    writeFileSync(join(outDir, 'agent-payload', built.runtime.repoDir, 'install-stamp.json'), json, 'utf8')
-  }
   writeFileSync(join(outDir, 'install-stamp.json'), json, 'utf8')
 }
 
@@ -162,8 +118,8 @@ function main() {
         "  - `git rev-parse HEAD` failed at " +
         REPO_ROOT +
         "\n" +
-        "Packaged builds require a git ref to pin first-launch install.ps1\n" +
-        "against. Run from a git checkout or set $GITHUB_SHA explicitly."
+        "Packaged builds record this desktop checkout provenance.\n" +
+        "Run from a git checkout or set $GITHUB_SHA explicitly."
     )
     process.exit(1)
   }
@@ -171,8 +127,8 @@ function main() {
   if (isFallbackCommit(stamp.commit)) {
     console.warn(
       "[write-build-stamp] WARNING: no git commit found (non-git checkout?).\n" +
-        "  Using placeholder commit — the packaged app will fall back to the\n" +
-        "  default branch for first-launch bootstrap.  For production builds,\n" +
+        "  Using placeholder commit in desktop provenance.\n" +
+        "  For production builds,\n" +
         "  run from a git checkout or set $GITHUB_SHA."
     )
   }
@@ -187,11 +143,7 @@ function main() {
     )
   }
 
-  const bundled = ['bundled', 'store'].includes(process.env.HERMES_DESKTOP_VARIANT)
-  const payload = bundled
-    ? stageDesktopLaunchers(join(OUT_DIR, 'agent-payload'))
-    : null
-  const built = buildStampPayload(stamp, process.env, process.platform, payload)
+  const built = buildStampPayload(stamp)
   writeDesktopStamp(OUT_DIR, built)
   console.log(
     "[write-build-stamp] wrote " +
@@ -204,72 +156,34 @@ function main() {
   )
 }
 
-/** One artifact schema for source, bundled and Light builds.
- * The PM bundle builder supplies launch paths only for bundled artifacts.
- */
-export function buildStampPayload(stamp, env = process.env, platform = process.platform, payload = null) {
-  const variant = (env.HERMES_DESKTOP_VARIANT || "").trim()
-  const channelBuild = channelBuildRequest(env)
-  if (channelBuild && (stamp.commit !== channelBuild.commit || stamp.dirty)) throw new Error('Channel build identity does not match stamp')
+/** The app version and update owner never come from a connected agent. */
+export function buildStampPayload(stamp, env = process.env, _platform = process.platform) {
+  const variant = (env.HERMES_DESKTOP_VARIANT || 'standalone').trim()
+  if (variant !== 'standalone') throw new Error(`This desktop packages only the standalone client, not ${variant}`)
+  if (env._HERMES_CHANNEL_REQUEST_JSON) throw new Error('Agent channel builds cannot package the standalone desktop')
   const commitBuild = env.HERMES_BUILD_COMMIT || null
   if (commitBuild && (!/^[a-f0-9]{40}$/.test(commitBuild) || commitBuild !== stamp.commit)) {
     throw new Error('Commit build identity does not match the stamp commit')
   }
-  if (commitBuild && env.HERMES_PAYLOAD_TAG) {
-    throw new Error('Commit builds cannot also set a release tag')
-  }
-  const version = env.HERMES_PAYLOAD_VERSION || (env.HERMES_PAYLOAD_TAG || '').replace(/^v/, '') || null
-  // The bundle's baked runtime defaults/clears, recorded as data so the smoke
-  // driver can predict the app's resolved Hermes home without reimplementing
-  // the banner. Only commit bundles carry one, but the field is harmless when
-  // absent elsewhere.
+  const { version } = JSON.parse(readFileSync(join(DESKTOP_ROOT, 'package.json'), 'utf8'))
   const bundleEnv = env.HERMES_BUNDLE_ENV_JSON ? validateBundleEnvironment(JSON.parse(env.HERMES_BUNDLE_ENV_JSON)) : undefined
-  const base = {
+  return {
     schemaVersion: STAMP_SCHEMA_VERSION,
     commit: stamp.commit,
-    branch: commitBuild || channelBuild ? null : stamp.branch,
+    branch: commitBuild ? null : stamp.branch,
     builtAt: new Date().toISOString(),
     dirty: stamp.dirty,
-    source: channelBuild ? 'channel-build' : commitBuild ? 'commit-build' : stamp.source,
+    source: commitBuild ? 'commit-build' : stamp.source,
     commitDate: stamp.commitDate ?? null,
-    baseVersion: channelBuild?.sourceVersion ?? stamp.baseVersion ?? version?.split('-')[0] ?? null,
-    displayVersion: channelBuild
-      ? `${channelBuild.sourceVersion} (${channelBuild.channel} #${channelBuild.sequence}, ${channelBuild.commit.slice(0, 7)})`
-      : stamp.displayVersion ?? version,
-    distance: stamp.distance ?? null
-  }
-
-  if (channelBuild) base.channelBuild = channelBuild
-  // Rehearsal receivers use the real stable update path, never preview resolution.
-  if (channelBuild?.receiverCandidate) {
-    delete base.channelBuild
-    base.source = 'build'
-    base.displayVersion = channelBuild.version
-  }
-  if (variant === 'bundled') base.receiverProtocol = 1
-
-  const updateMechanism = {
-    '': 'self',
-    bootstrap: 'self',
-    store: 'microsoft-store',
-    bundled: { win32: 'app-installer', darwin: 'electron-updater' }[platform] || 'external',
-    light: platform === 'darwin' ? 'electron-updater' : 'external'
-  }[variant]
-  if (!updateMechanism) throw new Error(`Unknown desktop variant: ${variant}`)
-  if (channelBuild && updateMechanism === 'external') throw new Error('Channel builds require a supported native update owner')
-  const bundled = variant === 'bundled' || variant === 'store'
-  if (bundled && !payload?.runtime?.commands?.hermes) {
-    throw new Error('PM payload has no completed launch contract; stage the bundle before packaging')
-  }
-  return {
-    ...base,
-    payload: variant === "store" ? "bundled" : variant || "bootstrap",
-    distribution: "desktop-app",
-
-    updateMechanism: commitBuild ? 'external' : updateMechanism,
-    tag: channelBuild?.receiverCandidate ? channelBuild.releaseTag : env.HERMES_PAYLOAD_TAG || null,
-    ...(bundleEnv ? { bundleEnv } : {}),
-    ...(bundled ? { runtime: payload.runtime } : {})
+    baseVersion: version,
+    displayVersion: version,
+    distance: null,
+    payload: 'standalone',
+    distribution: 'desktop-app',
+    // Installers are independently downloadable until an app-only updater is verified.
+    updateMechanism: 'external',
+    tag: null,
+    ...(bundleEnv ? { bundleEnv } : {})
   }
 }
 
