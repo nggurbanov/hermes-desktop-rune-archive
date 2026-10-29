@@ -21,6 +21,8 @@ fn main() {
         on_key: Some(app::on_key),
         scenes: &[
             ("reader", app::reader_scene),
+            ("bots", app::bots_scene),
+            ("layout", app::layout_scene),
             ("empty", app::empty_scene),
             ("error", app::error_scene),
         ],
@@ -71,15 +73,26 @@ fn check_connection() -> Result<(), String> {
     let profiles = gateway.profiles()?;
     let profile = value("--profile").unwrap_or_else(|| "default".into());
     let sessions = gateway.sessions(&profile)?;
-    let history = sessions
-        .first()
-        .map(|s| gateway.history(&profile, &s.id))
-        .transpose()?;
+    let check_bot = args.iter().any(|arg| arg == "--check-bot");
+    let history = if check_bot {
+        let chat = profiles
+            .iter()
+            .find(|p| p.name == profile)
+            .and_then(|p| p.canonical_session.as_ref())
+            .ok_or("No existing Bot Chat for the selected profile")?;
+        Some(gateway.history(&profile, &chat.id)?)
+    } else {
+        sessions
+            .first()
+            .map(|s| gateway.history(&profile, &s.id))
+            .transpose()?
+    };
     println!(
         "{}",
         serde_json::json!({ "connected": true, "profiles": profiles.len(),
         "sessions": sessions.len(), "history_messages": history.as_ref().map(|h| h.messages.len()),
-        "earlier_history": history.as_ref().map(|h| h.has_more), "read_only": true })
+        "earlier_history": history.as_ref().map(|h| h.has_more), "read_only": true,
+        "canonical_bot_history": check_bot })
     );
     Ok(())
 }

@@ -50,6 +50,15 @@ impl fmt::Debug for Connection {
 pub struct Profile {
     pub name: String,
     pub label: String,
+    pub description: String,
+    pub canonical_session: Option<CanonicalSession>,
+}
+/// The server's named Bot Chat registry row, never a recent-session guess.
+#[derive(Clone, Debug)]
+pub struct CanonicalSession {
+    pub id: String,
+    pub resolved_id: String,
+    pub preview: String,
 }
 #[derive(Clone, Debug)]
 pub struct Session {
@@ -83,6 +92,7 @@ pub struct Gateway {
     initial_profile: String,
     profile_homes: HashMap<String, PathBuf>,
     session_targets: HashMap<(String, String), String>,
+    canonical_targets: HashMap<(String, String), String>,
 }
 
 impl Gateway {
@@ -180,31 +190,58 @@ impl Gateway {
             initial_profile,
             profile_homes: HashMap::new(),
             session_targets: HashMap::new(),
+            canonical_targets: HashMap::new(),
         })
     }
 
     pub fn profiles(&mut self) -> Result<Vec<Profile>, String> {
         let value = self.rpc(
             "profiles.list",
-            json!({"profile": self.initial_profile, "include_sessions": false}),
+            json!({"profile": self.initial_profile, "include_sessions": true}),
         )?;
         let rows = rows(&value, "profiles")?;
         let mut result = Vec::new();
         let mut homes = HashMap::new();
+        let mut canonical_targets = HashMap::new();
         for row in rows {
             let name = required_str(row, "name")?.to_owned();
-            let label = row
-                .get("display_name")
-                .and_then(Value::as_str)
-                .filter(|s| !s.is_empty())
-                .unwrap_or(&name)
+            valid_scope(&name)?;
+            let bot_meta = row.get("ui_meta").and_then(|meta| meta.get("hermes-bots"));
+            let label = profile_label(row, bot_meta, &name);
+            let description = bot_meta
+                .and_then(|meta| nonempty_string(meta, "description"))
+                .or_else(|| nonempty_string(row, "description"))
+                .unwrap_or_default()
                 .to_owned();
+            let canonical_session = match row.get("canonical_session") {
+                Some(canonical) if !canonical.is_null() => {
+                    let id = required_str(canonical, "id")?.to_owned();
+                    let resolved_id = required_str(canonical, "resolved_id")?.to_owned();
+                    valid_scope(&id)?;
+                    valid_scope(&resolved_id)?;
+                    canonical_targets.insert((name.clone(), id.clone()), resolved_id.clone());
+                    Some(CanonicalSession {
+                        id,
+                        resolved_id,
+                        preview: nonempty_string(canonical, "preview")
+                            .unwrap_or_default()
+                            .to_owned(),
+                    })
+                }
+                _ => None,
+            };
             if let Some(home) = row.get("path").and_then(Value::as_str) {
                 homes.insert(name.clone(), PathBuf::from(home));
             }
-            result.push(Profile { name, label });
+            result.push(Profile {
+                name,
+                label,
+                description,
+                canonical_session,
+            });
         }
         self.profile_homes = homes;
+        self.canonical_targets = canonical_targets;
         Ok(result)
     }
 
@@ -232,6 +269,19 @@ impl Gateway {
             {
                 self.session_targets
                     .insert((profile.to_owned(), id.clone()), resolved.to_owned());
+            }
+            // Older clients can leave the named registry chat visible in the
+            // database. Keep Bots as its only navigation door without changing
+            // the server's durable visibility from this read-only client.
+            let canonical_id = self
+                .canonical_targets
+                .iter()
+                .any(|((owner, root), tip)| owner == profile && (&id == root || &id == tip));
+            let canonical_title = ["title", "root_title"]
+                .into_iter()
+                .any(|key| row.get(key).and_then(Value::as_str).map(str::trim) == Some("Bot Chat"));
+            if canonical_id || canonical_title {
+                continue;
             }
             let updated = ["updated_at", "last_active", "started_at"]
                 .into_iter()
@@ -357,6 +407,10 @@ impl Gateway {
         let resolved = self
             .session_targets
             .get(&(profile.into(), session.into()))
+            .or_else(|| {
+                self.canonical_targets
+                    .get(&(profile.into(), session.into()))
+            })
             .map(String::as_str)
             .unwrap_or(session);
         if !value
@@ -546,6 +600,47 @@ fn rows<'a>(value: &'a Value, key: &str) -> Result<&'a Vec<Value>, String> {
         .get(key)
         .and_then(Value::as_array)
         .ok_or_else(|| "Invalid gateway collection response".into())
+}
+fn nonempty_string<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+}
+
+/// Native rows follow Bot Mode's backend title/display-name ladder. Client-side
+/// aliases and local metadata belong to a future connection registry, not here.
+fn profile_label(row: &Value, bot_meta: Option<&Value>, name: &str) -> String {
+    if let Some(label) = bot_meta
+        .and_then(|meta| nonempty_string(meta, "title"))
+        .or_else(|| nonempty_string(row, "title"))
+        .or_else(|| nonempty_string(row, "display_name"))
+    {
+        return label.to_owned();
+    }
+    if name.eq_ignore_ascii_case("default") {
+        return "Hermes".into();
+    }
+    let mut word_start = true;
+    name.chars()
+        .map(|character| {
+            let character = if matches!(character, '-' | '_') {
+                ' '
+            } else {
+                character
+            };
+            let output = if word_start && character.is_ascii_alphanumeric() {
+                character.to_ascii_uppercase()
+            } else {
+                character
+            };
+            word_start = !character.is_ascii_alphanumeric() && character != '_';
+            output
+        })
+        .collect::<String>()
+        .trim()
+        .to_owned()
 }
 fn required_str<'a>(value: &'a Value, key: &str) -> Result<&'a str, String> {
     value

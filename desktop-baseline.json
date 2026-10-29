@@ -55,22 +55,26 @@
     "verifiedAt": "2026-10-29",
     "frameworkRevision": "bfb8facae2e4665e5e6d17afe85561884a7fd402",
     "opencodeReferenceRevision": "3f70cd6b675c89a8a7b64fc09b1bf2b455e0ad1a",
-    "scope": "Preserve Hermes placements and behavior; reuse OpenCode components and visual language. First increment is read-only.",
+    "scope": "Partial read-only Hermes shell: Sessions/Bots, original navigation order, bottom profile scope, in-place/explicit-tab opens and fresh canonical Bot Chat reads. OpenCode supplies components and themes, not application composition.",
     "verified": [
       "Linux native build and formatting",
-      "16 Rust transport/controller tests",
-      "6 native scene/interaction checks",
-      "Light/dark,1024x768 and1440x900 renders with Cyrillic synthetic content",
-      "Real local gateway profiles, sessions and read-only history",
-      "Actual X11 window connect, select session and resize; gateway PID preserved"
+      "22 Rust transport/controller tests",
+      "10 native scene/interaction checks",
+      "Actual retained Hermes renderer compared with native Rune; all screenshots synthetic",
+      "Light/dark, 1024x768 and 1440x900 native renders",
+      "Real local gateway: 1 profile, 118 visible sessions and read-only ordinary history",
+      "Controlled transport: hidden canonical Bot Chat, compaction aliases, no recency fallback or session mutations",
+      "Native context menu, explicit conversation tabs, missing Bot Chat and Simple-mode recovery"
     ],
     "pending": [
       "Send, stream, stop, durable admission/replay and approval/clarify",
-      "Bot Chat registry and concurrent conversation views",
+      "Full Bot Mode: creation, custom identity assets, groups/routines and concurrent live conversations",
       "Full pane tree/presets/persistence and narrow-window behavior",
       "Terminal, files, review, rich previews and remaining routes",
       "SSH, OAuth, settings persistence, localization and native platform acceptance",
       "OS accessibility bridge and existing JS GUI-plugin compatibility"
-    ]
+    ],
+    "parityInventory": "apps/rune/docs/shell-parity.md",
+    "correction": "6001795 proved native transport but its UI was rejected as an OpenCode shell; no full Hermes parity claim."
   }
 }

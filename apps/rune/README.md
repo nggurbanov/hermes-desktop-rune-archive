@@ -1,8 +1,10 @@
 # Hermes Desktop Rune: native reader
 
-The first native Rune increment reads an existing Hermes gateway. It preserves
-the Hermes Default panel topology and uses the real OpenCode Rune kit, theme,
-fonts and icons. The Electron client remains the behavioral baseline.
+The native Rune increment reads an existing Hermes gateway. Its shell follows
+the retained Hermes client: Sessions / Bots in one left zone, the original
+navigation order, profile scope at the sidebar foot and workspace conversation
+tabs. OpenCode supplies widgets, themes, fonts and icons. The Electron client
+remains the behavioral baseline; this is still a partial read-only port.
 
 ## Run
 
@@ -29,14 +31,24 @@ The current minimum native window width is 1024 logical pixels, until the full
 responsive pane tree is ported.
 
 The native reader supports profile selection, saved session listing, Markdown
-history, search, manual reconnect and both appearances. History initially shows
+history, search, manual reconnect and both appearances. Bots opens the server's
+canonical Bot Chat directly, refreshing its registry identity on every open.
+Canonical Bot Chats stay out of Sessions. A bot without an existing Bot Chat
+shows an empty state; viewing never creates a chat or adopts its newest session.
+Ordinary clicks open in place. Right-click a session or bot for Open in new tab.
+Simple mode rests tooling and the statusbar; connection recovery stays available.
+Tooling starts closed in Advanced too, matching a fresh Hermes install. The
+right-side toggle reveals its deferred panel slots for layout inspection.
+
+History initially shows
 the latest 500 messages; an explicit notice indicates when earlier history is
 not loaded. The session list contains the latest 200 visible stored sessions. Search filters
 that loaded list. Image attachments are not rendered in this text/Markdown slice.
-Send/stream/stop, approvals, editing, Bot Chat-specific navigation,
+Send/stream/stop, approvals, editing, bot creation/custom avatars/groups,
 terminal, file/review interactions, previews, other settings/routes and JS GUI
 plugins are later increments. The unavailable tool panes and composer are
 explicitly read-only. This is not full behavior parity.
+See [the shell parity inventory](docs/shell-parity.md) for precise coverage.
 
 ## Reproducible visual checks
 
@@ -53,6 +65,8 @@ history. The headless tooling does not run the native window's `on_ready`, so it
 is for deterministic presentation checks, not proof of a live connection.
 `--check-connection --local-home PATH` performs a read-only production transport
 probe and prints counts only, not private titles, messages or credentials.
+Add `--check-bot` to probe existing canonical Bot Chat history specifically;
+absence is reported without creating one.
 
 ## Upstream reuse and limits
 
@@ -77,10 +91,12 @@ npm run test:rune:ui
 ```
 
 The UI checker uses only Node standard libraries and synthetic Rune scenes. It
-checks both appearances and panel layout, filtered session search, secure input
-redaction, Escape dismissal and the network error state. It needs a Vulkan
+checks Hermes structure and both appearances, revealed panel geometry, filtered
+search, secure input, Escape, errors, canonical bot navigation, explicit tabs,
+missing Bot Chat and Simple-mode recovery. It needs a Vulkan
 renderer (Mesa software rendering is sufficient); transport unit tests do not.
 See [the port plan](docs/port-plan.md) for subsequent behavior slices.
 
 ![Native reader, light appearance](docs/images/reader-light.png)
 ![Native reader, dark appearance](docs/images/reader-dark.png)
+![Native Bots, dark appearance](docs/images/bots-dark.png)

@@ -31,9 +31,20 @@ identity and secondary metadata without oversized dashboard headings.
 
 ## Layout
 
+Preserve the Hermes shell, not OpenCode's application composition. The top
+window band contains the sidebar toggle, workspace conversation tabs and system
+controls. Sessions / Bots is a separate strip below that band in the left zone.
+Sessions keeps the original navigation order, then search and session rows;
+profile scope stays at the sidebar foot. Bots opens the named, server-resolved
+Bot Chat for each identity, never its newest ordinary session. Plain clicks
+replace the foreground tab; explicit Open in new tab preserves it.
+
 Preserve Hermes's default Advanced topology: sessions left, workspace center,
-Review and Files in the upper-right, Terminal below. Sessions width starts at
-237 logical pixels. The existing six presets, nested splits, tab stacks, focus,
+Review and Files in the upper-right, Terminal below when tooling is revealed.
+Fresh installs rest tooling closed, including in Advanced; DEFAULT_TREE alone
+does not establish visibility. Simple shadows that visibility and leaves
+connection recovery reachable. Sessions width starts at 237 logical pixels.
+The existing presets, nested splits, tab stacks, focus,
 resize and keep-alive belong to eventual parity, not an invented fixed layout.
 Reference styling does not authorize moving actions or replacing Hermes's tree
 with OpenCode's simpler shell. On small windows retain ownership and provide
@@ -69,3 +80,12 @@ north-star mock are skipped: this is a reference-led port with a fixed Hermes
 composition and user-selected real OpenCode theme/components, not an unresolved
 new visual composition. Upstream reference renders and native screenshot
 inspection are the visual evidence. Do not rasterize UI text or controls.
+
+## Correction after the first implementation
+
+The user rejected 6001795 as an OpenCode shell connected to Hermes. A matching
+pane silhouette was insufficient: it omitted Sessions / Bots, the named Bot Chat
+door, the original navigation and the bottom profile scope rail. Native widgets
+and a live connection do not establish Hermes spatial or behavioral parity.
+Compare subsequent increments with actual retained Hermes renders as well as
+source contracts. Record omissions in apps/rune/docs/shell-parity.md.

@@ -66,7 +66,7 @@ fn remote_reads_preserve_scope_identity_and_ignore_unrelated_rpc_frames() {
         })
         .unwrap();
         let profiles = request(&mut ws, "profiles.list", "default");
-        assert_eq!(profiles["params"]["include_sessions"], false);
+        assert_eq!(profiles["params"]["include_sessions"], true);
         ws.send(Message::Text(
             json!({"id": 999, "result": {"profiles":[]}})
                 .to_string()
@@ -284,4 +284,87 @@ fn server_display_projection_wins_even_when_it_intentionally_hides_all_text() {
         message_text(&json!({"display_content":null, "text":"Legacy projection"})),
         "Legacy projection"
     );
+}
+
+#[test]
+fn bot_roster_preserves_identity_and_reads_hidden_canonical_history_instead_of_recency() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut ws = tungstenite::accept(stream).unwrap();
+        let profiles = request(&mut ws, "profiles.list", "default");
+        assert_eq!(profiles["params"]["include_sessions"], true);
+        answer(
+            &mut ws,
+            &profiles,
+            json!({"profiles":[
+                {"name":"work","display_name":"Core name","description":"Core description",
+                 "ui_meta":{"hermes-bots":{"title":"  Researcher  ","description":"  Follows sources  "}},
+                 "canonical_session":{"id":"hidden-bot-chat","resolved_id":"compressed-tip","preview":"Last exchange"},
+                 "last_session":{"id":"newest-side-chat","title":"Recent task"}},
+                {"name":"default"},
+                {"name":"named","display_name":"  Friendly agent  ","canonical_session":null},
+                {"name":"no-bot-chat","last_session":{"id":"must-not-adopt-this"}}
+            ]}),
+        );
+        let sessions = request(&mut ws, "session.list", "work");
+        assert_eq!(sessions["params"]["include_hidden"], false);
+        answer(
+            &mut ws,
+            &sessions,
+            json!({"sessions":[
+                {"session_id":"newest-side-chat","title":"Recent task"},
+                {"session_id":"hidden-bot-chat","title":"Unexpected stale title"},
+                {"session_id":"compressed-tip","title":"Compacted exchange"},
+                {"session_id":"legacy-visible","title":"Bot Chat"},
+                {"session_id":"legacy-compressed","title":"Compressed title","root_title":"Bot Chat"},
+                {"session_id":"real-side-chat","title":"Bot Chat notes"}
+            ]}),
+        );
+        let (mut http, _) = listener.accept().unwrap();
+        let header = http_request(&mut http);
+        assert!(header.starts_with("GET /api/sessions/hidden-bot-chat/messages?"));
+        assert!(header.contains("profile=work"));
+        http_answer(
+            &mut http,
+            json!({"profile":"work","session_id":"compressed-tip","messages":[
+                {"role":"assistant","text":"The continuing bot conversation"}
+            ]}),
+        );
+        // No create, restore, resume or prompt request is needed to view a bot.
+        // Any extra RPC would be refused by the read-method guard; this server
+        // has only answered the roster and ordinary visible-session list.
+    });
+    let mut gateway = Gateway::connect(&Connection::Url {
+        endpoint,
+        token: None,
+    })
+    .unwrap();
+    let profiles = gateway.profiles().unwrap();
+    let bot = &profiles[0];
+    assert_eq!(bot.name, "work");
+    assert_eq!(bot.label, "Researcher");
+    assert_eq!(bot.description, "Follows sources");
+    let canonical = bot.canonical_session.as_ref().unwrap();
+    assert_eq!(canonical.id, "hidden-bot-chat");
+    assert_eq!(canonical.resolved_id, "compressed-tip");
+    assert_eq!(canonical.preview, "Last exchange");
+    assert_eq!(profiles[1].label, "Hermes");
+    assert_eq!(profiles[2].label, "Friendly agent");
+    assert!(profiles[3].canonical_session.is_none());
+    assert_eq!(profiles[3].label, "No Bot Chat");
+    let sessions = gateway.sessions("work").unwrap();
+    assert_eq!(sessions.len(), 2);
+    assert_eq!(sessions[0].id, "newest-side-chat");
+    assert_eq!(sessions[1].id, "real-side-chat");
+    let history = gateway.history("work", &canonical.id).unwrap();
+    assert_eq!(
+        history.messages[0].content,
+        "The continuing bot conversation"
+    );
+    server.join().unwrap();
 }

@@ -145,7 +145,6 @@ pub fn readonly_composer(p: &Pal) -> El {
         .role("group")
         .label("Read-only composer")
         .w_full()
-        .max_w(CONTENT_W)
         .min_h(82.0)
         .radius(12.0)
         .fill(if p.dark { p.layer1 } else { p.bg_base })
@@ -177,7 +176,7 @@ pub fn readonly_composer(p: &Pal) -> El {
         .key("dock")
         .w_full()
         .center()
-        .px(24.0)
+        .px(16.0)
         .pb(12.0)
         .child(composer)
 }

@@ -1,0 +1,7 @@
+{"events":[
+  {"t":0.1,"type":"tap","key":"bots-tab"},
+  {"t":0.2,"type":"tap","key":"bot-default"},
+  {"t":0.4,"type":"tap","button":"secondary","key":"bot-research"},
+  {"t":0.6,"type":"tap","key":"conversation-actions-item1"},
+  {"t":0.8,"type":"tap","key":"activate-tab-0"}
+]}

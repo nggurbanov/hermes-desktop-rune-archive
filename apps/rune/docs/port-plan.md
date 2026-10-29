@@ -6,15 +6,20 @@ read-only increment is a starting slice, not a substitute for that migration.
 
 1. **Native reader.** Real external gateway connection; profiles; recent visible
    stored sessions; bounded Markdown history; search/reconnect; actual light/dark
-   OpenCode widgets and the Hermes Default topology. Implemented on Linux.
+   OpenCode widgets. The first implementation was rejected as an OpenCode shell.
+   Its correction restores Hermes Sessions/Bots, navigation placement, bottom
+   profile scope and in-place versus explicit-tab opening; reads canonical Bot
+   Chat via fresh server registry lookups. Implemented subset on Linux, not full
+   shell parity; see shell-parity.md.
 2. **One complete conversation.** Draft/create with source gui, native tickets,
    canonical attach and ownership, durable prepared input/admission receipts,
    streaming/replay, stop generation, reconnect/history and approval/clarify.
    Port the existing client behavior contracts; do not reuse OpenCode's fixture
    send handler or silently lose explicit launch policy.
-3. **Bots and concurrent conversations.** Bot Chat's (profile, title="Bot Chat")
-   registry, no stored-ID pin or recency adoption; connection/profile/session
-   isolation, parallel chat views, queue, rewind, attachments and read markers.
+3. **Full Bot Mode and concurrent conversations.** Extend the read-only named
+   Bot Chat registry navigation with writes, custom identity assets, groups,
+   routines, connection/profile/session isolation, parallel live views, queue,
+   rewind, attachments and read markers. Never pin a stored ID or adopt recency.
 4. **The full pane tree.** All existing presets, nested groups/splits, tab stacks,
    resize/drag/drop, persistence, focus routing, narrow windows and keep-alive.
    Rune SplitView is a primitive, not the complete Hermes layout engine.

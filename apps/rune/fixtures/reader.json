@@ -1,12 +1,30 @@
 {
   "profile": "default",
-  "profiles": [{"name": "default", "label": "Hermes"}, {"name": "research", "label": "Research"}],
+  "profiles": [
+    {"name": "default", "label": "Hermes", "description": "Your personal agent", "canonical_session": {"id": "bot-hermes", "preview": "Let's keep your plans and ideas in one place."}},
+    {"name": "research", "label": "Research", "description": "A second identity for deeper research", "canonical_session": {"id": "bot-research", "preview": "The sources are ready to review."}},
+    {"name": "new-bot", "label": "Writing", "description": "A new bot with no conversation yet"}
+  ],
   "sessions": [
     {"id": "sample-week", "title": "Plan the week"},
     {"id": "sample-notes", "title": "Organize my notes"},
     {"id": "sample-travel", "title": "Ideas for the next trip"}
   ],
   "selected_session": "sample-week",
+  "histories": [
+    {"profile": "default", "session": "bot-hermes", "messages": [
+      {"role": "user", "content": "Привет, Гермес. Хочу возвращаться к нашему разговору, а не искать его среди десятков сессий."},
+      {"role": "assistant", "content": "Теперь этот разговор открывается прямо из списка **Bots**. У каждого бота свой постоянный **Bot Chat**, а обычные сессии остаются во вкладке **Sessions**.\n\nЯ рядом. С чего начнём сегодня?"}
+    ]},
+    {"profile": "research", "session": "bot-research", "messages": [
+      {"role": "user", "content": "Покажи, к чему мы пришли в исследовании."},
+      {"role": "assistant", "content": "## Результаты исследования\n\nЭто отдельный разговор с **Research**. Его история принадлежит этому боту и не смешивается с чатом Hermes.\n\nМожно вернуться во вкладку Hermes и продолжить чтение там."}
+    ]},
+    {"profile": "default", "session": "sample-notes", "messages": [
+      {"role": "user", "content": "Помоги разобрать заметки."},
+      {"role": "assistant", "content": "Разделим заметки по задачам и оставим ссылки на исходные материалы."}
+    ]}
+  ],
   "messages": [
     {"role": "user", "content": "Давай соберём спокойный план на неделю. Хочу оставить время на работу и отдых."},
     {"role": "assistant", "content": "## Оставим место для жизни\n\nВыберем три результата, которые действительно важны, и не будем заполнять каждый час.\n\n- **Понедельник:** уточнить приоритеты и закончить одну небольшую задачу.\n- **Среда:** оставить длинный блок для сосредоточенной работы.\n- **Пятница:** подвести итоги и освободить вечер.\n\nОстальные дела можно распределить вокруг этих опор.\n\n```text\nУтро     Главное дело дня\nДень     Встречи и короткие задачи\nВечер    Прогулка, отдых, близкие\n```\n\nЕсли что-то изменится, перестроим план без чувства, что вся неделя пошла не так."}

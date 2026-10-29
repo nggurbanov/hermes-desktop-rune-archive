@@ -1,12 +1,45 @@
 //! Native viewer state. Network replies carry the intent and profile that own them.
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use rune::{TextEdit, Tx, Waker};
 use rune_kit::PaneState;
 
-use crate::gateway::{Connection, Gateway, History, HistoryMessage, Profile, Session};
+use crate::gateway::{
+    CanonicalSession, Connection, Gateway, History, HistoryMessage, Profile, Session,
+};
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SidebarTab {
+    Sessions,
+    Bots,
+}
+
+#[derive(Clone)]
+pub struct ConversationTab {
+    pub profile: String,
+    pub session: String,
+    pub title: String,
+    pub bot: bool,
+}
+
+#[derive(Clone)]
+pub enum ConversationTarget {
+    Session {
+        profile: String,
+        id: String,
+        title: String,
+    },
+    Bot(String),
+}
+
+#[derive(Clone)]
+struct BotOpen {
+    profile: String,
+    new_tab: bool,
+    replace: Option<(String, String)>,
+}
 
 pub struct Viewer {
     pub profiles: Vec<Profile>,
@@ -28,6 +61,15 @@ pub struct Viewer {
     pub connection_url: TextEdit,
     pub connection_token: TextEdit,
     pub connection_local_home: TextEdit,
+    pub sidebar_tab: SidebarTab,
+    pub tabs: Vec<ConversationTab>,
+    pub bot_empty: bool,
+    pub simple_mode: bool,
+    pub profile_picker: bool,
+    pub row_menu: Option<(ConversationTarget, rune::PointerPress)>,
+    pending_bot: Option<BotOpen>,
+    advanced_tools_open: bool,
+    fixture_history: HashMap<(String, String), Vec<HistoryMessage>>,
     connection: Option<Connection>,
     intent: u64,
     network: Option<Network>,
@@ -46,6 +88,7 @@ enum Command {
     Connect(Connection, String),
     Sessions(String),
     History(String, String),
+    Bot(String),
 }
 struct Reply {
     intent: u64,
@@ -61,10 +104,17 @@ enum Update {
         profile: String,
         sessions: Vec<Session>,
     },
-    History {
+    Opened {
         profile: String,
         session: String,
+        sessions: Vec<Session>,
         history: History,
+    },
+    BotOpened {
+        profiles: Vec<Profile>,
+        profile: String,
+        sessions: Vec<Session>,
+        chat: Option<(String, History)>,
     },
 }
 
@@ -84,12 +134,21 @@ impl Viewer {
             endpoint_label: "Connect an agent".into(),
             search: TextEdit::new(""),
             sidebar: PaneState::new(237.0).range(190.0, 360.0),
-            inspector: PaneState::new(420.0).range(300.0, 640.0),
+            inspector: PaneState::new(300.0).range(240.0, 520.0).collapsed(),
             theme: None,
             connection_form: true,
             connection_url: TextEdit::new(""),
             connection_token: TextEdit::new(""),
             connection_local_home: TextEdit::new(default_agent_home().to_string_lossy()),
+            sidebar_tab: SidebarTab::Sessions,
+            tabs: vec![],
+            bot_empty: false,
+            simple_mode: false,
+            profile_picker: false,
+            row_menu: None,
+            pending_bot: None,
+            advanced_tools_open: false,
+            fixture_history: HashMap::new(),
             connection: None,
             intent: 0,
             network: None,
@@ -200,6 +259,10 @@ impl Viewer {
         self.sessions.clear();
         self.messages.clear();
         self.selected_session = None;
+        self.tabs.clear();
+        self.pending_bot = None;
+        self.row_menu = None;
+        self.bot_empty = false;
         self.history_truncated = false;
         self.reconnect();
     }
@@ -207,10 +270,13 @@ impl Viewer {
         self.theme = Some(!self.theme.unwrap_or(system_dark));
     }
     pub fn select_profile(&mut self, profile: String) {
+        self.profile_picker = false;
         if profile == self.profile {
             return;
         }
         self.profile = profile.clone();
+        self.pending_bot = None;
+        self.bot_empty = false;
         self.selected_session = None;
         self.messages.clear();
         self.sessions.clear();
@@ -227,19 +293,219 @@ impl Viewer {
         self.dispatch(Command::Sessions(profile));
     }
     pub fn open_session(&mut self, id: String) {
-        if self.selected_session.as_ref() == Some(&id) && self.error.is_none() {
+        let title = self
+            .sessions
+            .iter()
+            .find(|s| s.id == id)
+            .map(|s| s.title.clone())
+            .unwrap_or_else(|| "Conversation".into());
+        self.open_conversation(self.profile.clone(), id, title, false, false);
+    }
+
+    pub fn open_bot(&mut self, profile: String) {
+        self.open_bot_with_intent(profile, false);
+    }
+
+    pub fn open_target(&mut self, target: ConversationTarget, new_tab: bool) {
+        self.row_menu = None;
+        match target {
+            ConversationTarget::Bot(profile) => self.open_bot_with_intent(profile, new_tab),
+            ConversationTarget::Session { profile, id, title } => {
+                self.open_conversation(profile, id, title, false, new_tab)
+            }
+        }
+    }
+
+    fn open_bot_with_intent(&mut self, profile: String, new_tab: bool) {
+        let Some(bot) = self.profiles.iter().find(|p| p.name == profile).cloned() else {
+            return;
+        };
+        if !self.fixture {
+            let replace = self.foreground_slot();
+            if self.profile != profile {
+                self.sessions.clear();
+                self.search.replace_text("");
+            }
+            self.profile = profile.clone();
+            self.pending_bot = Some(BotOpen {
+                profile: profile.clone(),
+                new_tab,
+                replace,
+            });
+            self.selected_session = None;
+            self.bot_empty = false;
+            self.messages.clear();
+            self.error = None;
+            self.history_loading = true;
+            self.history_truncated = false;
+            self.connection_form = false;
+            self.dispatch(Command::Bot(profile));
             return;
         }
+        if let Some(chat) = bot.canonical_session {
+            self.open_conversation(profile, chat.id, bot.label, true, new_tab);
+        } else {
+            if self.profile == profile {
+                self.intent += 1;
+                self.loading = false;
+            } else {
+                self.select_profile(profile);
+            }
+            self.selected_session = None;
+            self.messages.clear();
+            self.history_loading = false;
+            self.history_truncated = false;
+            self.bot_empty = true;
+            self.error = None;
+        }
+    }
+
+    fn open_conversation(
+        &mut self,
+        profile: String,
+        id: String,
+        title: String,
+        bot: bool,
+        new_tab: bool,
+    ) {
+        let replace = self.foreground_slot();
+        self.connection_form = false;
+        self.pending_bot = None;
+        self.bot_empty = false;
+        if self.selected_session.as_ref() == Some(&id) && self.error.is_none() {
+            if self.profile == profile {
+                return;
+            }
+        }
+        let changed_profile = self.profile != profile;
+        if changed_profile {
+            self.profile = profile.clone();
+            self.sessions.clear();
+            self.search.replace_text("");
+        }
+        self.place_tab(
+            ConversationTab {
+                profile: profile.clone(),
+                session: id.clone(),
+                title,
+                bot,
+            },
+            new_tab,
+            replace,
+        );
         self.selected_session = Some(id.clone());
         self.messages.clear();
         self.history_loading = true;
         self.history_truncated = false;
         self.error = None;
         if self.fixture {
+            self.intent += 1;
             self.history_loading = false;
+            self.loading = false;
+            self.messages = self
+                .fixture_history
+                .get(&(profile, id))
+                .cloned()
+                .unwrap_or_default();
             return;
         }
-        self.dispatch(Command::History(self.profile.clone(), id));
+        // A foreground read is self-contained, so coalescing cannot discard
+        // the session-list hydration required by a quick profile/tab switch.
+        self.dispatch(Command::History(profile, id));
+    }
+
+    fn foreground_slot(&self) -> Option<(String, String)> {
+        self.selected_session
+            .as_ref()
+            .map(|id| (self.profile.clone(), id.clone()))
+            .or_else(|| {
+                self.pending_bot
+                    .as_ref()
+                    .and_then(|pending| pending.replace.clone())
+            })
+    }
+
+    fn place_tab(
+        &mut self,
+        tab: ConversationTab,
+        new_tab: bool,
+        replace: Option<(String, String)>,
+    ) {
+        if let Some(existing) = self
+            .tabs
+            .iter_mut()
+            .find(|t| t.profile == tab.profile && (t.session == tab.session || (t.bot && tab.bot)))
+        {
+            *existing = tab;
+        } else if !new_tab
+            && let Some(index) = replace.and_then(|(profile, id)| {
+                self.tabs
+                    .iter()
+                    .position(|t| t.profile == profile && t.session == id)
+            })
+        {
+            self.tabs[index] = tab;
+        } else {
+            self.tabs.push(tab);
+        }
+    }
+
+    pub fn activate_tab(&mut self, index: usize) {
+        if let Some(tab) = self.tabs.get(index).cloned() {
+            if tab.bot {
+                self.open_bot_with_intent(tab.profile, true);
+            } else {
+                self.open_conversation(tab.profile, tab.session, tab.title, false, true);
+            }
+        }
+    }
+
+    pub fn close_tab(&mut self, index: usize) {
+        if index >= self.tabs.len() {
+            return;
+        }
+        let tab = self.tabs.remove(index);
+        let pending_anchor = self
+            .pending_bot
+            .as_ref()
+            .and_then(|p| p.replace.as_ref())
+            .is_some_and(|(profile, id)| profile == &tab.profile && id == &tab.session);
+        if pending_anchor
+            || (self.profile == tab.profile && self.selected_session.as_ref() == Some(&tab.session))
+        {
+            self.pending_bot = None;
+            self.selected_session = None;
+            self.messages.clear();
+            self.history_loading = false;
+            self.intent += 1;
+            if !self.tabs.is_empty() {
+                self.activate_tab(index.min(self.tabs.len() - 1));
+            }
+        }
+    }
+
+    pub fn active_tab(&self) -> Option<&ConversationTab> {
+        self.tabs.iter().find(|t| {
+            t.profile == self.profile && self.selected_session.as_ref() == Some(&t.session)
+        })
+    }
+
+    pub fn bot_is_active(&self, name: &str) -> bool {
+        self.active_tab()
+            .is_some_and(|t| t.bot && t.profile == name)
+            || self.pending_bot.as_ref().is_some_and(|p| p.profile == name)
+            || (self.bot_empty && self.profile == name)
+    }
+
+    pub fn set_simple_mode(&mut self, simple: bool) {
+        if simple == self.simple_mode {
+            return;
+        }
+        if simple {
+            self.advanced_tools_open = self.inspector.is_open();
+        }
+        self.simple_mode = simple;
+        self.inspector.set_open(!simple && self.advanced_tools_open);
     }
     fn dispatch(&mut self, command: Command) {
         self.intent += 1;
@@ -273,10 +539,29 @@ impl Viewer {
                 profile,
                 sessions,
             }) => {
+                let reopen_bot = self
+                    .pending_bot
+                    .take()
+                    .filter(|p| p.profile == profile)
+                    .or_else(|| {
+                        self.active_tab()
+                            .filter(|t| t.bot && t.profile == profile)
+                            .map(|t| BotOpen {
+                                profile: t.profile.clone(),
+                                new_tab: true,
+                                replace: None,
+                            })
+                    });
                 let retained = if self.profile == profile {
-                    self.selected_session
-                        .clone()
-                        .filter(|id| sessions.iter().any(|s| &s.id == id))
+                    self.selected_session.clone().filter(|id| {
+                        sessions.iter().any(|s| &s.id == id)
+                            || profiles.iter().any(|p| {
+                                p.name == profile
+                                    && p.canonical_session
+                                        .as_ref()
+                                        .is_some_and(|c| &c.id == id || &c.resolved_id == id)
+                            })
+                    })
                 } else {
                     None
                 };
@@ -287,23 +572,92 @@ impl Viewer {
                 self.messages.clear();
                 self.error = None;
                 self.status = "Connected · Read only".into();
-                if let Some(id) = retained {
-                    self.open_session(id);
+                if let Some(bot) = reopen_bot {
+                    let profile = bot.profile.clone();
+                    self.pending_bot = Some(bot);
+                    self.history_loading = true;
+                    self.dispatch(Command::Bot(profile));
+                } else if let Some(id) = retained {
+                    if let Some(tab) = self
+                        .tabs
+                        .iter()
+                        .find(|t| t.profile == self.profile && t.session == id)
+                        .cloned()
+                    {
+                        if tab.bot {
+                            self.open_bot(tab.profile);
+                        } else {
+                            self.open_conversation(
+                                tab.profile,
+                                tab.session,
+                                tab.title,
+                                false,
+                                true,
+                            );
+                        }
+                    } else {
+                        self.open_session(id);
+                    }
                 }
             }
             Ok(Update::Sessions { profile, sessions }) if profile == self.profile => {
                 self.sessions = sessions;
                 self.status = "Connected · Read only".into();
             }
-            Ok(Update::History {
+            Ok(Update::Opened {
                 profile,
                 session,
+                sessions,
                 history,
             }) if profile == self.profile && self.selected_session.as_ref() == Some(&session) => {
+                self.sessions = sessions;
                 self.messages = history.messages;
                 self.history_truncated = history.has_more;
                 self.status = "Connected · Read only".into();
                 self.error = None;
+            }
+            Ok(Update::BotOpened {
+                profiles,
+                profile,
+                sessions,
+                chat,
+            }) if profile == self.profile
+                && self
+                    .pending_bot
+                    .as_ref()
+                    .is_some_and(|p| p.profile == profile) =>
+            {
+                let intent = self.pending_bot.take().expect("matching bot open");
+                self.profiles = profiles;
+                self.sessions = sessions;
+                self.status = "Connected · Read only".into();
+                self.error = None;
+                if let Some((id, history)) = chat {
+                    let title = self
+                        .profiles
+                        .iter()
+                        .find(|p| p.name == profile)
+                        .map(|p| p.label.clone())
+                        .unwrap_or_else(|| profile.clone());
+                    self.place_tab(
+                        ConversationTab {
+                            profile,
+                            session: id.clone(),
+                            title,
+                            bot: true,
+                        },
+                        intent.new_tab,
+                        intent.replace,
+                    );
+                    self.selected_session = Some(id);
+                    self.messages = history.messages;
+                    self.history_truncated = history.has_more;
+                    self.bot_empty = false;
+                } else {
+                    self.selected_session = None;
+                    self.messages.clear();
+                    self.bot_empty = true;
+                }
             }
             Ok(_) => {}
         }
@@ -320,6 +674,17 @@ impl Viewer {
             .map(|p| Profile {
                 name: p["name"].as_str().unwrap_or("default").into(),
                 label: p["label"].as_str().unwrap_or("Default").into(),
+                description: p["description"].as_str().unwrap_or("").into(),
+                canonical_session: p["canonical_session"]["id"].as_str().map(|id| {
+                    CanonicalSession {
+                        id: id.into(),
+                        resolved_id: id.into(),
+                        preview: p["canonical_session"]["preview"]
+                            .as_str()
+                            .unwrap_or("")
+                            .into(),
+                    }
+                }),
             })
             .collect();
         self.profile = v["profile"].as_str().unwrap_or("default").into();
@@ -343,6 +708,40 @@ impl Viewer {
                 content: p["content"].as_str().unwrap_or("").into(),
             })
             .collect();
+        if let Some(id) = &self.selected_session {
+            self.fixture_history
+                .insert((self.profile.clone(), id.clone()), self.messages.clone());
+            let title = self
+                .sessions
+                .iter()
+                .find(|s| &s.id == id)
+                .map(|s| s.title.clone())
+                .unwrap_or_else(|| "Conversation".into());
+            self.tabs.push(ConversationTab {
+                profile: self.profile.clone(),
+                session: id.clone(),
+                title,
+                bot: false,
+            });
+        }
+        for history in v["histories"].as_array().into_iter().flatten() {
+            if let (Some(profile), Some(id), Some(messages)) = (
+                history["profile"].as_str(),
+                history["session"].as_str(),
+                history["messages"].as_array(),
+            ) {
+                self.fixture_history.insert(
+                    (profile.into(), id.into()),
+                    messages
+                        .iter()
+                        .map(|m| HistoryMessage {
+                            role: m["role"].as_str().unwrap_or("assistant").into(),
+                            content: m["content"].as_str().unwrap_or("").into(),
+                        })
+                        .collect(),
+                );
+            }
+        }
     }
 }
 
@@ -398,12 +797,36 @@ pub fn setup(s: &mut Viewer, waker: Waker) {
                     .as_mut()
                     .ok_or_else(|| "Connect an agent first".into())
                     .and_then(|g| {
-                        g.history(&profile, &session)
-                            .map(|history| Update::History {
-                                profile,
-                                session,
-                                history,
+                        let sessions = g.sessions(&profile)?;
+                        let history = g.history(&profile, &session)?;
+                        Ok(Update::Opened {
+                            profile,
+                            session,
+                            sessions,
+                            history,
+                        })
+                    }),
+                Command::Bot(profile) => gateway
+                    .as_mut()
+                    .ok_or_else(|| "Connect an agent first".into())
+                    .and_then(|g| {
+                        let profiles = g.profiles()?;
+                        let sessions = g.sessions(&profile)?;
+                        let chat = profiles
+                            .iter()
+                            .find(|p| p.name == profile)
+                            .and_then(|p| p.canonical_session.as_ref())
+                            .map(|chat| {
+                                g.history(&profile, &chat.id)
+                                    .map(|history| (chat.id.clone(), history))
                             })
+                            .transpose()?;
+                        Ok(Update::BotOpened {
+                            profiles,
+                            profile,
+                            sessions,
+                            chat,
+                        })
                     }),
             };
             if replies
@@ -467,6 +890,15 @@ pub fn reader_scene(s: &mut Viewer) {
         serde_json::from_str(include_str!("../fixtures/reader.json"))
             .expect("committed reader fixture"),
     );
+}
+pub fn bots_scene(s: &mut Viewer) {
+    reader_scene(s);
+    s.sidebar_tab = SidebarTab::Bots;
+    s.open_target(ConversationTarget::Bot("default".into()), true);
+}
+pub fn layout_scene(s: &mut Viewer) {
+    reader_scene(s);
+    s.inspector.set_open(true);
 }
 pub fn empty_scene(s: &mut Viewer) {
     reader_scene(s);

@@ -3,16 +3,17 @@
 //! Hermes owns the pane composition, connection/profile identities and actions.
 
 mod palette;
+mod shell;
 mod transcript;
 
 use std::borrow::Cow;
 use std::rc::Rc;
 
 use rune::{Cx, El, ScrollSpec, col, el, icon, row, text};
-use rune_kit::{Button, ButtonVariant, Kit, Sidebar, SidebarRow, SplitView, TextInput, Toolbar};
+use rune_kit::{Button, ButtonVariant, Kit, Sidebar, SidebarRow, TextInput};
 use rune_theme_opencode::icons as ic;
 
-use crate::app::Viewer;
+use crate::app::{ConversationTarget, SidebarTab, Viewer};
 use palette::{Pal, pal};
 
 pub fn app(s: &Viewer, cx: &mut Cx<Viewer>) -> El {
@@ -20,59 +21,18 @@ pub fn app(s: &Viewer, cx: &mut Cx<Viewer>) -> El {
     let dark = s.theme.unwrap_or(system_dark);
     let k = rune_theme_opencode::kit(dark);
     let p = pal(dark);
-    let title = if s.connection_form {
-        "Connect to Hermes".to_owned()
-    } else {
-        s.selected_session
-            .as_deref()
-            .and_then(|id| s.sessions.iter().find(|session| session.id == id))
-            .map(|session| session.title.clone())
-            .unwrap_or_else(|| "Conversations".to_owned())
-    };
-    let toolbar = Toolbar::new()
-        .leading(
-            text(title)
-                .font(k.ty.ui_medium)
-                .color(k.c.text_base)
-                .truncate(),
-        )
-        .trailing(
-            Button::new(if dark { "Light" } else { "Dark" })
-                .variant(ButtonVariant::GhostMuted)
-                .on_press(move |s: &mut Viewer| s.toggle_theme(system_dark))
-                .build(k)
-                .key("theme-toggle")
-                .label(if dark {
-                    "Switch to light theme"
-                } else {
-                    "Switch to dark theme"
-                }),
-        )
-        .trailing(
-            Button::new("Reconnect")
-                .disabled(s.loading)
-                .variant(ButtonVariant::Ghost)
-                .on_press(|s: &mut Viewer| s.reconnect())
-                .build(k)
-                .key("reconnect"),
-        );
     let main = if s.connection_form {
         connection_form(s, k)
     } else {
         workspace(s, p, k)
     };
-    let split = SplitView::new(main)
-        .sidebar(
-            &s.sidebar,
-            |s: &mut Viewer| &mut s.sidebar,
-            sidebar(s, p, k),
-        )
-        .sidebar_header(text("Hermes").font(k.ty.ui_medium).color(k.c.text_base))
-        .inspector(&s.inspector, |s: &mut Viewer| &mut s.inspector, tooling(k))
-        .titlebar_inset(cx.titlebar_inset())
-        .reduced_motion(cx.is_reduced_motion())
-        .toolbar(toolbar)
-        .build(k);
+    let sidebar = match s.sidebar_tab {
+        SidebarTab::Sessions => sessions_sidebar(s, p, k),
+        SidebarTab::Bots => shell::bots_sidebar(s, p, k),
+    };
+    let split = shell::layout(s, cx, main, sidebar, tooling(k), k);
+    let mut layer = Vec::new();
+    let menu = shell::context_menu(s, k, &mut layer);
     col()
         .key("hermes-window")
         .role("window")
@@ -81,7 +41,9 @@ pub fn app(s: &Viewer, cx: &mut Cx<Viewer>) -> El {
         .h_full()
         .fill(k.c.bg_deep)
         .child(split.grow(1.0).min_h(0.0))
-        .child(status_bar(s, k))
+        .children((!s.simple_mode).then(|| shell::status_bar(s, k)))
+        .child(menu)
+        .children(layer)
 }
 
 fn filtered_indices(s: &Viewer) -> Vec<usize> {
@@ -110,62 +72,12 @@ fn session_date(value: &str) -> Option<&str> {
         .then_some(date)
 }
 
-fn sidebar(s: &Viewer, p: &Pal, k: &Kit) -> El {
-    let mut profiles = col()
-        .key("profiles")
-        .role("list")
-        .label("Agent profiles")
-        .focus_group()
-        .focus_follows()
-        .gap(2.0)
-        .w_full();
-    for profile in &s.profiles {
-        let name = profile.name.clone();
-        let label = if profile.label.is_empty() {
-            &profile.name
-        } else {
-            &profile.label
-        };
-        profiles = profiles.child(
-            SidebarRow::new(label)
-                .avatar(transcript::avatar(p, label))
-                .selected(s.profile == profile.name)
-                .on_select(move |s: &mut Viewer, _| s.select_profile(name.clone()))
-                .build(k)
-                .key(format!("profile-{}", profile.name)),
-        );
-    }
-    let profiles = if s.profiles.is_empty() {
-        col().w_full().px(8.0).py(8.0).child(
-            text(if s.loading {
-                "Loading profiles…"
-            } else {
-                "No profiles loaded"
-            })
-            .font(k.ty.text_xsmall)
-            .color(k.c.text_faint),
-        )
-    } else {
-        profiles.max_h(160.0).scroll(ScrollSpec {
-            stick_bottom: false,
-        })
-    };
+fn sessions_sidebar(s: &Viewer, p: &Pal, k: &Kit) -> El {
     let filtered_count = filtered_indices(s).len();
     let header = col()
         .w_full()
         .gap(12.0)
-        .child(
-            col()
-                .w_full()
-                .gap(4.0)
-                .child(
-                    text("Profiles")
-                        .font(k.ty.small_medium)
-                        .color(k.c.text_muted)
-                        .px(8.0),
-                )
-                .child(profiles),
-        )
+        .child(shell::sessions_nav(s, k))
         .child(
             TextInput::new(&s.search)
                 .placeholder("Search recent sessions")
@@ -182,7 +94,7 @@ fn sidebar(s: &Viewer, p: &Pal, k: &Kit) -> El {
                 .px(8.0)
                 .center_y()
                 .child(
-                    text("Recent sessions")
+                    text("Sessions")
                         .font(k.ty.small_medium)
                         .color(k.c.text_muted),
                 )
@@ -212,6 +124,11 @@ fn sidebar(s: &Viewer, p: &Pal, k: &Kit) -> El {
             move |s, index| {
                 let session = &s.sessions[rows[index]];
                 let id = session.id.clone();
+                let menu_target = ConversationTarget::Session {
+                    profile: s.profile.clone(),
+                    id: id.clone(),
+                    title: session.title.clone(),
+                };
                 let dark = s.theme.unwrap_or(inherited_dark);
                 let k = rune_theme_opencode::kit(dark);
                 let mut row = SidebarRow::new(&session.title).height(36.0);
@@ -221,6 +138,9 @@ fn sidebar(s: &Viewer, p: &Pal, k: &Kit) -> El {
                 row.selected(s.selected_session.as_deref() == Some(session.id.as_str()))
                     .on_select(move |s: &mut Viewer, _| s.open_session(id.clone()))
                     .build(k)
+                    .on_secondary_press(move |s: &mut Viewer, point, _| {
+                        s.row_menu = Some((menu_target.clone(), point))
+                    })
                     .key(format!("session-{}", session.id))
             },
         );
@@ -239,20 +159,17 @@ fn sidebar(s: &Viewer, p: &Pal, k: &Kit) -> El {
             .py(12.0),
         );
     }
-    sidebar
-        .footer(
-            Button::new("Change connection")
-                .icon(&ic::GLOBE)
-                .variant(ButtonVariant::GhostMuted)
-                .on_press(|s: &mut Viewer| s.change_connection())
-                .build(k)
-                .key("change-connection"),
-        )
-        .build(k)
+    sidebar.footer(shell::profile_rail(s, p, k)).build(k)
 }
 
 fn workspace(s: &Viewer, p: &Pal, k: &Kit) -> El {
-    let mut body = col().key("workspace").w_full().h_full().min_h(0.0);
+    let mut body = col()
+        .key("workspace")
+        .instant_changes()
+        .w_full()
+        .h_full()
+        .min_h(0.0)
+        .child(shell::conversation_context(s, p, k));
     if let Some(error) = &s.error {
         body = body.child(
             col()
@@ -274,6 +191,13 @@ fn workspace(s: &Viewer, p: &Pal, k: &Kit) -> El {
                         .color(k.c.text_muted)
                         .selectable(true)
                         .wrap(),
+                )
+                .child(
+                    Button::new("Retry connection")
+                        .variant(ButtonVariant::Ghost)
+                        .on_press(|s: &mut Viewer| s.reconnect())
+                        .build(k)
+                        .key("retry-connection"),
                 ),
         );
     }
@@ -287,6 +211,12 @@ fn workspace(s: &Viewer, p: &Pal, k: &Kit) -> El {
         empty(
             "Conversation unavailable",
             "Reconnect or change the connection to continue.",
+            k,
+        )
+    } else if s.bot_empty {
+        empty(
+            "No Bot Chat yet",
+            "This bot has no existing Bot Chat. Starting its conversation will be available in the sending increment.",
             k,
         )
     } else if s.selected_session.is_none() {
@@ -429,37 +359,6 @@ fn tool_panel(key: &str, label: &str, detail: &str, glyph: &'static rune::Icon, 
                         .color(k.c.text_faint)
                         .wrap(),
                 ),
-        )
-}
-
-fn status_bar(s: &Viewer, k: &Kit) -> El {
-    row()
-        .key("status-bar")
-        .role("status")
-        .label(&s.status)
-        .h(28.0)
-        .w_full()
-        .px(14.0)
-        .gap(10.0)
-        .center_y()
-        .fill(k.c.bg_deep)
-        .child(
-            text(&s.status)
-                .font(k.ty.small)
-                .color(k.c.text_muted)
-                .truncate(),
-        )
-        .child(el().grow(1.0))
-        .child(
-            text(&s.endpoint_label)
-                .font(k.ty.small)
-                .color(k.c.text_faint)
-                .truncate(),
-        )
-        .child(
-            text("Read only")
-                .font(k.ty.small_medium)
-                .color(k.c.text_muted),
         )
 }
 

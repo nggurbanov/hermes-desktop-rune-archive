@@ -1,6 +1,127 @@
 use super::*;
 
 #[test]
+fn bot_rows_open_the_canonical_chat_and_keep_owned_conversations_as_tabs() {
+    let mut s = Viewer::empty();
+    reader_scene(&mut s);
+    s.open_target(ConversationTarget::Bot("default".into()), true);
+    assert_eq!(s.selected_session.as_deref(), Some("bot-hermes"));
+    assert!(s.active_tab().unwrap().bot);
+    assert_eq!(s.tabs.len(), 2);
+    assert!(s.messages[0].content.contains("Гермес"));
+    s.open_target(ConversationTarget::Bot("research".into()), true);
+    assert_eq!(s.profile, "research");
+    assert_eq!(s.selected_session.as_deref(), Some("bot-research"));
+    assert!(s.messages[1].content.contains("Research"));
+    assert_eq!(s.tabs.len(), 3);
+    s.activate_tab(1);
+    assert_eq!(s.profile, "default");
+    assert_eq!(s.selected_session.as_deref(), Some("bot-hermes"));
+    assert!(s.messages[0].content.contains("Гермес"));
+    s.close_tab(1);
+    assert_eq!(s.profile, "research");
+    assert_eq!(s.selected_session.as_deref(), Some("bot-research"));
+}
+
+#[test]
+fn a_bot_without_a_registry_chat_never_adopts_a_recent_session() {
+    let mut s = Viewer::empty();
+    reader_scene(&mut s);
+    s.open_bot("new-bot".into());
+    assert!(s.bot_empty);
+    assert_eq!(s.profile, "new-bot");
+    assert!(s.selected_session.is_none());
+    assert!(s.messages.is_empty());
+    assert!(!s.history_loading);
+    assert_eq!(s.tabs.len(), 1);
+}
+
+#[test]
+fn plain_navigation_replaces_the_foreground_tab_and_explicit_new_tab_preserves_it() {
+    let mut s = Viewer::empty();
+    reader_scene(&mut s);
+    s.open_bot("default".into());
+    assert_eq!(s.tabs.len(), 1);
+    assert_eq!(s.tabs[0].session, "bot-hermes");
+    s.open_bot("research".into());
+    assert_eq!(s.tabs.len(), 1);
+    assert_eq!(s.tabs[0].profile, "research");
+    s.open_target(ConversationTarget::Bot("default".into()), true);
+    assert_eq!(s.tabs.len(), 2);
+    s.open_bot("research".into());
+    assert_eq!(s.tabs.len(), 2);
+    assert_eq!(s.profile, "research");
+}
+
+#[test]
+fn every_live_bot_open_refreshes_registry_and_hydrates_its_scoped_sessions() {
+    let mut s = Viewer::empty();
+    reader_scene(&mut s);
+    s.fixture = false;
+    let (send, requests) = mpsc::channel();
+    let (_, receive) = mpsc::channel();
+    s.network = Some(Network { send, receive });
+    for id in ["server-root", "fresh-server-root"] {
+        s.open_bot("default".into());
+        assert!(matches!(requests.recv().unwrap().command, Command::Bot(p) if p == "default"));
+        if id == "server-root" {
+            // Several clicks before the first reply still spend the original
+            // foreground slot, rather than leaving it behind as an extra tab.
+            s.open_bot("research".into());
+            assert!(matches!(requests.recv().unwrap().command, Command::Bot(p) if p == "research"));
+            s.open_bot("default".into());
+            assert!(matches!(requests.recv().unwrap().command, Command::Bot(p) if p == "default"));
+        }
+        let mut profiles = s.profiles.clone();
+        profiles[0].canonical_session = Some(CanonicalSession {
+            id: id.into(),
+            resolved_id: format!("{id}-tip"),
+            preview: String::new(),
+        });
+        s.apply(Reply {
+            intent: s.intent,
+            result: Ok(Update::BotOpened {
+                profiles,
+                profile: "default".into(),
+                sessions: vec![Session {
+                    id: "ordinary".into(),
+                    title: "Visible session".into(),
+                    updated: String::new(),
+                }],
+                chat: Some((
+                    id.into(),
+                    History {
+                        messages: vec![HistoryMessage {
+                            role: "assistant".into(),
+                            content: id.into(),
+                        }],
+                        has_more: false,
+                    },
+                )),
+            }),
+        });
+        assert_eq!(s.selected_session.as_deref(), Some(id));
+        assert_eq!(s.messages[0].content, id);
+        assert_eq!(s.sessions.len(), 1);
+        assert_eq!(s.tabs.len(), 1);
+    }
+}
+
+#[test]
+fn simple_mode_rests_tooling_without_losing_tabs_or_advanced_visibility_choice() {
+    let mut s = Viewer::empty();
+    reader_scene(&mut s);
+    s.inspector.set_open(false);
+    s.set_simple_mode(true);
+    assert!(!s.inspector.is_open());
+    assert_eq!(s.selected_session.as_deref(), Some("sample-week"));
+    s.inspector.set_open(true);
+    s.set_simple_mode(false);
+    assert!(!s.inspector.is_open());
+    assert_eq!(s.tabs.len(), 1);
+}
+
+#[test]
 fn stale_history_cannot_replace_a_different_profile_or_session() {
     let mut s = Viewer::empty();
     s.intent = 4;
@@ -8,7 +129,8 @@ fn stale_history_cannot_replace_a_different_profile_or_session() {
     s.selected_session = Some("new".into());
     s.apply(Reply {
         intent: 3,
-        result: Ok(Update::History {
+        result: Ok(Update::Opened {
+            sessions: vec![],
             profile: "default".into(),
             session: "old".into(),
             history: History {
@@ -23,7 +145,8 @@ fn stale_history_cannot_replace_a_different_profile_or_session() {
     assert!(s.messages.is_empty());
     s.apply(Reply {
         intent: 4,
-        result: Ok(Update::History {
+        result: Ok(Update::Opened {
+            sessions: vec![],
             profile: "default".into(),
             session: "new".into(),
             history: History {
@@ -137,6 +260,8 @@ fn reconnect_profile_fallback_does_not_adopt_an_old_session_id() {
             profiles: vec![Profile {
                 name: "default".into(),
                 label: "Default".into(),
+                description: String::new(),
+                canonical_session: None,
             }],
             profile: "default".into(),
             sessions: vec![Session {

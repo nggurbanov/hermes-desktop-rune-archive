@@ -37,6 +37,9 @@ removed by d1634c68a4eeb1ca0d1787df266547a1ab3eccea. Its transport is not Hermes
 The user rejected the current dense, cluttered, IDE-like visual styling. Do not
 reproduce that styling or make a generic decorative AI dashboard. Do not change
 Hermes's panel topology merely because OpenCode uses a different sidebar.
+An OpenCode application shell with Hermes transport is explicitly rejected.
+Reference reuse applies to controls, themes and suitable rendering functions;
+Hermes owns the product navigation, bot identity model and opening semantics.
 
 ## Design Principles
 
