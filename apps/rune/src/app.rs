@@ -44,6 +44,7 @@ struct BotOpen {
 
 pub struct Viewer {
     pub composer: Composer,
+    pub voice: crate::voice::Voice,
     connection_epoch: u64,
     pub profiles: Vec<Profile>,
     pub sessions: Vec<Session>,
@@ -125,6 +126,7 @@ impl Viewer {
     fn empty() -> Self {
         Self {
             composer: Composer::new(),
+            voice: crate::voice::Voice::default(),
             connection_epoch: 0,
             profiles: vec![],
             sessions: vec![],
@@ -289,6 +291,9 @@ impl Viewer {
         let scope = self.composer_scope();
         self.row_menu = None;
         self.composer.toggle_popup(scope.clone(), popup);
+        if popup == Popup::VoiceEngine && self.composer.popup.is_some() {
+            self.reload_voice_status();
+        }
         if popup == Popup::Models
             && self.composer.popup.is_some()
             && self.composer.catalog_for(&scope).is_none()
@@ -299,12 +304,29 @@ impl Viewer {
     }
 
     pub fn reload_models(&mut self) {
+        if self.fixture {
+            return;
+        }
         if let Some(connection) = self.connection.clone() {
             self.composer
                 .request_catalog(connection, self.composer_scope());
         } else if !self.fixture {
             self.composer.catalog_error = Some("Connect an agent to browse its models".into());
         }
+    }
+    pub fn reload_voice_status(&mut self) {
+        if self.fixture {
+            return;
+        }
+        if let Some(connection) = self.connection.clone() {
+            let scope = self.composer_scope();
+            if !self.voice.loading(&scope) {
+                self.voice.request(connection, &scope);
+            }
+        }
+    }
+    pub fn can_refresh_voice_status(&self) -> bool {
+        self.connection.is_some() && !self.fixture
     }
     pub fn select_profile(&mut self, profile: String) {
         self.profile_picker = false;
@@ -790,6 +812,7 @@ impl Viewer {
 
 pub fn setup(s: &mut Viewer, waker: Waker) {
     s.composer.init_network(waker.clone());
+    s.voice.init(waker.clone());
     if s.fixture {
         return;
     }
@@ -890,7 +913,9 @@ pub fn setup(s: &mut Viewer, waker: Waker) {
 
 pub fn poll(s: &mut Viewer, _: f64, tx: &mut Tx) -> bool {
     let scope = s.composer_scope();
-    let composer_changed = s.composer.poll(&scope) | s.composer.dismiss_if_scope_changed(&scope);
+    let composer_changed = s.composer.poll(&scope)
+        | s.composer.dismiss_if_scope_changed(&scope)
+        | s.voice.poll(&scope);
     let mut replies = vec![];
     if let Some(network) = &s.network {
         while let Ok(reply) = network.receive.try_recv() {
@@ -984,6 +1009,18 @@ pub fn permissions_scene(s: &mut Viewer) {
 pub fn voice_scene(s: &mut Viewer) {
     composer_scene(s);
     s.composer.voice_expanded = true;
+}
+pub fn voice_chat_scene(s: &mut Viewer) {
+    reader_scene(s);
+    s.voice.fixture(
+        &s.composer_scope(),
+        &serde_json::json!({"ok":true,"mode":"chained","available":true}),
+    );
+    s.composer.voice_expanded = true;
+}
+pub fn voice_engine_scene(s: &mut Viewer) {
+    voice_chat_scene(s);
+    s.open_composer(Popup::VoiceEngine);
 }
 pub fn empty_scene(s: &mut Viewer) {
     reader_scene(s);

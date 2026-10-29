@@ -16,7 +16,9 @@ use url::Url;
 mod catalog;
 #[cfg(target_os = "linux")]
 mod local;
+mod voice;
 pub use catalog::{CatalogModel, ModelCapabilities, ModelCatalog, ModelProvider};
+pub use voice::{VoiceEngine, VoiceStatus};
 #[cfg(test)]
 mod tests;
 

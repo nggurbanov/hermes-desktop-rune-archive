@@ -2,6 +2,7 @@ mod app;
 mod composer;
 mod gateway;
 mod view;
+mod voice;
 
 use app::Viewer;
 use rune::{AppSpec, Chrome};
@@ -29,6 +30,8 @@ fn main() {
             ("reasoning", app::reasoning_scene),
             ("permissions", app::permissions_scene),
             ("voice", app::voice_scene),
+            ("voice-chat", app::voice_chat_scene),
+            ("voice-engine", app::voice_engine_scene),
             ("empty", app::empty_scene),
             ("error", app::error_scene),
         ],
@@ -90,6 +93,12 @@ fn check_connection() -> Result<(), String> {
     } else {
         None
     };
+    let voice_status = if args.iter().any(|arg| arg == "--check-voice") {
+        let profile = value("--profile").unwrap_or_else(|| "default".into());
+        gateway.voice_status(&profile)?
+    } else {
+        None
+    };
     let profiles = gateway.profiles()?;
     let profile = value("--profile").unwrap_or_else(|| "default".into());
     let sessions = gateway.sessions(&profile)?;
@@ -114,7 +123,9 @@ fn check_connection() -> Result<(), String> {
         "earlier_history": history.as_ref().map(|h| h.has_more), "read_only": true,
         "canonical_bot_history": check_bot,
         "model_providers": model_counts.map(|counts| counts.0),
-        "models": model_counts.map(|counts| counts.1) })
+        "models": model_counts.map(|counts| counts.1),
+        "voice_chat_engine": voice_status.as_ref().map(|s| s.engine.label()),
+        "gpt_live_available": voice_status.as_ref().map(|s| s.live_available) })
     );
     Ok(())
 }

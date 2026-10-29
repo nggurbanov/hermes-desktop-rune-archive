@@ -44,7 +44,15 @@ pub fn app(s: &Viewer, cx: &mut Cx<Viewer>) -> El {
         .child(split.grow(1.0).min_h(0.0))
         .children((!s.simple_mode).then(|| shell::status_bar(s, k)))
         .child(menu)
-        .children(layer)
+        .child(
+            el().key("overlay-layer")
+                .role("none")
+                .absolute(0.0, 0.0)
+                .w_full()
+                .h_full()
+                .instant_changes()
+                .children(layer),
+        )
 }
 
 fn filtered_indices(s: &Viewer) -> Vec<usize> {

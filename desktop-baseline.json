@@ -55,10 +55,10 @@
     "verifiedAt": "2026-10-29",
     "frameworkRevision": "bfb8facae2e4665e5e6d17afe85561884a7fd402",
     "opencodeReferenceRevision": "3f70cd6b675c89a8a7b64fc09b1bf2b455e0ad1a",
-    "scope": "Partial read-only Hermes shell plus the user-selected T3 Code composer/model picker in native Rune. External agent model catalog; in-memory scoped drafts, favorites and local attachment staging. OpenCode supplies components and themes; sending, applied launch settings and native audio remain pending.",
+    "scope": "Partial read-only Hermes shell plus the user-selected T3 Code composer/model picker in native Rune. External agent model catalog; in-memory scoped drafts, favorites and local attachment staging. OpenCode supplies components and themes; sending, applied launch settings and native audio remain pending. Separate empty-composer waveform and voice-engine chevron read the owning agent status; voice mode changes and audio execution are disabled.",
     "verified": [
       "Linux native build and formatting",
-      "34 Rust transport/controller/composer tests",
+      "39 Rust transport/controller/composer/voice tests",
       "10 native scene/interaction checks",
       "Actual retained Hermes renderer compared with native Rune; all screenshots synthetic",
       "Light/dark, 1024x768 and 1440x900 native renders",
@@ -68,7 +68,9 @@
       "Actual Linux X11 window: immediate catalog search, keyboard model selection and minimum-window resize",
       "Synthetic native composer/model-picker renders in both OpenCode appearances; model/attachment/voice surfaces contain no private user data",
       "Independent catalog worker; stale-owner fencing, same-owner REST fallback and fresh secondary-profile native catalog tests",
-      "12 native composer scenarios: field, autofocus/filter/provider/favorites, physical Enter and shortcuts, staged settings, voice/Escape, scripted file choice and short dark window"
+      "17 native composer scenarios: field, conditional voice primary, read-only/unknown engine menu, autofocus/filter/provider/favorites, physical Enter and shortcuts, staged settings, voice/Escape, scripted file choice and short windows",
+      "Read-only Chikibryak voice status: chained selected and GPT-Live available; no microphone, call, transcription or configuration write",
+      "Regression contract: synthetic scenes with a preconfigured live route cannot request voice/model reads"
     ],
     "pending": [
       "Send, stream, stop, durable admission/replay and approval/clarify",
@@ -82,6 +84,8 @@
     ],
     "parityInventory": "apps/rune/docs/shell-parity.md",
     "correction": "6001795 proved native transport but its UI was rejected as an OpenCode shell; no full Hermes parity claim.",
-    "screenshotInventory": "apps/rune/docs/screenshot-parity.md"
+    "screenshotInventory": "apps/rune/docs/screenshot-parity.md",
+    "voiceInventory": "apps/rune/docs/voice-parity.md",
+    "lowerLeftInventory": "apps/rune/docs/lower-left-parity.md"
   }
 }

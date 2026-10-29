@@ -113,6 +113,13 @@ favorites are keyed by connection/provider/model. Both are currently in-memory
 and are lost when the application exits. Selecting a model or settings stages
 the next draft; it does not change past history or confirm the active runtime.
 
+The later voice references add the empty-composer waveform action and separate
+engine chevron, now transferred with profile-owned read-only status. Voice mode
+is backend configuration rather than a draft setting. See
+[voice-parity.md](voice-parity.md) for the complete audio/engine contract, and
+[lower-left-parity.md](lower-left-parity.md) for the source-backed inventory of
+every lower-left rail, nested menu, Command Center and statusbar feature.
+
 | Surface | Implemented and verified subset | Remaining semantic boundary |
 | --- | --- | --- |
 | Multiline editor and attachments | T3-directed multiline editor, bottom controls, removable local-file tiles and supported image previews. The attachment action invokes Rune's native file chooser, retains the draft's owner and reports file errors. | Draft persistence, full IME acceptance and actual attachment preparation/upload remain pending. The scripted chooser result was tested; the real desktop portal was not exercised. A local preview is not an uploaded attachment. |

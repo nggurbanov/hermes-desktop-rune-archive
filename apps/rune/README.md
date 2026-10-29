@@ -75,9 +75,21 @@ working portal, a labelled error is shown. The mic reveals Hermes's separate
 spoken-replies and wake-word controls on hover or keyboard activation; native
 audio capture/playback, actual dictation, wake listening and send remain disabled.
 
+An empty draft shows a separate waveform action for voice conversation and an
+engine chevron; text or attachments replace it with Send. The chevron reads
+the owning agent's `voice-live/status` in a separate worker. Confirmed chained
+versus GPT-Live selection and live availability are shown read-only. No engine
+configuration is written and neither action opens the microphone. See
+[voice-parity.md](docs/voice-parity.md) for the full audio/state contract and
+[lower-left-parity.md](docs/lower-left-parity.md) for every rail, nested menu,
+Command Center and statusbar feature still to transfer. Their functions remain
+in scope; the original control density is not a design requirement.
+
 Use `--scene composer`, `models`, `reasoning`, `permissions` or `voice` to inspect
 synthetic native states. `--check-connection ... --check-models` probes a fresh
 production model-catalog connection and prints only provider/model counts.
+Use `--scene voice-chat` or `voice-engine` for the empty-composer voice states;
+`--check-connection ... --check-voice` reads engine/availability without audio.
 
 ## Reproducible visual checks
 
@@ -134,4 +146,6 @@ short dark window. See [the port plan](docs/port-plan.md) and
 ![Native draft composer, dark appearance](docs/images/composer-dark.png)
 ![Native model picker, synthetic catalog](docs/images/model-picker-light.png)
 ![Native voice controls revealed, audio unavailable](docs/images/voice-dark.png)
+![Native empty composer with separate dictation and voice chat](docs/images/voice-chat-light.png)
+![Native read-only voice engine menu](docs/images/voice-engine-dark.png)
 ![Native Bots, dark appearance](docs/images/bots-dark.png)

@@ -66,6 +66,7 @@ pub enum Popup {
     Models,
     Reasoning,
     Permissions,
+    VoiceEngine,
 }
 
 pub struct Composer {

@@ -1,6 +1,6 @@
 //! T3 Code composer composition requested by the user; Rune/OpenCode controls
 //! and palette, Hermes model capabilities and voice semantics.
-use std::time::Duration;
+mod voice;
 
 use rune::{
     Align, Color, El, FileDialogOptions, Icon, Key, KeyEvent, ScrollSpec, Side, TextStyle, Tx,
@@ -24,21 +24,6 @@ static CLIP: Icon = Icon {
     name: "attachment",
     view: 24.0,
     body: r#"<path d="m21 11-9 9a6 6 0 0 1-8-8L14 2a4 4 0 0 1 6 6L10 18a2 2 0 0 1-3-3l9-9" stroke="currentColor" stroke-width="1.7" fill="none" stroke-linecap="round"/>"#,
-};
-static MIC: Icon = Icon {
-    name: "microphone",
-    view: 24.0,
-    body: r#"<rect x="9" y="2" width="6" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>"#,
-};
-static SPEAK: Icon = Icon {
-    name: "spoken-replies-off",
-    view: 24.0,
-    body: r#"<path d="m11 5-6 4H2v6h3l6 4V5ZM16 9l5 6m0-6-5 6M3 2l19 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>"#,
-};
-static WAKE: Icon = Icon {
-    name: "wake-word-off",
-    view: 24.0,
-    body: r#"<path d="M6 8a7 7 0 0 1 13 3c0 5-5 4-5 8a3 3 0 0 1-6 0M10 9a3 3 0 0 1 6 2M3 3l18 18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>"#,
 };
 static LOCK: Icon = Icon {
     name: "approval-mode",
@@ -229,18 +214,12 @@ pub fn dock(s: &Viewer, p: &Pal, k: &Kit, layer: &mut Vec<El>) -> El {
                 .build(k)
                 .key("attach-file"),
         )
-        .child(voice_fan(s, k))
-        .child(
-            IconButton::new(&ic::ARROW_UP)
-                .variant(IconButtonVariant::Submit)
-                .control_size(ControlSize::Large)
-                .disabled(true)
-                .label("Send, not yet available")
-                .help("Sending and streaming are the next migration increment")
-                .build(k)
-                .key("composer-send")
-                .radius(16.0),
-        );
+        .child(voice::fan(s, k))
+        .child(voice::primary(
+            s,
+            k,
+            !draft.text.text.trim().is_empty() || !draft.attachments.is_empty(),
+        ));
     content = content.child(auto_grow(field, 2, 7).max_h(168.0)).child(
         row()
             .key("composer-toolbar")
@@ -281,58 +260,6 @@ pub fn dock(s: &Viewer, p: &Pal, k: &Kit, layer: &mut Vec<El>) -> El {
         )
 }
 
-fn voice_fan(s: &Viewer, k: &Kit) -> El {
-    let mut fan = el()
-        .key("voice-fan")
-        .role("button")
-        .label("Voice controls")
-        .size(28.0, 28.0)
-        .focusable(true)
-        .focus_ring(2.0, 1.0, k.c.border_focus)
-        .on_press(|s: &mut Viewer| s.composer.voice_expanded = true)
-        .on_hover_change(|s: &mut Viewer, inside, _| s.composer.voice_expanded = inside)
-        .hover_delays(Duration::ZERO, Duration::from_millis(150))
-        .child(
-            IconButton::new(&MIC)
-                .variant(IconButtonVariant::GhostMuted)
-                .disabled(true)
-                .label("Voice dictation, not yet available")
-                .help("Dictation needs native audio capture")
-                .build(k)
-                .key("voice-dictation"),
-        );
-    if s.composer.voice_expanded {
-        for (key, label, glyph, y) in [
-            (
-                "voice-speak",
-                "Speak replies, not yet available",
-                &SPEAK,
-                -36.0,
-            ),
-            (
-                "voice-wake",
-                "Wake word hey hermes, not yet available",
-                &WAKE,
-                -72.0,
-            ),
-        ] {
-            fan = fan.child(
-                IconButton::new(glyph)
-                    .variant(IconButtonVariant::Neutral)
-                    .disabled(true)
-                    .label(label)
-                    .help("Native audio integration is a later increment")
-                    .build(k)
-                    .key(key)
-                    .size(28.0, 28.0)
-                    .radius(14.0)
-                    .absolute(0.0, y),
-            );
-        }
-    }
-    fan
-}
-
 fn overlays(s: &Viewer, k: &Kit, layer: &mut Vec<El>) {
     let scope = s.composer_scope();
     if s.composer.popup_scope.as_ref() != Some(&scope) {
@@ -357,15 +284,23 @@ fn overlays(s: &Viewer, k: &Kit, layer: &mut Vec<El>) {
             "permissions-trigger",
             permissions_menu(s, &scope, k),
         ),
+        Popup::VoiceEngine => (
+            "voice-engine-menu",
+            "voice-engine-trigger",
+            voice::engine_menu(s, &scope, k),
+        ),
     };
-    layer.push(scrim(format!("{key}-scrim"), |s: &mut Viewer| {
-        s.composer.close()
-    }));
+    layer.push(
+        scrim(format!("{key}-scrim"), |s: &mut Viewer| s.composer.close())
+            .transition(rune::Transition::identity()),
+    );
     layer.push(
         k.elevate(
             surface
                 .key(key)
                 .role("dialog")
+                .transition(rune::Transition::identity())
+                .focusable(true)
                 .focus_group()
                 .on_key(on_key)
                 .modal(true, |s: &mut Viewer| s.composer.close())

@@ -274,3 +274,26 @@ fn reconnect_profile_fallback_does_not_adopt_an_old_session_id() {
     assert!(s.selected_session.is_none());
     assert!(s.messages.is_empty());
 }
+
+#[test]
+fn synthetic_scenes_never_read_live_voice_or_models_from_preconfigured_routes() {
+    let mut s = Viewer::empty();
+    s.connection = Some(Connection::Url {
+        endpoint: "http://127.0.0.1:1".into(),
+        token: None,
+    });
+    reader_scene(&mut s);
+    let scope = s.composer_scope();
+    s.open_composer(Popup::VoiceEngine);
+    assert!(!s.voice.loading(&scope));
+    assert!(
+        s.voice.error(&scope).is_none(),
+        "fixture voice must not attempt a worker request"
+    );
+    s.reload_models();
+    assert!(!s.composer.catalog_loading);
+    assert!(
+        s.composer.catalog_error.is_none(),
+        "fixture models must not attempt a worker request"
+    );
+}

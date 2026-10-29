@@ -82,6 +82,11 @@ connection/profile/conversation and are not the model used by existing history.
 Hermes approval modes remain Manual/Smart/Off. Its voice fan retains separate
 dictation, spoken-reply and wake-word controls; unsupported audio is unavailable,
 not a fake enabled toggle. Native file picks stage draft attachments only.
+An empty idle composer has a separate waveform voice-conversation action and
+engine chevron; payload replaces it with Send. Engine selection is profile-owned
+backend configuration, never a fake draft preference. The lower-left rail and
+statusbar must retain their full nested feature set with comfortable grouping;
+the reference's tiny, tightly packed controls are not mandatory styling.
 
 Production native Rune code, real external connection, profiles, session list,
 and readable history. Loading, empty history, network/auth error, profile switch
