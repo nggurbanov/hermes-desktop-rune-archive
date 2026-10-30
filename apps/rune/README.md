@@ -99,6 +99,7 @@ xvfb-run -a node apps/rune/scripts/check-preview.mjs
 xvfb-run -a node apps/rune/scripts/check-audio-preview.mjs
 node apps/rune/scripts/check-audio-navigation.mjs
 node apps/rune/scripts/check-peer-windows.mjs --binary /absolute/hermes-rune --out /absolute/evidence
+node apps/rune/scripts/check-startup-routing.mjs --binary /absolute/hermes-rune --out /absolute/startup-evidence
 python3 apps/rune/vendor/rune/scripts/verify-hermes-source.py
 xvfb-run -a node apps/rune/scripts/check-subagent-windows.mjs
 xvfb-run -a node apps/rune/scripts/check-plugin-host.mjs --canonical

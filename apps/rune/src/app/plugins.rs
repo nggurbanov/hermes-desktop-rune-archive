@@ -479,7 +479,7 @@ impl Viewer {
                     return Err("The agent switch was declined".into());
                 }
                 if action.kind == "new-chat" {
-                    self.new_draft();
+                    self.new_draft_on_current_source();
                 }
             }
             let scope = self.composer_scope();

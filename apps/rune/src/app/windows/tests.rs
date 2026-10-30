@@ -182,3 +182,46 @@ fn a_pending_window_write_respects_backoff_and_close_forces_the_latest_presentat
     assert_eq!(row.presentation.as_ref().unwrap().theme, Some(false));
     assert!(s.window.lease.as_ref().unwrap().pending().is_none());
 }
+
+#[test]
+fn an_explicit_launch_profile_keeps_the_restored_source_without_its_old_conversation() {
+    let mut s = Viewer::empty();
+    s.profile = "research".into();
+    s.exact_connection_profile = true;
+    let source = SourceDescriptor::from_connection(&connection("launch")).unwrap();
+    s.restore_launch_route(WindowRoute {
+        source: Some(source.clone()),
+        profile: "archive".into(),
+        session: Some("old-archive-chat".into()),
+        canonical_bot: false,
+    });
+    let target = s.window.boot_target.as_ref().unwrap();
+    assert_eq!(s.profile, "research");
+    assert_eq!(target.profile, "research");
+    assert_eq!(target.source, Some(source));
+    assert!(target.session.is_none());
+    assert!(!target.canonical_bot);
+    s.window.boot_target = None;
+    s.connection = Some(connection("explicit"));
+    s.restore_launch_route(WindowRoute {
+        profile: "archive".into(),
+        ..Default::default()
+    });
+    assert!(s.window.boot_target.is_none());
+    assert_eq!(s.profile, "research");
+}
+#[test]
+fn an_ordinary_restored_launch_keeps_its_exact_profile_and_conversation() {
+    let mut s = Viewer::empty();
+    s.restore_launch_route(WindowRoute {
+        profile: "archive".into(),
+        session: Some("stored".into()),
+        ..Default::default()
+    });
+    assert_eq!(s.profile, "archive");
+    assert!(s.exact_connection_profile);
+    assert_eq!(
+        s.window.boot_target.as_ref().unwrap().session.as_deref(),
+        Some("stored")
+    );
+}

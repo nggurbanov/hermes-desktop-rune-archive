@@ -36,10 +36,6 @@ impl Core {
             .as_deref()
             .map(|id| self.secrets.get(id))
             .transpose()?;
-        let promote = self
-            .active
-            .as_ref()
-            .is_some_and(|active| active.id == row.id && active.revision == row.revision);
         let mut tunnel = None;
         let inner = match &row.destination {
             Destination::Local { home } => Connection::Local { home: home.clone() },
@@ -49,14 +45,12 @@ impl Core {
             },
             Destination::Ssh(original) => {
                 let mut spec = original.clone();
-                if !promote {
-                    spec.local_port = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
-                        .map_err(|_| "A local port for the retained SSH source is unavailable")?
-                        .local_addr()
-                        .map_err(|_| "The retained SSH port is unavailable")?
-                        .port();
-                    tunnel = Some(self.tunnels.open(&spec)?);
-                }
+                spec.local_port = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+                    .map_err(|_| "A local port for the retained SSH source is unavailable")?
+                    .local_addr()
+                    .map_err(|_| "The retained SSH port is unavailable")?
+                    .port();
+                tunnel = Some(self.tunnels.open(&spec)?);
                 Connection::Url {
                     endpoint: format!("http://127.0.0.1:{}{}", spec.local_port, spec.path),
                     token,
@@ -77,9 +71,6 @@ impl Core {
                 return Err(error);
             }
         };
-        if promote {
-            tunnel = self.active.take().map(|active| active.tunnel);
-        }
         let foreground = self.active_owner.as_ref() == Some(&key);
         let (entry, lease) = Entry::new(row.id, row.revision, connection, profiles, tunnel);
         if foreground {
@@ -110,21 +101,21 @@ impl Core {
         {
             return Err("The saved source changed while activating it".into());
         }
+        let target_profile = self.target_profile(lease.source_id(), target_profile)?;
         let profiles = self.probe.check(lease.connection())?;
-        if target_profile.is_some_and(|profile| !profiles.iter().any(|row| row.name == profile)) {
+        if !profiles.iter().any(|row| row.name == target_profile) {
             return Err("The selected source no longer serves that agent profile".into());
         }
         next.selected = Some(lease.source_id().into());
+        Self::remember_activation(&mut next, lease.source_id(), &target_profile);
         self.metadata.save(&next)?;
         self.registry = next;
         self.active_owner = Some((lease.source_id().into(), lease.revision().into()));
         self.primary_lease = Some(lease.clone());
-        if let Some(mut active) = self.active.take() {
-            active.tunnel.close();
-        }
         Ok(Outcome::Ready(
-            self.registry.clone(),
+            self.visible_registry(),
             lease.connection().clone(),
+            Some(lease),
         ))
     }
     pub(super) fn poll_leases(&mut self) {

@@ -2,6 +2,7 @@
 mod file_lock;
 pub(crate) use file_lock::FileLock;
 pub mod profiles;
+pub mod startup;
 pub(crate) mod store;
 pub mod windows;
 use serde::{Deserialize, Serialize};

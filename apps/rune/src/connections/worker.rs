@@ -25,6 +25,79 @@ pub(super) fn run(
                     &waker,
                 );
             }
+            Ok(Work::Observe) => {
+                let result = match &mut state {
+                    Ok(core) => core.observe_registry(),
+                    Err(error) => Err(error.clone()),
+                };
+                reply_ui(
+                    &mut ui,
+                    Reply {
+                        id: 0,
+                        result: Ok(Outcome::Observed(result)),
+                    },
+                    &waker,
+                );
+            }
+            Ok(Work::Maintain(command)) => {
+                let result = match &mut state {
+                    Ok(core) => core.execute(command).map(|_| core.visible_registry()),
+                    Err(error) => Err(error.clone()),
+                };
+                reply_ui(
+                    &mut ui,
+                    Reply {
+                        id: 0,
+                        result: Ok(Outcome::Maintained(result)),
+                    },
+                    &waker,
+                );
+            }
+            Ok(Work::ReleaseForeground { id, revision }) => {
+                if let Ok(core) = &mut state {
+                    core.release_foreground(&id, &revision);
+                }
+            }
+            Ok(Work::CommitRoute {
+                lease,
+                profile,
+                intent,
+                alive,
+                reply,
+            }) => {
+                let result = match &mut state {
+                    Ok(core) => core
+                        .execute(Command::CommitRoute(lease, profile.clone(), alive))
+                        .and_then(|outcome| match outcome {
+                            Outcome::Ready(_, connection, _) => Ok(connection),
+                            _ => Err("The route activation returned an invalid result".into()),
+                        }),
+                    Err(error) => Err(error.clone()),
+                };
+                let success = result.is_ok();
+                if reply
+                    .send(RouteCommit {
+                        intent,
+                        profile,
+                        result,
+                    })
+                    .is_ok()
+                {
+                    waker();
+                }
+                if success {
+                    if let Ok(core) = &state {
+                        reply_ui(
+                            &mut ui,
+                            Reply {
+                                id: 0,
+                                result: Ok(Outcome::Maintained(Ok(core.visible_registry()))),
+                            },
+                            &waker,
+                        );
+                    }
+                }
+            }
             Ok(Work::Resolve {
                 id,
                 expected_revision,

@@ -108,6 +108,7 @@ impl Viewer {
         }
     }
     pub fn profile_renamed(&mut self, from: &str, to: &str) {
+        self.remember_default_profile_change(from, Some(to));
         for tab in &mut self.tabs {
             if tab.profile == from {
                 tab.profile = to.into();
@@ -129,6 +130,7 @@ impl Viewer {
             .remove(&(self.connection_epoch, to.into()));
     }
     pub fn profile_deleted(&mut self, name: &str) {
+        self.remember_default_profile_change(name, None);
         self.tabs.retain(|t| t.profile != name);
         self.delete_editor_profile(name);
         if let Some(connection) = self.connection.clone() {

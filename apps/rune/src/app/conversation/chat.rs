@@ -593,7 +593,7 @@ impl Viewer {
         }
         match name.as_str() {
             "new" | "reset" if arg.is_empty() => {
-                self.new_draft();
+                self.new_draft_on_current_source();
                 return;
             }
             "model" if arg.is_empty() => {

@@ -325,11 +325,17 @@ pub fn profile_rail(s: &Viewer, p: &Pal, k: &Kit) -> El {
     let mut profiles = row().grow(1.0).min_w(0.0).gap(4.0).center_y().scroll_x();
     for profile in s.profiles.iter() {
         let name = profile.name.clone();
+        let menu_name = name.clone();
+        let hint = if s.is_default_profile(&name) {
+            format!("{} · Default profile", profile.label)
+        } else {
+            profile.label.clone()
+        };
         profiles = profiles.child(
             el().key(format!("profile-{}", name))
                 .role("button")
                 .label(format!("Sessions in {}", profile.label))
-                .help(&profile.label)
+                .help(hint)
                 .focusable(true)
                 .focus_ring(2.0, 1.0, k.c.border_focus)
                 .size(28.0, 28.0)
@@ -342,6 +348,9 @@ pub fn profile_rail(s: &Viewer, p: &Pal, k: &Kit) -> El {
                 })
                 .hover(k.c.hover)
                 .on_press(move |s: &mut Viewer| s.select_profile(name.clone()))
+                .on_secondary_press(move |s: &mut Viewer, point, _| {
+                    s.open_profile_route_menu(menu_name.clone(), point)
+                })
                 .child(identity_avatar(s, p, &profile.name, &profile.label, 16.)),
         );
     }
@@ -374,12 +383,16 @@ pub fn profile_rail(s: &Viewer, p: &Pal, k: &Kit) -> El {
             });
         for profile in &s.profiles {
             let name = profile.name.clone();
+            let menu_name = name.clone();
             picker = picker.child(
                 Button::new(&profile.label)
                     .variant(ButtonVariant::GhostMuted)
                     .on_press(move |s: &mut Viewer| s.select_profile(name.clone()))
                     .build(k)
-                    .key(format!("pick-profile-{}", profile.name)),
+                    .key(format!("pick-profile-{}", profile.name))
+                    .on_secondary_press(move |s: &mut Viewer, point, _| {
+                        s.open_profile_route_menu(menu_name.clone(), point)
+                    }),
             );
         }
         footer = footer.child(picker);

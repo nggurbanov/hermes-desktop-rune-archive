@@ -57,6 +57,7 @@ debug = false
 cc = "=1.10.0"
 
 [patch.crates-io]
+winit = { path = "vendor/winit-0.30.13" }
 symphonia-core = { path = "vendor/symphonia-core" }
 symphonia-metadata = { path = "vendor/symphonia-metadata" }
 symphonia-format-riff = { path = "vendor/symphonia-format-riff" }

@@ -25,6 +25,7 @@ impl Viewer {
         self.page_network.invalidate_prefix(prefix);
     }
     pub fn open_route(&mut self, route: Route) {
+        self.cancel_device_route();
         if self.connections.busy && route != Route::Chat {
             self.client_error = Some("Wait for the connection attempt to finish".into());
             return;

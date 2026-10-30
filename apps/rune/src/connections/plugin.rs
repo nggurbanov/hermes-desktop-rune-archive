@@ -89,6 +89,8 @@ mod tests {
                 url: "https://synthetic.invalid/private-endpoint".into(),
             },
             credential: Some("synthetic-secret-slot".into()),
+            other: Default::default(),
+            destination_other: Default::default(),
         };
         let connection = Connection::Saved {
             id,
@@ -122,6 +124,8 @@ mod tests {
                 url: "https://synthetic.invalid".into(),
             },
             credential: None,
+            other: Default::default(),
+            destination_other: Default::default(),
         };
         let connection = Connection::Saved {
             id: "synthetic".into(),

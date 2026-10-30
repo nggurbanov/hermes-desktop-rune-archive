@@ -1,6 +1,7 @@
 use super::*;
 mod leases;
 mod registry;
+mod startup;
 use std::{fs, net::TcpListener};
 
 pub(super) trait Secrets: Send {
@@ -55,28 +56,14 @@ impl Metadata for JsonMetadata {
                 if bytes.len() > 1024 * 1024 {
                     return Err("The saved connection registry is too large".into());
                 }
-                let registry: Registry = serde_json::from_slice(&bytes)
-                    .map_err(|_| "The saved connection registry is invalid")?;
-                if registry.version != 1 {
-                    return Err("This saved connection registry requires a newer Hermes app".into());
-                }
-                for row in &registry.rows {
-                    uuid::Uuid::parse_str(&row.id)
-                        .map_err(|_| "A saved connection has an invalid identity")?;
-                    uuid::Uuid::parse_str(&row.revision)
-                        .map_err(|_| "A saved connection has an invalid owner revision")?;
-                }
-                Ok(registry)
+                registry::decode(&bytes)
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Registry::empty()),
             Err(_) => Err("The saved connection registry could not be read".into()),
         }
     }
     fn save(&mut self, registry: &Registry) -> Result<(), String> {
-        crate::client::private_write(
-            &self.0,
-            &serde_json::to_vec_pretty(registry).map_err(|_| "Connections could not be encoded")?,
-        )
+        crate::client::private_write(&self.0, &registry::encode(registry)?)
     }
 }
 struct GatewayProbe;
@@ -86,19 +73,12 @@ impl Probe for GatewayProbe {
         gateway.profiles()
     }
 }
-struct Active {
-    id: String,
-    revision: String,
-    port: u16,
-    tunnel: Box<dyn Tunnel>,
-}
 pub(super) struct Core {
     registry: Registry,
     secrets: Box<dyn Secrets>,
     metadata: Box<dyn Metadata>,
     probe: Box<dyn Probe>,
     tunnels: Box<dyn Tunnels>,
-    active: Option<Active>,
     active_owner: Option<(String, String)>,
     outbox: std::collections::VecDeque<(String, String, String)>,
     leases: std::collections::BTreeMap<(String, String), super::leases::Entry>,
@@ -112,7 +92,6 @@ impl Core {
             metadata: Box::new(JsonMetadata(path)),
             probe: Box::new(GatewayProbe),
             tunnels: Box::new(super::ssh::OpenSsh),
-            active: None,
             active_owner: None,
             outbox: std::collections::VecDeque::new(),
             leases: std::collections::BTreeMap::new(),
@@ -120,6 +99,11 @@ impl Core {
         }
     }
     pub fn execute(&mut self, command: Command) -> Result<Outcome, String> {
+        if let Command::CommitRoute(_, _, alive) = &command {
+            if !alive.load(std::sync::atomic::Ordering::Acquire) {
+                return Err("The route activation was superseded".into());
+            }
+        }
         let _transaction = if matches!(&command, Command::ConnectOnce(_)) {
             None
         } else {
@@ -134,7 +118,7 @@ impl Core {
         match command {
             Command::Load => {
                 let warning = self.cleanup();
-                Ok(Outcome::Registry(self.registry.clone(), warning))
+                Ok(Outcome::Registry(self.visible_registry(), warning))
             }
             Command::Save(input) => self.save(input),
             Command::ConnectOnce(input) => self.connect_once(input),
@@ -143,6 +127,22 @@ impl Core {
             Command::CommitLease(lease, profile) => {
                 self.commit_lease_for(lease, profile.as_deref())
             }
+            Command::CommitRoute(lease, profile, alive) => {
+                self.commit_route(lease, &profile, &alive)
+            }
+            Command::MakePrimary(id) => self.make_primary(&id),
+            Command::LaunchMode(mode) => self.launch_mode(mode),
+            Command::RememberProfile {
+                id,
+                revision,
+                profile,
+            } => self.remember_profile(&id, &revision, &profile),
+            Command::ProfileChanged {
+                id,
+                revision,
+                old,
+                new,
+            } => self.profile_changed(&id, &revision, &old, new.as_deref()),
         }
     }
     fn save(&mut self, mut input: Input) -> Result<Outcome, String> {
@@ -228,18 +228,40 @@ impl Core {
             .filter(|_| !principal_changed)
             .map(|r| r.revision.clone())
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let destination_other = previous
+            .as_ref()
+            .filter(|row| {
+                std::mem::discriminant(&row.destination)
+                    == std::mem::discriminant(&input.destination)
+            })
+            .map(|row| row.destination_other.clone())
+            .unwrap_or_default();
         let saved = Saved {
             id: id.clone(),
             revision,
             label: input.label,
             destination: input.destination,
             credential,
+            other: previous
+                .as_ref()
+                .map(|row| row.other.clone())
+                .unwrap_or_default(),
+            destination_other,
         };
+        let was_empty = self.registry.rows.is_empty();
         let mut next = self.registry.clone();
         if let Some(index) = next.rows.iter().position(|r| r.id == id) {
             next.rows[index] = saved;
         } else {
             next.rows.push(saved);
+        }
+        if next.primary.is_none() {
+            next.primary = next
+                .primary_fallback()
+                .or_else(|| was_empty.then(|| id.clone()));
+        }
+        if next.last_used.is_none() {
+            next.last_used = next.primary.clone();
         }
         if old_credential != next.rows.iter().find(|r| r.id == id).unwrap().credential {
             if let Some(old) = old_credential {
@@ -259,7 +281,7 @@ impl Core {
         self.registry = next;
         let warning = self.cleanup();
         Ok(Outcome::Registry(
-            self.registry.clone(),
+            self.visible_registry(),
             Some(
                 warning
                     .unwrap_or_else(|| "Connection saved. Connect to use this destination".into()),
@@ -312,27 +334,31 @@ impl Core {
             Destination::Ssh(_) => unreachable!(),
         };
         self.probe.check(&connection)?;
-        if let Some(mut active) = self.active.take() {
-            active.tunnel.close();
-        }
         self.active_owner = None;
         self.primary_lease = None;
         let mut visible = self.registry.clone();
         visible.selected = None;
-        Ok(Outcome::Ready(visible, connection))
+        Ok(Outcome::Ready(visible, connection, None))
     }
     fn forget(&mut self, id: &str) -> Result<Outcome, String> {
-        let row = self
-            .registry
-            .rows
-            .iter()
-            .find(|r| r.id == id)
-            .ok_or("The connection no longer exists")?;
+        let Some(row) = self.registry.rows.iter().find(|r| r.id == id) else {
+            return Ok(Outcome::Forgot(self.visible_registry(), id.into(), None));
+        };
+        if row.kind() == Kind::Local {
+            return Err("The local connection cannot be removed".into());
+        }
         let mut next = self.registry.clone();
         if let Some(credential) = &row.credential {
             next.cleanup.push(credential.clone());
         }
         next.rows.retain(|r| r.id != id);
+        next.last_profiles.remove(id);
+        if next.primary.as_deref() == Some(id) {
+            next.primary = next.primary_fallback();
+        }
+        if next.last_used.as_deref() == Some(id) {
+            next.last_used = next.primary.clone();
+        }
         if next.selected.as_deref() == Some(id) {
             next.selected = None;
         }
@@ -350,18 +376,15 @@ impl Core {
                 "The saved connection was forgotten".into(),
             ));
         }
-        if self.active.as_ref().is_some_and(|a| a.id == id) {
-            if let Some(mut active) = self.active.take() {
-                active.tunnel.close();
-            }
-        }
         let warning = self.cleanup();
-        Ok(Outcome::Registry(
-            self.registry.clone(),
+        Ok(Outcome::Forgot(
+            self.visible_registry(),
+            id.into(),
             Some(warning.unwrap_or_else(|| "Saved connection forgotten".into())),
         ))
     }
     fn select(&mut self, id: &str) -> Result<Outcome, String> {
+        self.poll_leases();
         let row = self
             .registry
             .rows
@@ -377,6 +400,7 @@ impl Core {
         {
             return self.commit_lease(lease);
         }
+        let profile = self.target_profile(id, None)?;
         let token = row
             .credential
             .as_deref()
@@ -390,31 +414,10 @@ impl Core {
                 token,
             },
             Destination::Ssh(spec) => {
-                if self
-                    .active
-                    .as_ref()
-                    .is_some_and(|a| a.id == id && a.revision == row.revision)
-                {
-                    Connection::Url {
-                        endpoint: format!("http://127.0.0.1:{}{}", spec.local_port, spec.path),
-                        token,
-                    }
-                } else {
-                    if self
-                        .active
-                        .as_ref()
-                        .is_some_and(|a| a.port == spec.local_port)
-                    {
-                        let mut old = self.active.take().unwrap();
-                        old.tunnel.close();
-                        self.outbox.push_back((old.id,old.revision,"The previous SSH forward was closed to switch its saved port to the selected destination".into()));
-                        self.active_owner = None;
-                    }
-                    candidate = Some(self.tunnels.open(spec)?);
-                    Connection::Url {
-                        endpoint: format!("http://127.0.0.1:{}{}", spec.local_port, spec.path),
-                        token,
-                    }
+                candidate = Some(self.tunnels.open(spec)?);
+                Connection::Url {
+                    endpoint: format!("http://127.0.0.1:{}{}", spec.local_port, spec.path),
+                    token,
                 }
             }
         };
@@ -423,14 +426,24 @@ impl Core {
             revision: row.revision.clone(),
             inner: Box::new(inner),
         };
-        if let Err(error) = self.probe.check(&connection) {
-            if let Some(mut tunnel) = candidate {
-                tunnel.close();
+        let profiles = match self.probe.check(&connection) {
+            Ok(profiles) if profiles.iter().any(|row| row.name == profile) => profiles,
+            Ok(_) => {
+                if let Some(mut tunnel) = candidate {
+                    tunnel.close();
+                }
+                return Err("The selected source no longer serves that agent profile".into());
             }
-            return Err(error);
-        }
+            Err(error) => {
+                if let Some(mut tunnel) = candidate {
+                    tunnel.close();
+                }
+                return Err(error);
+            }
+        };
         let mut next = self.registry.clone();
         next.selected = Some(id.into());
+        Self::remember_activation(&mut next, id, &profile);
         if let Err(error) = self.metadata.save(&next) {
             if let Some(mut tunnel) = candidate {
                 tunnel.close();
@@ -438,26 +451,24 @@ impl Core {
             return Err(error);
         }
         self.registry = next;
-        self.primary_lease = None;
-        self.active_owner = Some((row.id.clone(), row.revision.clone()));
-        if candidate.is_some() || !matches!(row.destination, Destination::Ssh(_)) {
-            if let Some(mut old) = self.active.take() {
-                old.tunnel.close();
-            }
-        }
-        if let Some(tunnel) = candidate {
-            let port = match row.destination {
-                Destination::Ssh(ref spec) => spec.local_port,
-                _ => 0,
-            };
-            self.active = Some(Active {
-                id: id.into(),
-                revision: row.revision,
-                port,
-                tunnel,
-            });
-        }
-        Ok(Outcome::Ready(self.registry.clone(), connection))
+        let tunnel = candidate;
+        let (entry, lease) = super::leases::Entry::new(
+            row.id.clone(),
+            row.revision.clone(),
+            connection.clone(),
+            profiles,
+            tunnel,
+        );
+        self.leases
+            .insert((row.id.clone(), row.revision.clone()), entry);
+        self.primary_lease = Some(lease.clone());
+        self.active_owner = Some((row.id, row.revision));
+        self.poll_leases();
+        Ok(Outcome::Ready(
+            self.visible_registry(),
+            connection,
+            Some(lease),
+        ))
     }
     fn cleanup(&mut self) -> Option<String> {
         let before = self.registry.cleanup.len();
@@ -474,27 +485,13 @@ impl Core {
     }
     pub fn poll_tunnel(&mut self) -> Option<(String, String, String)> {
         self.poll_leases();
-        if let Some(event) = self.outbox.pop_front() {
-            return Some(event);
-        }
-        let active = self.active.as_mut()?;
-        let error = active.tunnel.exited()?;
-        let id = active.id.clone();
-        let revision = active.revision.clone();
-        self.active.take();
-        if self.active_owner.as_ref() == Some(&(id.clone(), revision.clone())) {
-            self.active_owner = None;
-        }
-        Some((id, revision, error))
+        self.outbox.pop_front()
     }
 }
 impl Drop for Core {
     fn drop(&mut self) {
         for entry in self.leases.values_mut() {
             entry.fail("The saved connection service closed");
-        }
-        if let Some(mut active) = self.active.take() {
-            active.tunnel.close();
         }
     }
 }

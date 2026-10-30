@@ -1,10 +1,10 @@
 //! Saved agent destinations and a typed, private connection editor.
 use crate::{
     app::Viewer,
-    connections::{Action, Editor, Kind},
+    connections::{Action, Editor, Kind, LaunchMode},
 };
 use rune::{El, ScrollSpec, TextEdit, col, row, text};
-use rune_kit::{Button, ButtonVariant, Checkbox, Kit, TextInput};
+use rune_kit::{Button, ButtonVariant, Checkbox, Kit, Switch, TextInput};
 fn action(
     label: impl Into<String>,
     key: impl Into<String>,
@@ -61,6 +61,8 @@ fn input(
 pub fn panel(s: &Viewer, k: &Kit, _layer: &mut Vec<El>) -> El {
     let state = &s.connections;
     let busy = state.busy;
+    let policy_disabled =
+        busy || state.editor.is_some() || s.is_fixture() || !state.registry_loaded();
     let mut destinations = col()
         .w(300.)
         .min_h(0.)
@@ -77,6 +79,7 @@ pub fn panel(s: &Viewer, k: &Kit, _layer: &mut Vec<El>) -> El {
     for row_data in &state.rows {
         let id = row_data.id.clone();
         let detail = row_data.summary();
+        let primary = state.primary() == Some(id.as_str());
         destinations = destinations.child(
             col()
                 .w_full()
@@ -84,13 +87,14 @@ pub fn panel(s: &Viewer, k: &Kit, _layer: &mut Vec<El>) -> El {
                 .child(
                     action(
                         format!(
-                            "{}{}",
+                            "{}{}{}",
                             row_data.label,
                             if state.selected.as_deref() == Some(&id) {
                                 " · selected"
                             } else {
                                 ""
-                            }
+                            },
+                            if primary { " · primary" } else { "" }
                         ),
                         format!("saved-connect-{id}"),
                         Action::Select(id.clone()),
@@ -116,6 +120,13 @@ pub fn panel(s: &Viewer, k: &Kit, _layer: &mut Vec<El>) -> El {
                             format!("saved-forget-{id}"),
                             Action::AskForget(id.clone()),
                             busy,
+                            k,
+                        ))
+                        .child(action(
+                            if primary { "Primary" } else { "Make primary" },
+                            format!("saved-primary-{id}"),
+                            Action::MakePrimary(id.clone()),
+                            policy_disabled || primary,
                             k,
                         )),
                 )
@@ -143,6 +154,100 @@ pub fn panel(s: &Viewer, k: &Kit, _layer: &mut Vec<El>) -> El {
                 k,
             )),
     );
+    let last_used = state.launch_mode() == LaunchMode::LastUsed;
+    destinations = destinations.child(
+        col()
+            .w_full()
+            .pt(10.)
+            .gap(10.)
+            .child(
+                text("App startup")
+                    .font(k.ty.ui_medium)
+                    .color(k.c.text_base),
+            )
+            .child(
+                Switch::new(last_used)
+                    .label("Open last used agent")
+                    .disabled(policy_disabled)
+                    .on_toggle_tx(move |s: &mut Viewer, tx| {
+                        s.connections_action(Action::LaunchMode(if last_used {
+                            LaunchMode::Primary
+                        } else {
+                            LaunchMode::LastUsed
+                        }));
+                        tx.instant();
+                    })
+                    .build(k)
+                    .key("startup-last-used"),
+            )
+            .child(note(
+                "When off, opens the primary agent. A default profile takes priority.",
+                k,
+            )),
+    );
+    let device_default = s.default_profile_route();
+    let default_error = s.device_default_error();
+    let summary = match &device_default {
+        Some(route) => {
+            let source = match route.connection_id.as_deref() {
+                None => "Profile connection",
+                Some("local") => state
+                    .rows
+                    .iter()
+                    .find(|row| row.kind() == Kind::Local)
+                    .map(|row| row.label.as_str())
+                    .unwrap_or("This device"),
+                Some(id) => state
+                    .rows
+                    .iter()
+                    .find(|row| row.id == id)
+                    .map(|row| row.label.as_str())
+                    .unwrap_or("Saved agent unavailable"),
+            };
+            format!("{} · {source}", route.profile)
+        }
+        None if default_error.is_some() => "Default profile unavailable".into(),
+        None => "No default profile".into(),
+    };
+    let mut default = col()
+        .w_full()
+        .pt(10.)
+        .gap(8.)
+        .child(
+            text("Default profile")
+                .font(k.ty.ui_medium)
+                .color(k.c.text_base),
+        )
+        .child(note(summary, k).key("device-default-summary"))
+        .child(note("Used for app startup and new conversations.", k));
+    if device_default.is_some() {
+        default = default.child(
+            Button::new("Clear default")
+                .variant(ButtonVariant::Ghost)
+                .disabled(policy_disabled)
+                .on_press_tx(|s: &mut Viewer, tx| {
+                    s.clear_default_profile();
+                    tx.instant();
+                })
+                .build(k)
+                .key("device-default-clear"),
+        );
+    }
+    if let Some(error) = default_error {
+        default = default.child(
+            text(error)
+                .font(k.ty.small)
+                .color(k.c.danger.fg)
+                .wrap()
+                .role("alert")
+                .key("device-default-error"),
+        );
+    }
+    destinations = destinations.child(default);
+    if !state.registry_loaded() && !s.is_fixture() {
+        destinations =
+            destinations.child(note("Reload connections to change startup preferences.", k));
+    }
     if let Some(id) = &state.forget {
         let name = state
             .rows

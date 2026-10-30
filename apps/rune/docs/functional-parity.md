@@ -11,7 +11,7 @@ complete target and earlier checkpoints. **Full parity is not achieved.**
 | Conversation transport | Durable prepared input, receipts/unknown outcomes, canonical/legacy attach, streaming/replay/stop, queue/steer, confirmations, approval/clarify, earlier-history merge, frozen multimodal edit/retry/restore/branch and scoped slash completion/directives; authoritative per-field policy stamps, live/snapshot/receipt adoption and retained deferred recovery | Remaining provider sidecars and slash directives, reactions/search/minimap and rich media players; see native-chat-parity.md |
 | Composer | Updated 21:12 T3 reference: attachment at left, compact model+reasoning at right, one Reasoning/Service Tier/Permissions popover, provider search/favorites, keyboard selection and native file staging; Hermes voice controls retained; independent profile approval and confirmed conversation bypass controls; actual per-tab editor controllers, original-input file chooser/text callbacks and late policy acknowledgements | Remaining transcript/composer commands and platform accessibility acceptance |
 | Subagents | Scoped live roster and separate native Rune spectator windows with lazy attachment, shared rich transcript/media, copy/download/read-aloud actions, bounded latest-only projection, reuse/focus/theme, reconnect and detach-only close | macOS/Windows window-manager acceptance; see subagent-windows-parity.md |
-| Hermes shell | Original navigation order, Sessions/Bots, canonical Bot Chat isolation, conversation tabs, independent simple/advanced layouts, both OpenCode appearances | Full simultaneous session tiles, remaining window/default/restore behavior and narrow-window/accessibility acceptance |
+| Hermes shell | Original navigation order, Sessions/Bots, canonical Bot Chat isolation, conversation tabs, independent simple/advanced layouts, both OpenCode appearances | Full simultaneous session tiles, remaining fleet/legacy-default/restore behavior and narrow-window/accessibility acceptance |
 | Pane tree | Native split/group model, docking, stacked tabs, divider resize, collapsed rails, persistent visibility, original Default/Basic/Focus/Terminal deck/Quad presets and named user layouts | Plugin pane geometry, simultaneous tile ownership and complete external/multiple-window acceptance |
 | Sidebar | Real independent recents/messaging/cron sources, grouping, durable pin/read/archive/rename/delete, filters and paging | Whole fleet status/order/color/startup/window interactions and cross-source activity rollups |
 | Bots | Profile CRUD, SOUL, config/model guard, assets/appearance generation/upload, duplication, setup/readiness, archive import/export and desktop overlay seam | Complete rail integration; all imported theme definitions and original skins; new-bot acceptance on newer external backend |
@@ -26,14 +26,65 @@ complete target and earlier checkpoints. **Full parity is not achieved.**
 | Terminal | Native ANSI/PTY, local/SSH and durable remote transport, tabs/input/IME/resize/clipboard/selection/persistence, owner-bound process mirrors and shared event-driven background process lifecycle; controlled real PTY/remote replay tests passed | Actual remote-host acceptance, Windows shell preference/ConPTY and all native OS interaction checks; see native-terminal-parity.md |
 | Voice | Actual CPAL/Rodio, dictation/chained/wake/autoread, scoped cancellation, native Linux WebRTC/Opus/AEC3, incremental GPT-Live delegation | Actual provider integration and macOS/Windows device/permission acceptance; synthetic AEC is not a hardware measurement |
 | GUI SDK | Original React/runtime/kit, retained canonical HermesGateway, authenticated brokers, events/storage/multipart/socket/native OS dialogs, verified cross-source leases and parent routing; bundled Bots groups/Petdex native acceptance; actual native SDK notification body/button callbacks, source/window leases and native focus | Remaining pane geometry/data engines/preview contributions, fleet freshness and complete parent-window/platform acceptance |
-| Connections | Typed saved Local/Remote/SSH, private keyring references, transactional metadata, strict SSH forwarding, read-only readiness, retained source lease pool and verified cross-source GUI routing | Cloud/OAuth login, complete fleet presentation/default-startup restoration and all native OS acceptance |
-| Native windows | Complete Viewer factory, dynamic independent native hosts, claimed WindowId/root editors, captured source/profile/session/Bot Chat targets, local Close and global Quit commands; see native-full-windows-parity.md | Device defaults/fleet startup, topology restore, complete source/feature/platform acceptance, dirty global Quit and final owned-service shutdown |
+| Connections | Typed saved Local/Remote/SSH, private keyring references, transactional metadata, strict SSH forwarding, read-only readiness, retained source lease pool and verified cross-source GUI routing | Cloud/OAuth login, complete fleet presentation and legacy/default restoration and all native OS acceptance |
+| Native windows | Complete Viewer factory, dynamic independent native hosts, claimed WindowId/root editors, captured source/profile/session/Bot Chat targets, local Close and global Quit commands; see native-full-windows-parity.md | Complete legacy/fleet startup, topology restore, complete source/feature/platform acceptance, dirty global Quit and final owned-service shutdown |
+| Startup/default routes | Device-wide logical source/profile defaults, primary/last-used/confirmed-profile policy, native context actions and single-source startup controls, exact-profile activation and owner/input-fenced deferred navigation; see native-startup-route-parity.md | Complete persisted legacy/global/per-profile remote override recovery, project/tile scope and full fleet presentation; final native/platform acceptance |
 | Client state | Locked per-field device/layout/display/sidebar/profile preference patches with explicit Reset/Clear intents and failed-write retry, principal-scoped v4 per-editor multimodal drafts/favorites with locked per-entry CAS/monotonic revisions/tombstones, migrated legacy input and durable owner-slot identities, named layouts/profile overlays, workspace/statusbar/timers/resource reads and custom shortcuts | Live multiple-window observation, full geometry/placement/restore policy, skins/arbitrary fonts/global hotkeys and remaining fleet/client controls |
 | Notifications and feedback | Real Linux D-Bus delivery, device preferences, seven live source kinds including background processes and original SDK plugins, reconnect/replay/focus guards, bounded broker, owner-bound actions, native/SDK completion cue ownership and all fourteen original sounds plus None/mute/preview | Native/SDK speech-segment ownership, HUD/haptics, pure-occlusion visibility and macOS/Windows adapters; see native-notifications-parity.md, native-plugin-notifications.md and native-completion-sounds-parity.md |
 | Background processes | Per-session authenticated process list/kill, running-to-exited completion, linger/output/confirmed stop/dismiss/rewind and one-shot read-only runtime recovery; visible-running safety polling and scope retirement | Full concurrent tile/peer integration and external-host/platform acceptance; see native-background-processes-parity.md |
 | Audio-file playback | Actual native WAV/MP3/Vorbis/FLAC/AAC and Ogg Opus playback, paused metadata, seek/volume/mute/pitch-preserving 0.25–4x, authenticated agent files and credential-free external HTTP, bounded range/sequential transport, cancellation generations and exact original saving; pinned decoder metadata/allocation patches | Inline concurrent players/remount positions, multichannel/chained/container Opus, music-quality and native OS acceptance; video/PDF/HTML remain separate; see native-audio-player-parity.md |
 
 ## Evidence at this checkpoint
+
+- The eighth frozen integration passed **515 Rust tests**, zero failed, five
+  ignored. The private storage/ownership child helpers remain exercised by their
+  passing default parents; physical audio is not part of this routing check.
+  Formatting and locked offline build passed. Immutable binary SHA-256:
+  `1407f2ff28abfa14e3272235a36ede4b972beb88d83d49be21d025a2da39365a`.
+- That exact binary also passed **97 renderer/script-input scenarios**: editors
+  5, T3 composer 19, client settings 15, shell 10, feature pages 24, rich chat 13
+  and full Viewer audio navigation 11. Evidence metadata, exact commands, harness
+  hashes and logs are in `/tmp/hermes-goal-eight-regressions97/result.json`;
+  rich-chat artifacts are in `/tmp/hermes-chat-acceptance-PMV5H9`. These checks
+  are separate from ordinary window-manager and clipboard acceptance.
+- Device preferences and registry contracts exercise locked writes, unknown/future
+  preservation, retained retry, metadata-only observation, primary/last-used/profile
+  separation and cancelled route tickets. Application contracts prove outgoing
+  history/input retention on unavailable preferences, delayed newer navigation,
+  actual same-editor text changes, dirty files, profile-pinned source recovery and
+  explicit same-owner actions that cancel pending profile-window navigation.
+- That exact eighth binary passed **16 actual native startup/default scenarios**
+  with two strict private gateways, real X11/WM pointer/keyboard input, 28 PNGs
+  and normal Quit. They cover precedence, ordinary/profile-pinned window intents,
+  context actions, confirmed Bot/old-tab profile memory, newer typing and explicit
+  same-owner cancellation, real registry lock errors, missing profiles and
+  invalid/future preference preservation/repair in both themes. No live agent,
+  provider call, agent mutation or physical audio is part of this evidence.
+  `native-startup-route-acceptance.md` records exact artifacts and predecessor
+  RED evidence; these cases do not establish full fleet/project/platform parity.
+- The same eighth binary passed the complete actual native peer-window flow:
+  five distinct XIDs in one PID, four coexisting windows, independent persisted
+  inputs/streams, scoped Stop, settled Settings, captured source/profile, session
+  reuse, pinned Bot/New Session, interactive survival after primary close and
+  local Close/global Quit. The full clipboard diagnostic passed. A separate
+  two-window/three-round regression passed all six exact external GTK copies and
+  OS/runtime pointer checks with normal clicks and no wiggle. The one-file winit
+  X11 cursor-cache patch fixes the seventh checkpoint failure; its original
+  archive, 217 upstream files, patch/addition hashes and Apache-2.0 license are
+  verified offline and in Git's index. See native-peer-window-acceptance.md.
+- The rich native subagent miniwindow regression also passed on that same binary:
+  lazy read-only attach, real Copy, mislabeled SVG/image and tool output,
+  reuse/focus/theme and viewer-only detach. Its private evidence is
+  `/tmp/hermes-rune-goal-eight-subagent-native`; no microphone, physical output
+  or provider was exercised. Full fleet/project and native platform/distribution
+  gaps are mapped in `native-fleet-next-slices.md` and
+  `native-platform-next-slices.md`.
+- Durable evidence archive:
+  `/home/ubuntu/Artifacts/hermes-rune-eighth-checkpoint-2026-10-30.zip`.
+  Its manifest records the source commit, immutable binary, evidence file hashes,
+  exact final test logs and native screenshots, with separate pre-fix failures.
+
+### Seventh checkpoint
 
 - The seventh frozen integration passed **481 Rust tests**, zero failed, five
   ignored. Four private storage/ownership child helpers are exercised by their
@@ -49,7 +100,7 @@ complete target and earlier checkpoints. **Full parity is not achieved.**
   interactive peer after primary close, local Close and global Quit. See
   native-peer-window-acceptance.md for exact evidence and limits.
 - The complete-composer keyboard clipboard diagnostic returned empty text and
-  remains **unverified**. Its failure is retained explicitly, despite a separate
+  was **unverified at that checkpoint**. Its failure is retained explicitly, despite a separate
   minimal Rune/Kit copy proof passing. It is not counted as accepted behavior.
   The existing rich subagent miniwindow separately passed actual Copy, SVG/image,
   tool disclosure, reuse/focus/theme and viewer-only detach on the final binary.

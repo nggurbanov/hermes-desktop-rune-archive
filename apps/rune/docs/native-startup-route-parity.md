@@ -1,6 +1,7 @@
 # Device default and startup routing: implementation map
 
-Status: required, not implemented. The retained Electron baseline separates
+Status: implementation integrated; native acceptance is tracked separately in
+`native-startup-route-acceptance.md`. The retained Electron baseline separates
 three decisions that the native client must preserve:
 
 - Generic New Session consults the device default logical source/profile route.
@@ -8,8 +9,10 @@ three decisions that the native client must preserve:
   default. Ordinary peers inherit their opener only for bootstrap.
 - Fresh application launch has a separate primary/last-used source policy.
 
-The current ordinary-peer New Session contract proves the no-device-default
-case only. It cannot establish these missing preferences or startup behavior.
+The device store, primary/last-used registry policy and native actions now exist.
+They are distinct from full fleet presentation, legacy source override recovery,
+project/tile scopes, topology restoration and platform acceptance; those remain
+requirements rather than implied consequences of this routing implementation.
 The baseline authority is `apps/desktop/src/app/session/new-session-route.ts`,
 `src/app/chat/reuse-draft-tab.ts`, session actions, `store/connections.ts`,
 connection-registry Settings and `electron/desktop-profile.ts`.
@@ -73,3 +76,39 @@ rename/delete/forget maintenance, failed and future-schema storage, restart and
 cross-window observation. Native acceptance must exercise the actual context
 menus/startup control, condensed fleet actions and both appearances. No provider
 or production mutation is needed to prove these client routing contracts.
+
+## Implemented coordinator and remaining boundaries
+
+`client::startup` stores versioned logical defaults in device-owned `startup.json`.
+It preserves unknown fields, uses a real cross-process lock, refreshes mirrors
+without navigation and retains failed write intent for retry. The connections
+registry separately owns primary, last-used, launch mode and remembered confirmed
+profiles. A successful profile-only pick, Bot Chat or stored-tab open updates that
+source's remembered profile without changing the last-used source.
+
+The application coordinator resolves the captured saved row revision, verifies
+the exact target profile and retains its source lease before changing workspaces.
+A cancellable correlated receipt cannot automatically promote an outgoing
+foreground lease. Window/editor/scope/page/read intent and actual text/attachment
+payload fence delayed navigation. Explicit current-workspace, existing-session,
+Bot and page actions supersede pending generic navigation. Unsupported/unreadable
+default storage is an error, not an absent preference. Explicit CLI `--profile`
+keeps the recovered source while discarding its unrelated old conversation.
+
+Profile-pinned windows consult their immutable captured route before the device
+default, including when the in-memory pin must be recovered from window metadata.
+A failed credential recovery is visible and preserves the outgoing workspace.
+Generic New Session creates a fresh conversation rather than reopening canonical
+Bot Chat from the pin's original bootstrap target.
+
+Source-qualified successful profile rename/delete/Forget maintains only the
+matching logical default and remembered profile. Context actions and startup
+controls use native Rune/OpenCode components in the Hermes positions.
+
+Full fleet grouping/activity/status/order/color, project-scoped generic New
+Session and simultaneous tile ownership remain open. Explicit legacy null-source
+routing currently requires the primary legacy connection retained in this
+process; complete persisted legacy/global/per-profile remote override recovery
+is still required. It must not be approximated by mapping null to registered
+Local or by embedding credentials in the logical preference. See the acceptance
+record for exact immutable binaries and observed cases.

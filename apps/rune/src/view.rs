@@ -19,6 +19,7 @@ pub(crate) mod operations;
 pub(crate) mod pages;
 mod palette;
 pub(crate) mod preview;
+mod profile_routes;
 pub(crate) mod review;
 mod shell;
 mod sidebar;
@@ -60,6 +61,7 @@ pub fn app(s: &Viewer, cx: &mut Cx<Viewer>) -> El {
     let menu = shell::context_menu(s, k, &mut layer);
     windows::menu(s, k, &mut layer);
     status::overlays(s, k, &mut layer);
+    profile_routes::menu(s, k, &mut layer);
     if let Some(picker) = directories::panel(s, k) {
         layer.push(picker);
     }

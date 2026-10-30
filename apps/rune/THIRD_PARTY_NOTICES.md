@@ -9,6 +9,12 @@ additions are recorded in `vendor/rune/HERMES_PATCH.json`; patch scope and nativ
 acceptance limits are documented in [`vendor/rune/HERMES.md`](vendor/rune/HERMES.md).
 The copied distribution license texts also remain in `licenses/`.
 
+The native Rune runtime uses the retained winit 0.30.13 registry snapshot under
+Apache-2.0. Its complete original `LICENSE`, crate archive, source hashes and
+narrow X11 cursor-cache patch are in [`vendor/winit-0.30.13/`](vendor/winit-0.30.13/).
+[`HERMES_PATCH.md`](vendor/winit-0.30.13/HERMES_PATCH.md) records provenance,
+reproduction and Linux native acceptance; it makes no macOS/Windows runtime claim.
+
 The desktop-plugin compatibility window embeds the existing Hermes Desktop
 React SDK, its runtime loader and its web components under the repository's
 MIT license. This preserves executable React/DOM plugins in a separate native

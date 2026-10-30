@@ -57,7 +57,12 @@ struct FakeProbe(Arc<Mutex<Vec<Connection>>>);
 impl Probe for FakeProbe {
     fn check(&mut self, connection: &Connection) -> Result<Vec<crate::gateway::Profile>, String> {
         self.0.lock().unwrap().push(connection.clone());
-        Ok(vec![])
+        Ok(vec![crate::gateway::Profile {
+            name: "default".into(),
+            label: "Default".into(),
+            description: String::new(),
+            canonical_session: None,
+        }])
     }
 }
 struct FakeTunnel {
@@ -109,7 +114,6 @@ fn core() -> (Core, FakeMetadata, FakeSecrets, FakeProbe, FakeTunnels) {
             metadata: Box::new(metadata.clone()),
             probe: Box::new(probe.clone()),
             tunnels: Box::new(tunnels.clone()),
-            active: None,
             active_owner: None,
             outbox: std::collections::VecDeque::new(),
             leases: std::collections::BTreeMap::new(),
@@ -312,7 +316,7 @@ fn connecting_once_keeps_credentials_in_memory_without_touching_metadata_or_keyc
         )))
         .unwrap();
     assert!(
-        matches!(result,Outcome::Ready(_,Connection::Url{token:Some(ref token),..})if token=="session-only-synthetic-token")
+        matches!(result,Outcome::Ready(_,Connection::Url{token:Some(ref token),..}, _)if token=="session-only-synthetic-token")
     );
     assert!(metadata.data.lock().unwrap().rows.is_empty());
     assert!(secrets.0.lock().unwrap().is_empty());
@@ -396,7 +400,7 @@ fn ssh_leases_reuse_their_own_forward_and_close_only_after_the_last_reference() 
         .resolve_lease(&second.id, Some(&second.revision))
         .unwrap();
     assert_eq!(tunnels.calls.lock().unwrap().len(), 2);
-    assert_eq!(core.active.as_ref().unwrap().id, first.id);
+    assert_eq!(core.primary_lease.as_ref().unwrap().source_id(), first.id);
     assert_eq!(
         metadata.data.lock().unwrap().selected.as_deref(),
         Some(first.id.as_str())
@@ -424,7 +428,7 @@ fn verified_lease_activation_commits_before_releasing_the_previous_foreground() 
         .unwrap();
     metadata.fail.store(true, Ordering::Release);
     assert!(core.commit_lease(lease.clone()).is_err());
-    assert_eq!(core.active.as_ref().unwrap().id, first.id);
+    assert_eq!(core.primary_lease.as_ref().unwrap().source_id(), first.id);
     assert_eq!(
         metadata.data.lock().unwrap().selected.as_deref(),
         Some(first.id.as_str())
@@ -453,7 +457,7 @@ fn retaining_the_foreground_ssh_source_preserves_its_existing_socket_endpoint_ac
     core.save(lease_ssh("First", "first.fixture.invalid"))
         .unwrap();
     let first = core.registry.rows[0].clone();
-    let Outcome::Ready(_, old_connection) = core.select(&first.id).unwrap() else {
+    let Outcome::Ready(_, old_connection, _) = core.select(&first.id).unwrap() else {
         panic!()
     };
     let lease = core
@@ -464,7 +468,7 @@ fn retaining_the_foreground_ssh_source_preserves_its_existing_socket_endpoint_ac
         crate::client::connection_key(lease.connection()).unwrap()
     );
     assert_eq!(tunnels.calls.lock().unwrap().len(), 1);
-    assert!(core.active.is_none());
+    assert!(core.primary_lease.as_ref().is_some_and(Lease::is_valid));
     core.save(lease_ssh("Second", "second.fixture.invalid"))
         .unwrap();
     let second = core.registry.rows[1].clone();
@@ -614,7 +618,6 @@ fn json_core(
         metadata: Box::new(JsonMetadata(path)),
         probe: Box::new(probe.clone()),
         tunnels: Box::new(tunnels.clone()),
-        active: None,
         active_owner: None,
         outbox: std::collections::VecDeque::new(),
         leases: std::collections::BTreeMap::new(),
@@ -1131,3 +1134,6 @@ fn saved_edits_require_the_captured_revision_and_a_current_capture_can_rotate_cr
     );
     assert_eq!(*secrets.1.lock().unwrap(), vec!["set"]);
 }
+
+#[path = "startup_tests.rs"]
+mod startup_contracts;

@@ -1341,7 +1341,7 @@ impl Viewer {
                 && self.profile == profile
                 && !self.settings.blocks_owner_change()
             {
-                self.new_draft();
+                self.new_draft_on_current_source();
             }
         }
     }

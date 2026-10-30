@@ -62,6 +62,7 @@ pub fn application(launch: Option<app::windows::Bootstrap>) -> App<Viewer> {
     let handle = application.handle();
     let ready = handle.clone();
     application
+        .on_frame_drawn(app::windows::inspect_native_frame)
         .on_close_requested(app::windows::may_close)
         .on_close(app::windows::closed)
         .on_ready(move |window| {

@@ -12,7 +12,9 @@ mod leases;
 pub use leases::{Lease, LeaseGuard, Resolver};
 pub(crate) mod plugin;
 mod ssh;
+mod startup;
 mod worker;
+pub use startup::{LaunchMode, RouteCommit, RouteTicket, StartupCandidate};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -46,6 +48,10 @@ pub struct Saved {
     pub destination: Destination,
     #[serde(default)]
     credential: Option<String>,
+    #[serde(flatten)]
+    other: std::collections::BTreeMap<String, serde_json::Value>,
+    #[serde(skip)]
+    destination_other: std::collections::BTreeMap<String, serde_json::Value>,
 }
 impl Saved {
     pub fn kind(&self) -> Kind {
@@ -78,6 +84,16 @@ struct Registry {
     version: u32,
     rows: Vec<Saved>,
     selected: Option<String>,
+    #[serde(default)]
+    primary: Option<String>,
+    #[serde(default, rename = "lastUsed", alias = "last_used")]
+    last_used: Option<String>,
+    #[serde(default, rename = "launchMode", alias = "launch_mode")]
+    launch_mode: LaunchMode,
+    #[serde(default, rename = "lastProfiles", alias = "last_profiles")]
+    last_profiles: std::collections::BTreeMap<String, String>,
+    #[serde(flatten)]
+    other: std::collections::BTreeMap<String, serde_json::Value>,
     #[serde(default)]
     cleanup: Vec<String>,
 }
@@ -223,10 +239,15 @@ pub enum Action {
     ConfirmForget,
     CancelForget,
     Reload,
+    MakePrimary(String),
+    LaunchMode(LaunchMode),
 }
 pub enum Event {
     Ready(Connection),
     Changed,
+    Forgot {
+        id: String,
+    },
     Lost {
         id: String,
         revision: String,
@@ -244,6 +265,20 @@ enum Command {
     Forget(String),
     Select(String),
     CommitLease(Lease, Option<String>),
+    CommitRoute(Lease, String, std::sync::Arc<std::sync::atomic::AtomicBool>),
+    MakePrimary(String),
+    LaunchMode(LaunchMode),
+    RememberProfile {
+        id: String,
+        revision: String,
+        profile: String,
+    },
+    ProfileChanged {
+        id: String,
+        revision: String,
+        old: String,
+        new: Option<String>,
+    },
 }
 struct Reply {
     id: u64,
@@ -251,11 +286,27 @@ struct Reply {
 }
 enum Outcome {
     Registry(Registry, Option<String>),
-    Ready(Registry, Connection),
+    Forgot(Registry, String, Option<String>),
+    Observed(Result<Registry, String>),
+    Maintained(Result<Registry, String>),
+    Ready(Registry, Connection, Option<Lease>),
     Lost(String, String, String),
 }
 enum Work {
     Ui(Request),
+    Observe,
+    Maintain(Command),
+    CommitRoute {
+        lease: Lease,
+        profile: String,
+        intent: u64,
+        alive: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        reply: Sender<RouteCommit>,
+    },
+    ReleaseForeground {
+        id: String,
+        revision: String,
+    },
     Resolve {
         id: String,
         expected_revision: Option<String>,
@@ -278,6 +329,13 @@ pub struct Connections {
     sequence: u64,
     pending: Option<u64>,
     synthetic: bool,
+    registry: Registry,
+    registry_loaded: bool,
+    registry_error: Option<String>,
+    observing: bool,
+    pending_load: bool,
+    active_source: Option<(String, String)>,
+    active_lease: Option<Lease>,
 }
 impl Default for Connections {
     fn default() -> Self {
@@ -298,6 +356,13 @@ impl Connections {
             sequence: 0,
             pending: None,
             synthetic: false,
+            registry: Registry::empty(),
+            registry_loaded: false,
+            registry_error: None,
+            observing: false,
+            pending_load: false,
+            active_source: None,
+            active_lease: None,
         }
     }
     pub fn init(&mut self, waker: Waker) {
@@ -336,6 +401,7 @@ impl Connections {
         self.dispatch(Command::Load);
     }
     fn dispatch(&mut self, command: Command) {
+        self.pending_load = matches!(&command, Command::Load);
         self.sequence += 1;
         self.pending = Some(self.sequence);
         self.busy = true;
@@ -416,6 +482,8 @@ impl Connections {
                 }
             }
             Action::Reload => self.load(),
+            Action::MakePrimary(id) => self.dispatch(Command::MakePrimary(id)),
+            Action::LaunchMode(mode) => self.dispatch(Command::LaunchMode(mode)),
         }
     }
     pub fn poll(&mut self) -> Vec<Event> {
@@ -426,7 +494,36 @@ impl Connections {
             .unwrap_or_default();
         let mut events = vec![];
         for reply in replies {
+            let reply = match reply.result {
+                Ok(Outcome::Observed(result)) => {
+                    self.observing = false;
+                    self.observe_result(result);
+                    events.push(Event::Changed);
+                    continue;
+                }
+                Ok(Outcome::Maintained(result)) => {
+                    match result {
+                        Ok(registry) => self.apply_registry(registry),
+                        Err(error) => self.error = Some(error),
+                    }
+                    events.push(Event::Changed);
+                    continue;
+                }
+                result => Reply {
+                    id: reply.id,
+                    result,
+                },
+            };
             if let Ok(Outcome::Lost(id, revision, message)) = &reply.result {
+                if self
+                    .active_source
+                    .as_ref()
+                    .is_some_and(|source| &source.0 == id && &source.1 == revision)
+                {
+                    self.active_source = None;
+                    self.active_lease = None;
+                    self.selected = None;
+                }
                 events.push(Event::Lost {
                     id: id.clone(),
                     revision: revision.clone(),
@@ -439,24 +536,39 @@ impl Connections {
             }
             self.pending = None;
             self.busy = false;
+            let loading_registry = std::mem::take(&mut self.pending_load);
             match reply.result {
-                Err(error) => self.error = Some(error),
+                Err(error) => {
+                    if loading_registry {
+                        self.registry_error = Some(error.clone());
+                    }
+                    self.error = Some(error);
+                }
                 Ok(Outcome::Registry(registry, notice)) => {
-                    self.rows = registry.rows;
-                    self.selected = registry.selected;
+                    self.apply_registry(registry);
                     self.notice = notice;
                     self.editor = None;
                     self.forget = None;
                 }
-                Ok(Outcome::Ready(registry, connection)) => {
-                    self.rows = registry.rows;
-                    self.selected = registry.selected;
+                Ok(Outcome::Ready(registry, connection, lease)) => {
+                    self.note_active_source(Some(&connection));
+                    self.active_lease = lease;
+                    self.apply_registry(registry);
                     self.editor = None;
                     self.forget = None;
                     self.error = None;
                     events.push(Event::Ready(connection));
                 }
-                Ok(Outcome::Lost(..)) => unreachable!(),
+                Ok(Outcome::Forgot(registry, id, notice)) => {
+                    self.apply_registry(registry);
+                    self.notice = notice;
+                    self.editor = None;
+                    self.forget = None;
+                    events.push(Event::Forgot { id });
+                }
+                Ok(Outcome::Observed(_) | Outcome::Maintained(_) | Outcome::Lost(..)) => {
+                    unreachable!()
+                }
             }
             events.push(Event::Changed);
         }
@@ -475,6 +587,8 @@ impl Connections {
                     home: PathBuf::from("/synthetic/hermes"),
                 },
                 credential: None,
+                other: Default::default(),
+                destination_other: Default::default(),
             },
             Saved {
                 id: "synthetic-remote".into(),
@@ -484,8 +598,13 @@ impl Connections {
                     url: "https://agent.example.invalid/".into(),
                 },
                 credential: Some("synthetic-keyring-reference".into()),
+                other: Default::default(),
+                destination_other: Default::default(),
             },
         ];
+        self.registry.rows = self.rows.clone();
+        self.registry.primary = self.rows.first().map(|row| row.id.clone());
+        self.registry_loaded = true;
         self.busy = false;
     }
 }

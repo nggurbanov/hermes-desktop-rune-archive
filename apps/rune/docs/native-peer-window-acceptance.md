@@ -54,6 +54,8 @@ and records the exact synthetic strings and its independent result. It does not
 replace the mandatory persisted ownership/input assertions. A failed clipboard
 diagnostic must not be reported as passed keyboard clipboard behavior.
 
+## Seventh checkpoint
+
 Linux native acceptance passed on 2026-10-30 against the frozen binary
 `/tmp/hermes-rune-goal-seven-acceptance/hermes-rune`, SHA-256
 `3611c41cb30d625e95adfce43ae7e6032de6ed54b4f4f65282790b30fd8d095d`.
@@ -77,3 +79,54 @@ device-default routing, live appearance observation and whole-feature parity
 remain independently tracked requirements. This acceptance creates ordinary
 complete Hermes Viewers, but does not claim the separate greater-than-64 window
 lifetime stress contract or exercise any live provider, microphone or audio output.
+
+## X11 clipboard correction after the seventh checkpoint
+
+A subsequent private full-Viewer regression established the cause of the failed
+copy diagnostic: winit's synthetic X11 focus/entry motion left its cached cursor
+position stale. A returning physical motion to that cached coordinate could be
+suppressed, leaving Rune to hit-test the next click at the wrong point. Actual
+runtime and X11 pointer observations disagreed and the input lost focus.
+
+The exact unpatched application
+`95aab82ac646f3f1834b75f8f577a556942ada79c2ae063a62468bec60529af4`
+failed six of six ordinary two-window Ctrl+A/C copies. Synchronizing the existing
+winit cursor cache before that synthetic motion fixed all six copies, with exact
+external GTK clipboard strings and matching OS/runtime coordinates. No pointer
+wiggle, altered editor, extra motion or delay workaround belongs to the accepted
+regression. See `vendor/winit-0.30.13/HERMES_PATCH.md` for the exact source archive,
+Apache-2.0 notice, patch, hashes and offline verifier.
+
+The candidate application SHA-256
+`5f99ea73ab734ce4796106db0ff086af8c422d962ab3862d0fdedb073adb6eb9`
+passed both the six-copy regression and the complete ordinary native peer flow,
+including the two-copy diagnostic and normal application Quit0. Evidence:
+`/tmp/hermes-full-copy-regression-{red,green}/clipboard-loop.json` and
+`/tmp/hermes-winit-full-peer-green/result.json`. This candidate result is kept
+separate from later integration binaries and from macOS/Windows acceptance.
+
+## Eighth integrated acceptance
+
+The final integrated binary
+`/tmp/hermes-rune-goal-eight-final/hermes-rune`, SHA-256
+`1407f2ff28abfa14e3272235a36ede4b972beb88d83d49be21d025a2da39365a`,
+passed the complete ordinary peer-window flow and its native clipboard diagnostic.
+Evidence: `/tmp/hermes-rune-goal-eight-peer-native/result.json`, with twelve
+native PNGs, actual native bindings and exact requests. Every required result
+flag is true, including independent typed/persisted inputs, settled Settings,
+concurrent streams/scoped Stop, captured source/profile, stored session reuse,
+profile-pinned New Session, the interactive peer surviving primary close,
+local Close and normal global Quit. The clipboard result is true.
+
+The separate ordinary two-window, three-round copy regression also passed on
+that same binary: all six exact external GTK clipboard reads and pointer checks.
+It uses direct normal clicks at returning window-local coordinates and no pointer
+wiggle. Evidence: `/tmp/hermes-rune-goal-eight-copy-native/clipboard-loop.json`.
+The older failed diagnostics and candidate hashes above remain historical proof;
+this final integrated result supersedes their current unverified clipboard status.
+
+The same binary's independent sixteen-case startup/default acceptance is recorded
+in `native-startup-route-acceptance.md`. These proofs use private synthetic peers
+and private X11/D-Bus/WM sessions. They establish no live provider, physical audio,
+macOS/Windows, dirty-global-Quit, full topology/fleet or final SSH-service shutdown
+acceptance.

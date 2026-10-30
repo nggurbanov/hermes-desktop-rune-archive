@@ -318,7 +318,14 @@ pub fn overlays(s: &Viewer, k: &Kit, layer: &mut Vec<El>) {
         let mut menu = popup("Choose profile", k);
         for p in &s.profiles {
             let name = p.name.clone();
-            menu = menu.child(button(&p.label, move |s| s.select_profile(name.clone()), k));
+            let menu_name = name.clone();
+            menu = menu.child(
+                button(&p.label, move |s| s.select_profile(name.clone()), k)
+                    .key(format!("pick-profile-{}", p.name))
+                    .on_secondary_press(move |s: &mut Viewer, point, _| {
+                        s.open_profile_route_menu(menu_name.clone(), point)
+                    }),
+            );
         }
         menu = menu.child(button(
             "Manage bots",

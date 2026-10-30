@@ -20,5 +20,6 @@ apps/shared/src/gateway-contract.openrpc.json linguist-generated=true
 # Keep generated notice bytes stable for the provenance manifest.
 apps/rune/assets/plugin-host/THIRD_PARTY_LICENSES.txt text eol=lf
 
-# Preserve exact vendored Rune source, font and notice bytes for its provenance manifest.
+# Preserve exact vendored Rune/winit source and notice bytes for their provenance manifests.
 apps/rune/vendor/rune/** -text
+apps/rune/vendor/winit-0.30.13/** -text

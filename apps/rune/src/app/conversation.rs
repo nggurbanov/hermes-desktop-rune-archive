@@ -6,6 +6,7 @@ mod policy;
 use crate::conversation::{AttachmentInput, SendInput, Update};
 impl Viewer {
     pub fn new_draft(&mut self) {
+        self.cancel_device_route();
         let scope = self.composer_scope();
         if self.conversation.view(&scope).is_some_and(|v| v.preparing) {
             self.compose_error = Some("Wait for the prepared send to bind its conversation".into());
@@ -14,6 +15,18 @@ impl Viewer {
         if self.prepare_window_new_session() {
             return;
         }
+        if !self.has_pinned_window_default() && self.prepare_device_new_session() {
+            return;
+        }
+        self.new_draft_on_current_source();
+    }
+    pub fn new_draft_on_current_source(&mut self) {
+        let scope = self.composer_scope();
+        if self.conversation.view(&scope).is_some_and(|v| v.preparing) {
+            self.compose_error = Some("Wait for the prepared send to bind its conversation".into());
+            return;
+        }
+        self.cancel_device_route();
         self.layout.open("workspace");
         if self.route == crate::pages::Route::Settings {
             self.settings.vault.dismiss();
@@ -379,6 +392,10 @@ impl Viewer {
 impl Viewer {
     pub fn can_send(&self) -> bool {
         self.editor_ready()
+            && self.window_source_valid()
+            && !self.device_route_pending()
+            && !self.loading
+            && self.error.is_none()
             && !self.audio_blocks_send()
             && self.connection.is_some()
             && !self.fixture
@@ -583,8 +600,20 @@ impl Viewer {
         let changed = !events.is_empty();
         for event in events {
             match event{
-   crate::connections::Event::Ready(connection)=>{self.use_connection(connection);},
+   crate::connections::Event::Ready(connection)=>{
+    let profile=self.connections.selected_profile().map(str::to_owned);
+    let retained=self.connections.active_lease().zip(self.connections.resolver());
+    if self.use_connection_for_profile(connection,profile) {
+     if let Some((lease,resolver))=retained { self.retain_window_route(resolver,lease); }
+    }
+    self.connections.note_active_source(self.connection.as_ref());
+   },
    crate::connections::Event::Changed=>{},
+   crate::connections::Event::Forgot{id}=>{
+    if let Some(store)=&mut self.device_startup {
+     if let Err(error)=store.after_forget(id,true){self.client_error=Some(error);}
+    }
+   },
    crate::connections::Event::Lost{id,revision,message}=>{if self.connection.as_ref().is_some_and(|connection|matches!(connection,Connection::Saved{id:current,revision:current_revision,..}if current==&id&&current_revision==&revision)){self.conversation.close_connection(self.connection_epoch);self.chat.close_connection(self.connection_epoch);self.subagents.close_connection(self.connection_epoch);self.audio.close_connection(self.connection_epoch);self.background.retire_connection(self.connection_epoch);self.preview.close_connection(self.connection_epoch);self.media_players.close_connection(self.connection_epoch);self.audio_preview=None;self.error=Some(message);self.status="Disconnected".into();self.loading=false;self.history_loading=false;}}
   }
         }

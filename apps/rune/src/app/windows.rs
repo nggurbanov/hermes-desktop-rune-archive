@@ -12,6 +12,7 @@ use std::{
 };
 #[path = "windows/proof.rs"]
 mod proof;
+pub(crate) use proof::inspect_native_frame;
 #[path = "windows/source.rs"]
 mod source;
 use source::{Pinned, Retained, Source};
@@ -23,6 +24,7 @@ thread_local! { static WORKSPACE: RefCell<Weak<RefCell<Registry>>> = const { Ref
 #[derive(Default)]
 struct Registry {
     proof: Option<PathBuf>,
+    legacy: Option<Connection>,
     entries: BTreeMap<WindowId, Entry>,
 }
 struct Entry {
@@ -63,7 +65,7 @@ pub(super) struct State {
     source: Option<Source>,
     retained: Option<Retained>,
     pinned: Option<Pinned>,
-    pending_fresh: Option<WindowRoute>,
+    pending_fresh: Option<source::Fresh>,
     boot_target: Option<WindowRoute>,
     started: bool,
     storage_error: Option<String>,
@@ -130,6 +132,7 @@ impl Viewer {
                 s.hydrate_client_preferences(prefs);
             }
             s.profile = record.route.profile.clone();
+            s.exact_connection_profile = true;
             s.window.boot_target = Some(record.route);
             s.window.lease = Some(lease);
         }
@@ -158,10 +161,7 @@ impl Viewer {
                 Ok(lease) => {
                     let record = lease.record().clone();
                     // Explicit CLI routes take precedence over launch restoration.
-                    if self.connection.is_none() {
-                        self.profile = record.route.profile.clone();
-                        self.window.boot_target = Some(record.route);
-                    }
+                    self.restore_launch_route(record.route);
                     if let Some(prefs) = record.presentation {
                         self.hydrate_client_preferences(prefs);
                     }
@@ -177,6 +177,20 @@ impl Viewer {
         if let Some(lease) = &self.window.lease {
             self.composer = Composer::with_editor(lease.editor_id().clone());
         }
+    }
+    fn restore_launch_route(&mut self, mut route: WindowRoute) {
+        if self.connection.is_some() {
+            return;
+        }
+        if self.exact_connection_profile {
+            route.profile = self.profile.clone();
+            route.session = None;
+            route.canonical_bot = false;
+        } else {
+            self.profile = route.profile.clone();
+            self.exact_connection_profile = true;
+        }
+        self.window.boot_target = Some(route);
     }
     pub(crate) fn window_ready(&mut self, app: AppHandle<Viewer>, host: WindowHandle) {
         self.native_window = Some(app.clone());
@@ -205,7 +219,10 @@ impl Viewer {
             );
         }
         self.window.native = Some(host);
-        self.start_window_source();
+        self.remember_legacy_window_source();
+        if !self.begin_device_startup() {
+            self.start_window_source();
+        }
     }
     pub fn window_menu(&self) -> Option<rune::PointerPress> {
         self.window.menu
@@ -585,6 +602,9 @@ impl Viewer {
                     .into(),
             );
         }
+        if let Some(store) = &mut self.device_startup {
+            store.flush()?;
+        }
         self.client_settings.flush_preferences()?;
         self.sidebar_state.flush_storage()?;
         self.profile_preferences.flush_storage()
@@ -600,3 +620,86 @@ pub(crate) fn closed(s: &mut Viewer, _tx: &mut Tx) {
 #[cfg(test)]
 #[path = "windows/tests.rs"]
 mod tests;
+
+#[derive(Clone)]
+pub(super) struct WindowSource {
+    pub connection: Connection,
+}
+impl Viewer {
+    pub(super) fn has_pinned_window_default(&self) -> bool {
+        self.window.pinned.is_some()
+            || self
+                .window
+                .lease
+                .as_ref()
+                .is_some_and(|lease| lease.record().kind == BootstrapKind::ProfilePinned)
+    }
+    pub(super) fn is_primary_window(&self) -> bool {
+        self.window
+            .lease
+            .as_ref()
+            .is_some_and(|lease| lease.record().kind == BootstrapKind::PrimaryLaunch)
+    }
+    pub(super) fn legacy_window_source(&self) -> Option<WindowSource> {
+        self.window
+            .registry
+            .borrow()
+            .legacy
+            .clone()
+            .map(|connection| WindowSource { connection })
+    }
+    pub(super) fn remember_legacy_window_source(&mut self) {
+        if !self.is_primary_window()
+            || matches!(self.connection, Some(Connection::Saved { .. }) | None)
+        {
+            return;
+        }
+        let mut registry = self.window.registry.borrow_mut();
+        if registry.legacy.is_none() {
+            registry.legacy = self.connection.clone();
+        }
+    }
+    pub(super) fn window_route_resolver(
+        &self,
+        id: &str,
+        revision: &str,
+    ) -> Option<crate::connections::Resolver> {
+        self.window
+            .retained
+            .as_ref()
+            .filter(|r| {
+                r.lease.is_valid() && r.lease.source_id() == id && r.lease.revision() == revision
+            })
+            .map(|r| r._resolver.clone())
+            .or_else(|| self.connections.resolver())
+    }
+    pub(super) fn retain_window_route(
+        &mut self,
+        resolver: crate::connections::Resolver,
+        lease: crate::connections::Lease,
+    ) {
+        if !lease.is_valid()
+            || self
+                .connection
+                .as_ref()
+                .and_then(|c| crate::client::connection_key(c).ok())
+                != crate::client::connection_key(lease.connection()).ok()
+        {
+            self.client_error = Some("The activated source lease is no longer valid".into());
+            return;
+        }
+        self.window.retained = Some(Retained {
+            _resolver: resolver,
+            lease,
+        });
+    }
+    pub fn window_source_valid(&self) -> bool {
+        if self.fixture || !matches!(self.connection, Some(Connection::Saved { .. })) {
+            return true;
+        }
+        self.window
+            .retained
+            .as_ref()
+            .is_some_and(|retained| retained.lease.is_valid())
+    }
+}

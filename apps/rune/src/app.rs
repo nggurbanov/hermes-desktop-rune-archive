@@ -50,6 +50,7 @@ pub struct SavedSendConfirmation {
 
 pub struct Viewer {
     window: windows::State,
+    routing: routing::State,
     editors: editors::Editors,
     retired_editor_input: TextEdit,
     pub notifications: crate::notifications::Notifications,
@@ -65,6 +66,7 @@ pub struct Viewer {
     plugin_dialogs: plugin_actions::NativeDialogs,
     plugin_navigation: Vec<plugin_actions::PluginNavigation>,
     pub connections: crate::connections::Connections,
+    device_startup: Option<crate::client::startup::Startup>,
     pub files: crate::files::Files,
     pub preview: crate::preview::Service,
     pub media_players: crate::media_player::MediaPlayers,
@@ -162,6 +164,7 @@ pub struct Viewer {
     advanced_tools_open: bool,
     fixture_history: HashMap<(String, String), Vec<HistoryMessage>>,
     connection: Option<Connection>,
+    exact_connection_profile: bool,
     intent: u64,
     network: Option<Network>,
     fixture: bool,
@@ -177,6 +180,7 @@ struct Request {
 }
 enum Command {
     Connect(Connection, String),
+    ConnectExact(Connection, String),
     Sessions(String),
     History(String, String),
     Bot(String),
@@ -213,6 +217,7 @@ impl Viewer {
     fn empty() -> Self {
         Self {
             window: windows::State::default(),
+            routing: Default::default(),
             editors: Default::default(),
             retired_editor_input: TextEdit::default(),
             notifications: crate::notifications::Notifications::new(),
@@ -224,6 +229,7 @@ impl Viewer {
             chat: crate::chat::Chat::new(),
             subagents: crate::subagents::Subagents::new(),
             connections: crate::connections::Connections::new(),
+            device_startup: None,
             files: crate::files::Files::new(),
             preview: crate::preview::Service::new(),
             media_players: crate::media_player::MediaPlayers::new(),
@@ -325,6 +331,7 @@ impl Viewer {
             advanced_tools_open: false,
             fixture_history: HashMap::new(),
             connection: None,
+            exact_connection_profile: false,
             intent: 0,
             network: None,
             fixture: false,
@@ -360,12 +367,22 @@ impl Viewer {
         }
         if let Some(profile) = argument("--profile") {
             s.profile = profile;
+            s.exact_connection_profile = true;
         }
         s.connection_form = s.connection.is_none();
         s
     }
 
     fn load_client_state(&mut self) {
+        match crate::client::startup::Startup::system() {
+            Ok(store) => {
+                if let Err(error) = store.get() {
+                    self.client_error = Some(error);
+                }
+                self.device_startup = Some(store);
+            }
+            Err(error) => self.client_error = Some(error),
+        }
         self.sidebar_state.load_preferences();
         match crate::client::profiles::ProfilePreferences::load() {
             Ok(p) => self.profile_preferences = p,
@@ -450,10 +467,15 @@ impl Viewer {
         self.loading = true;
         self.error = None;
         self.status = "Connecting…".into();
-        self.dispatch(Command::Connect(connection, self.profile.clone()));
+        self.dispatch(if self.exact_connection_profile {
+            Command::ConnectExact(connection, self.profile.clone())
+        } else {
+            Command::Connect(connection, self.profile.clone())
+        });
     }
 
     pub fn change_connection(&mut self) {
+        self.cancel_device_route();
         self.connection_form = true;
     }
     pub fn can_cancel_connection(&self) -> bool {
@@ -506,9 +528,11 @@ impl Viewer {
         connection: Connection,
         profile: Option<String>,
     ) -> bool {
+        self.cancel_device_route();
         if !self.allow_owner_change("") {
             return false;
         }
+        self.exact_connection_profile = profile.is_some();
         if let Some(profile) = profile {
             self.profile = profile;
         }
@@ -536,6 +560,8 @@ impl Viewer {
         self.row_menu = None;
         self.bot_empty = false;
         self.history_truncated = false;
+        self.remember_legacy_window_source();
+        self.configure_window_inspection();
         self.reconnect();
         true
     }
@@ -593,6 +619,7 @@ impl Viewer {
         self.connection.is_some() && !self.fixture
     }
     pub fn select_profile(&mut self, profile: String) {
+        self.cancel_device_route();
         self.profile_picker = false;
         if profile == self.profile {
             return;
@@ -619,9 +646,10 @@ impl Viewer {
             self.loading = false;
             return;
         }
-        self.dispatch(Command::Sessions(profile));
+        self.dispatch(Command::Sessions(profile.clone()));
     }
     pub fn open_session(&mut self, id: String) {
+        self.cancel_device_route();
         self.layout.open("workspace");
         if self.route == crate::pages::Route::Settings {
             self.settings.vault.dismiss();
@@ -656,6 +684,7 @@ impl Viewer {
     }
 
     fn open_bot_with_intent(&mut self, profile: String, new_tab: bool) {
+        self.cancel_device_route();
         if !self.allow_owner_change(&profile) {
             return;
         }
@@ -710,6 +739,7 @@ impl Viewer {
         bot: bool,
         new_tab: bool,
     ) {
+        self.cancel_device_route();
         if !self.allow_owner_change(&profile) {
             return;
         }
@@ -911,11 +941,13 @@ impl Viewer {
                 };
                 self.profiles = profiles;
                 self.profile = profile;
+                self.remember_connected_profile(&self.profile.clone());
                 self.sessions = sessions;
                 self.selected_session = None;
                 self.messages.clear();
                 self.error = None;
                 self.status = "Connected".into();
+                self.exact_connection_profile = true;
                 if let Some(bot) = reopen_bot {
                     let profile = bot.profile.clone();
                     self.pending_bot = Some(bot);
@@ -945,6 +977,7 @@ impl Viewer {
                 }
             }
             Ok(Update::Sessions { profile, sessions }) if profile == self.profile => {
+                self.remember_connected_profile(&profile);
                 self.sessions = sessions;
                 self.status = "Connected".into();
             }
@@ -954,6 +987,7 @@ impl Viewer {
                 sessions,
                 history,
             }) if profile == self.profile && self.selected_session.as_ref() == Some(&session) => {
+                self.remember_connected_profile(&profile);
                 self.sessions = sessions;
                 self.messages = history.messages;
                 self.history_truncated = history.has_more;
@@ -972,6 +1006,7 @@ impl Viewer {
                     .is_some_and(|p| p.profile == profile) =>
             {
                 let intent = self.pending_bot.take().expect("matching bot open");
+                self.remember_connected_profile(&profile);
                 self.profiles = profiles;
                 self.sessions = sessions;
                 self.status = "Connected".into();
@@ -1149,13 +1184,19 @@ pub fn setup(s: &mut Viewer, waker: Waker) {
             };
             pending = coalesce(first, requests.try_iter());
             let request = pending.pop_front().expect("a queued read intent");
+            let exact = matches!(&request.command, Command::ConnectExact(_, _));
             let result = match request.command {
-                Command::Connect(connection, requested_profile) => {
+                Command::Connect(connection, requested_profile)
+                | Command::ConnectExact(connection, requested_profile) => {
                     gateway = None;
                     Gateway::connect(&connection).and_then(|mut g| {
                         let profiles = g.profiles()?;
                         let profile = if profiles.iter().any(|p| p.name == requested_profile) {
                             requested_profile
+                        } else if exact {
+                            return Err(
+                                "The requested profile is no longer served by this agent".into()
+                            );
                         } else {
                             profiles
                                 .first()
@@ -1231,7 +1272,7 @@ pub fn setup(s: &mut Viewer, waker: Waker) {
 
 pub fn poll(s: &mut Viewer, now: f64, tx: &mut Tx) -> bool {
     s.ensure_editor();
-    let editors_changed = s.poll_editors(now, tx) | s.poll_windows(tx);
+    let editors_changed = s.poll_editors(now, tx) | s.poll_windows(tx) | s.poll_device_routes(tx);
     s.sync_tool_gate();
     if !s.key_capture_visible() {
         s.client_settings.capture = None;
@@ -1554,12 +1595,17 @@ pub fn on_key(s: &mut Viewer, event: &rune::KeyEvent, tx: &mut Tx) -> bool {
 fn coalesce(first: Request, incoming: impl IntoIterator<Item = Request>) -> VecDeque<Request> {
     let mut pending = VecDeque::new();
     for request in std::iter::once(first).chain(incoming) {
-        if matches!(&request.command, Command::Connect(_, _)) {
+        if matches!(
+            &request.command,
+            Command::Connect(_, _) | Command::ConnectExact(_, _)
+        ) {
             pending.clear();
-        } else if pending
-            .back()
-            .is_some_and(|r: &Request| !matches!(&r.command, Command::Connect(_, _)))
-        {
+        } else if pending.back().is_some_and(|r: &Request| {
+            !matches!(
+                &r.command,
+                Command::Connect(_, _) | Command::ConnectExact(_, _)
+            )
+        }) {
             pending.pop_back();
         }
         pending.push_back(request);
@@ -1820,3 +1866,6 @@ mod editors;
 
 #[path = "app/windows.rs"]
 pub(crate) mod windows;
+
+#[path = "app/routing.rs"]
+pub(crate) mod routing;

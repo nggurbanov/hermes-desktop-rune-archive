@@ -180,7 +180,19 @@ function focus(id) {
   return window
 }
 function key(id, chord) { focus(id); input('key', '--clearmodifiers', chord) }
-function click(id, name, button = 1, textInset = null) { const s = current(id), rect = s?.geometry?.[name]; assert.ok(rect, `No ${name} rect in ${JSON.stringify(s)}`); const window = focus(id), g = geometry(window); input('mousemove', g.X + rect[0] + (textInset ?? rect[2] / 2), g.Y + rect[1] + rect[3] / 2, 'sleep', '0.08'); const pointer = input('getmouselocation', '--shell'); pointerActions.push({phase, id, name, button, window, geometry: g, rect, pointer, hold_ms: 40}); input('mousedown', button, 'sleep', '0.04', 'mouseup', button) }
+function xPointer(window) {
+  return JSON.parse(execFileSync('/usr/bin/python3', ['-c', `import ctypes as c,json,os,sys;x=c.CDLL('libX11.so.6');x.XOpenDisplay.restype=c.c_void_p;d=x.XOpenDisplay(os.environ['DISPLAY'].encode());x.XQueryPointer.argtypes=[c.c_void_p,c.c_ulong,c.POINTER(c.c_ulong),c.POINTER(c.c_ulong),c.POINTER(c.c_int),c.POINTER(c.c_int),c.POINTER(c.c_int),c.POINTER(c.c_int),c.POINTER(c.c_uint)];r,h=c.c_ulong(),c.c_ulong();rx,ry,wx,wy=c.c_int(),c.c_int(),c.c_int(),c.c_int();m=c.c_uint();ok=x.XQueryPointer(d,int(sys.argv[1]),c.byref(r),c.byref(h),c.byref(rx),c.byref(ry),c.byref(wx),c.byref(wy),c.byref(m));print(json.dumps(dict(ok=bool(ok),root=[rx.value,ry.value],local=[wx.value,wy.value],child=h.value,mask=m.value)))`, window], {env, encoding: 'utf8', timeout: 5000}))
+}
+function click(id, name, button = 1, textInset = null) {
+  const s = current(id), rect = s?.geometry?.[name]
+  assert.ok(rect, `No ${name} rect in ${JSON.stringify(s)}`)
+  const window = focus(id), g = geometry(window)
+  const x = g.X + rect[0] + (textInset ?? rect[2] / 2), y = g.Y + rect[1] + rect[3] / 2
+  input('mousemove', x, y, 'sleep', '0.08')
+  const pointer = input('getmouselocation', '--shell'), xquery = args.includes('--xquery-pointer') ? xPointer(window) : null
+  pointerActions.push({phase, id, name, button, window, geometry: g, rect, pointer, xquery, hold_ms: 40})
+  input('mousedown', button, 'sleep', '0.04', 'mouseup', button)
+}
 async function type(id, text, name = 'composer-input') {
   click(id, name, 1, 12); await delay(100)
   const target = osWindow(id), focusedBefore = input('getwindowfocus').trim()
@@ -205,6 +217,42 @@ async function capture(name, id) {
 }
 function clipboard() { return execFileSync('/usr/bin/python3', ['-c', `import gi;gi.require_version('Gtk','3.0');from gi.repository import Gtk,Gdk;Gtk.init([]);print(Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).wait_for_text() or '',end='')`], {env, encoding: 'utf8', timeout: 5000}) }
 async function copyDraft(id) { click(id, 'composer-input', 1, 12); await delay(700); click(id, 'composer-input', 1, 12); await delay(250); input('key', '--clearmodifiers', 'ctrl+a'); await delay(250); input('key', '--clearmodifiers', 'ctrl+c'); await delay(250); return clipboard() }
+async function clipboardLoop(primary) {
+  const count = Number(option('--clipboard-windows') ?? '2'), rounds = Number(option('--clipboard-rounds') ?? '3')
+  const assertPointer = args.includes('--assert-pointer-sync')
+  assert.ok([1, 2].includes(count)); assert.ok(Number.isInteger(rounds) && rounds > 0 && rounds <= 20)
+  const windows = [{id: primary.id, expected: 'primary native send'}], probes = []
+  await type(primary.id, windows[0].expected)
+  if (count === 2) {
+    key(primary.id, 'ctrl+shift+n')
+    const peer = await wait('copy-loop actual native peer', () => snapshots().find(s => s.id !== primary.id && s.native?.position && !s.loading && !s.error && s.geometry['composer-input'] && s.geometry['session-research-A-research-notes']))
+    await delay(700); await type(peer.id, 'peer native send'); windows.push({id: peer.id, expected: 'peer native send'})
+  }
+  for (let round = 0; round < rounds; round++) for (const window of windows) {
+    phase = `copy-loop-${round}-${window.id}`
+    const samples = [], sample = stage => {
+      const framePath = path.join(inspection, 'frames', window.id + '.json')
+      const frame = fs.existsSync(framePath) ? JSON.parse(fs.readFileSync(framePath, 'utf8')) : null
+      samples.push({stage, at: Date.now(), snapshot: current(window.id), frame, os_pointer: assertPointer ? xPointer(osWindow(window.id)).local : null, os_focus: input('getwindowfocus').trim()})
+    }
+    sample('before')
+    click(window.id, 'composer-input', 1, 12)
+    await delay(700); sample('first-click')
+    click(window.id, 'composer-input', 1, 12)
+    await delay(250); sample('second-click')
+    input('key', '--clearmodifiers', 'ctrl+a'); await delay(250); sample('select-all')
+    input('key', '--clearmodifiers', 'ctrl+c'); await delay(250); sample('copy')
+    const pointerSynced = !assertPointer || samples.filter(s => s.stage !== 'before').every(s => s.frame?.pointer?.length === 2 && s.frame.pointer.every((value, i) => Math.abs(value - s.os_pointer[i]) < 0.5))
+    const selectionMatches = !assertPointer || samples.find(s => s.stage === 'select-all')?.snapshot.editor_state?.selected_bytes === Buffer.byteLength(window.expected)
+    const copied = clipboard(); probes.push({round, id: window.id, expected: window.expected, copied, pointer_synced: assertPointer ? pointerSynced : null, selection_matches: assertPointer ? selectionMatches : null, pass: copied === window.expected && pointerSynced && selectionMatches, samples})
+    assert.equal(current(window.id).draft, window.expected, 'Copy changed the real draft')
+  }
+  assert.ok(!calls.some(call => ['prompt.submit', 'session.create', 'session.interrupt'].includes(call.method)), 'Copy-only diagnosis mutated a gateway conversation')
+  const result = {binary_sha256: hash(fs.readFileSync(binary)), native_windows: count, rounds, clicks: 2, pointer_asserted: assertPointer, passed: probes.every(probe => probe.pass), probes}
+  fs.writeFileSync(path.join(out, 'clipboard-loop.json'), JSON.stringify(result, null, 2) + '\n')
+  console.log(JSON.stringify({binary_sha256: result.binary_sha256, native_windows: count, rounds, passed: result.passed, copies: probes.map(({round, id, copied, pass}) => ({round, id, copied, pass}))}))
+  assert.ok(result.passed, 'Full native Hermes composer Ctrl+A/C did not copy the exact draft')
+}
 async function stopOwned(process) {
   if (process.exitCode != null || process.signalCode != null) return
   process.kill('SIGTERM')
@@ -246,6 +294,9 @@ try {
   child = spawn(binary, ['--gateway', a.endpoint, '--profile', 'research', '--peer-window-proof-dir', inspection, ...traceArgs], {cwd: app, env, stdio: ['ignore', 'ignore', 'pipe']}); owned.push(child); child.stderr.on('data', bytes => stderr += bytes)
   const primary = await wait('primary connected native window', () => snapshots().find(s => s.kind === 'primary_launch' && s.native?.position && s.profile === 'research' && s.principal && !s.loading && !s.error && s.geometry['composer-input'] && s.geometry['session-research-A-research-notes']))
   await delay(700)
+  if (args.includes('--clipboard-only')) {
+    await clipboardLoop(primary)
+  } else {
   assert.equal(visible().length, 1); await capture('primary-light', primary.id)
   phase = 'independent-drafts'
   await type(primary.id, 'primary native send')
@@ -340,6 +391,7 @@ try {
   assert.ok(!JSON.stringify(windowRecords()).includes(token), 'Credentials leaked into window persistence')
   const result = {binary_sha256: hash(fs.readFileSync(binary)), actual_native_windows: true, same_process: true, complete_viewers: true, independent_editors: true, clipboard_inputs: clipboardInputs, persisted_inputs: true, settings: true, concurrent_streams: true, scoped_stop: true, captured_source_and_profile: true, existing_session_window: true, existing_session_window_reused: true, profile_pinned_bot_window: true, profile_pinned_new_session: true, light_and_dark: true, primary_close_keeps_peers: true, surviving_peer_interactive: true, local_close: true, global_quit: true, physical_audio_used: false, live_agents_used: false, rpc_methods: [...new Set(calls.map(c => c.method))], nativeBindings, screenshots}
   fs.writeFileSync(path.join(out, 'result.json'), JSON.stringify(result, null, 2) + '\n'); console.log(JSON.stringify(result))
+  }
 } catch (error) {
   fs.writeFileSync(path.join(out, 'failure.json'), JSON.stringify({phase, error: String(error?.stack ?? error), snapshots: snapshots(), nativeBindings, screenshots}, null, 2) + '\n')
   for (const snapshot of snapshots()) {
