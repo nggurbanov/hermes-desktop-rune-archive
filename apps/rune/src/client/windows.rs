@@ -132,6 +132,7 @@ pub struct WindowRoute {
     pub source: Option<SourceDescriptor>,
     pub profile: String,
     pub session: Option<String>,
+    pub title: Option<String>,
     pub canonical_bot: bool,
 }
 impl Default for WindowRoute {
@@ -140,6 +141,7 @@ impl Default for WindowRoute {
             source: None,
             profile: "default".into(),
             session: None,
+            title: None,
             canonical_bot: false,
         }
     }
@@ -211,6 +213,7 @@ impl Record {
             pinned_route: (kind == BootstrapKind::ProfilePinned).then(|| {
                 let mut pinned = route.clone();
                 pinned.session = None;
+                pinned.title = None;
                 pinned.canonical_bot = false;
                 pinned
             }),

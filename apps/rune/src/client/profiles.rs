@@ -174,6 +174,7 @@ impl crate::app::Viewer {
             .and_then(|c| self.profile_preferences.get(c, profile))
             .cloned()
             .unwrap_or_else(|| json!({"version":1,"skin":"opencode","profileColor":null}));
+        export_rail_color(&mut value, &self.fleet_preferences, profile);
         if profile == self.profile {
             value["mode"] = json!(match self.theme {
                 Some(true) => "dark",
@@ -188,6 +189,11 @@ impl crate::app::Viewer {
             return;
         };
         if value.is_object() {
+            if let Err(error) = import_rail_color(&mut self.fleet_preferences, profile, &value) {
+                self.client_error = Some(error);
+            } else if let Err(issue) = self.fleet_preferences.profile_color(profile) {
+                self.client_error = Some(issue.into());
+            }
             if let Some(tree) = value
                 .get("layoutTree")
                 .and_then(|v| serde_json::from_value::<crate::layout::Node>(v.clone()).ok())
@@ -239,4 +245,21 @@ impl crate::app::Viewer {
             self.client_error = Some(error);
         }
     }
+}
+
+fn export_rail_color(value: &mut Value, prefs: &super::fleet::Preferences, profile: &str) {
+    if !value.is_object() {
+        return;
+    }
+    value["profileColor"] = json!(prefs.explicit_profile_color(profile));
+}
+fn import_rail_color(
+    prefs: &mut super::fleet::Preferences,
+    profile: &str,
+    value: &Value,
+) -> Result<(), String> {
+    if let Some(color) = value["profileColor"].as_str().filter(|s| !s.is_empty()) {
+        prefs.set_profile_color(profile.into(), Some(color.into()))?;
+    }
+    Ok(())
 }

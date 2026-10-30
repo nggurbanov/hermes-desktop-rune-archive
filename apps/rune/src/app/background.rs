@@ -2,7 +2,6 @@ use super::*;
 impl Viewer {
     pub fn trigger_background(&mut self, scope: DraftScope, runtime: String) {
         if self.fixture
-            || scope.connection != self.connection_epoch
             || self
                 .retired_profiles
                 .contains(&(scope.connection, scope.profile.clone()))
@@ -16,9 +15,9 @@ impl Viewer {
         {
             return;
         }
-        if let Some(connection) = self.connection.clone() {
+        if let Some(binding) = self.binding_for_source_epoch(scope.connection) {
             self.background
-                .bind(connection, scope.clone(), runtime.clone());
+                .bind(binding, scope.clone(), runtime.clone());
             self.background.trigger(&scope, &runtime);
         }
     }
@@ -26,16 +25,18 @@ impl Viewer {
         if self.fixture {
             return false;
         }
-        self.background.retain_connection(self.connection_epoch);
+        let retained = self.retained_source_epochs();
+        self.background.retain_connections(&retained);
         for (connection, profile) in &self.retired_profiles {
             self.background.retire_profile(*connection, profile);
         }
         let scope = self.composer_scope();
-        if let (Some(connection), Some(view)) =
-            (self.connection.clone(), self.conversation.view(&scope))
-        {
+        if let (Some(binding), Some(view)) = (
+            self.binding_for_source_epoch(scope.connection),
+            self.conversation.view(&scope),
+        ) {
             self.background
-                .bind(connection, scope.clone(), view.runtime.clone());
+                .bind(binding, scope.clone(), view.runtime.clone());
         }
         let visible = self.route == crate::pages::Route::Chat
             && self.pane_shown("workspace")
@@ -48,19 +49,27 @@ impl Viewer {
         if let Some(delay) = self.background.next_wake_after(now, &scope, visible) {
             tx.wake_after(delay);
         }
-        let mut changed = before != self.background.revision || !updates.is_empty();
+        let changed = before != self.background.revision || !updates.is_empty();
         self.notifications.set_active(scope);
         for update in updates {
-            match update {
-                crate::background::Update::Snapshot { scope, value } => {
-                    self.terminal.sync_processes(&scope, &value)
-                }
-                crate::background::Update::Finished {
-                    scope,
-                    runtime,
-                    title,
-                    body,
-                } => {
+            self.apply_background_update(update);
+        }
+        changed
+    }
+    fn apply_background_update(&mut self, update: crate::background::Update) {
+        match update {
+            crate::background::Update::Snapshot { scope, value } => {
+                self.terminal.sync_processes(&scope, &value)
+            }
+            crate::background::Update::Finished {
+                scope,
+                runtime,
+                title,
+                body,
+            } => {
+                // The device broker still belongs to the foreground principal.
+                // Parked-source delivery needs a source-qualified notification owner.
+                if scope.connection == self.connection_epoch {
                     self.notifications.dispatch(crate::notifications::Notice {
                         kind: crate::notifications::Kind::BackgroundDone,
                         scope,
@@ -74,22 +83,26 @@ impl Viewer {
                         plugin: None,
                     });
                 }
-                crate::background::Update::Changed => changed = true,
-                crate::background::Update::RuntimeGone { scope, runtime } => {
-                    if self
+            }
+            crate::background::Update::Changed => {}
+            crate::background::Update::RuntimeGone { scope, runtime } => {
+                if self
+                    .conversation
+                    .view(&scope)
+                    .is_some_and(|view| view.runtime == runtime)
+                    && let Some(binding) = self.binding_for_source_epoch(scope.connection)
+                    && let Err(error) = self
                         .conversation
-                        .view(&scope)
-                        .is_some_and(|view| view.runtime == runtime)
-                        && let Some(connection) = self.connection.clone()
-                    {
-                        if let Err(error) = self.conversation.reconnect(connection, &scope) {
-                            self.client_error = Some(error);
-                        }
+                        .reconnect(binding.connection().clone(), &scope)
+                {
+                    if scope.connection == self.connection_epoch {
+                        self.client_error = Some(error);
+                    } else {
+                        self.chat.presentation(scope).error = Some(error);
                     }
                 }
             }
         }
-        changed
     }
     pub fn stop_background(&mut self, owner: DraftScope, id: String) {
         if self.fixture
@@ -119,3 +132,7 @@ impl Viewer {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "background/tests.rs"]
+mod tests;

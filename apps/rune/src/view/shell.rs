@@ -83,14 +83,18 @@ pub fn layout(s: &Viewer, cx: &mut Cx<Viewer>, main: El, sidebar: El, k: &Kit) -
                         .build(k)
                         .key("settings"),
                 )
-                .children(s.simple_mode.then(|| {
-                    Button::new(&s.profile)
-                        .variant(ButtonVariant::GhostMuted)
-                        .control_size(ControlSize::Small)
-                        .on_press(|s: &mut Viewer| s.profile_picker = !s.profile_picker)
-                        .build(k)
-                        .key("compact-profile")
-                }))
+                .children(
+                    (s.simple_mode && !super::fleet::rail_visible(s) && !s.show_statusbar).then(
+                        || {
+                            Button::new(&s.profile)
+                                .variant(ButtonVariant::GhostMuted)
+                                .control_size(ControlSize::Small)
+                                .on_press(|s: &mut Viewer| s.profile_picker = !s.profile_picker)
+                                .build(k)
+                                .key("compact-profile")
+                        },
+                    ),
+                )
                 .children(s.simple_mode.then(|| {
                     IconButton::new(&ic::GLOBE)
                         .variant(IconButtonVariant::GhostMuted)
@@ -224,6 +228,12 @@ fn workspace_tabs(s: &Viewer, k: &Kit) -> El {
         return tabs.child(text("Hermes").font(k.ty.ui_medium).color(k.c.text_muted));
     }
     for (index, tab) in s.tabs.iter().enumerate() {
+        let activate_owner = crate::composer::DraftScope {
+            connection: s.composer_scope().connection,
+            profile: tab.profile.clone(),
+            session: Some(tab.session.clone()),
+        };
+        let close_owner = activate_owner.clone();
         let active = tab.profile == s.profile && s.selected_session.as_ref() == Some(&tab.session);
         let owner = s
             .profiles
@@ -251,7 +261,7 @@ fn workspace_tabs(s: &Viewer, k: &Kit) -> El {
                             owner,
                             if tab.bot { "Bot Chat" } else { "Session" }
                         ))
-                        .on_press(move |s: &mut Viewer| s.activate_tab(index))
+                        .on_press(move |s: &mut Viewer| s.activate_tab_owned(&activate_owner))
                         .build(k)
                         .key(format!("activate-tab-{index}"))
                         .role("tab")
@@ -263,7 +273,7 @@ fn workspace_tabs(s: &Viewer, k: &Kit) -> El {
                         .variant(IconButtonVariant::GhostMuted)
                         .control_size(ControlSize::Mini)
                         .label(format!("Close {}", tab.title))
-                        .on_press(move |s: &mut Viewer| s.close_tab(index))
+                        .on_press(move |s: &mut Viewer| s.close_tab_owned(&close_owner))
                         .build(k)
                         .key(format!("close-tab-{index}")),
                 ),
@@ -318,88 +328,8 @@ pub fn sessions_nav(s: &Viewer, k: &Kit) -> El {
     nav
 }
 
-pub fn profile_rail(s: &Viewer, p: &Pal, k: &Kit) -> El {
-    if !s.show_profile_rail || s.simple_mode {
-        return el().h(0.);
-    }
-    let mut profiles = row().grow(1.0).min_w(0.0).gap(4.0).center_y().scroll_x();
-    for profile in s.profiles.iter() {
-        let name = profile.name.clone();
-        let menu_name = name.clone();
-        let hint = if s.is_default_profile(&name) {
-            format!("{} · Default profile", profile.label)
-        } else {
-            profile.label.clone()
-        };
-        profiles = profiles.child(
-            el().key(format!("profile-{}", name))
-                .role("button")
-                .label(format!("Sessions in {}", profile.label))
-                .help(hint)
-                .focusable(true)
-                .focus_ring(2.0, 1.0, k.c.border_focus)
-                .size(28.0, 28.0)
-                .center()
-                .radius(6.0)
-                .fill(if s.profile == name {
-                    k.c.layer_01
-                } else {
-                    Color::TRANSPARENT
-                })
-                .hover(k.c.hover)
-                .on_press(move |s: &mut Viewer| s.select_profile(name.clone()))
-                .on_secondary_press(move |s: &mut Viewer, point, _| {
-                    s.open_profile_route_menu(menu_name.clone(), point)
-                })
-                .child(identity_avatar(s, p, &profile.name, &profile.label, 16.)),
-        );
-    }
-    let rail = row()
-        .key("profile-rail")
-        .role("group")
-        .label("Session profile scope")
-        .w_full()
-        .h(40.0)
-        .px(4.0)
-        .gap(4.0)
-        .center_y()
-        .child(profiles)
-        .child(
-            IconButton::new(&ic::CHEVRON_DOWN)
-                .variant(IconButtonVariant::GhostMuted)
-                .label("Choose session profile")
-                .on_press(|s: &mut Viewer| s.profile_picker = !s.profile_picker)
-                .build(k)
-                .key("profile-picker-toggle"),
-        );
-    let mut footer = col().key("profile-footer").w_full();
-    if s.profile_picker {
-        let mut picker = col()
-            .key("profile-picker")
-            .w_full()
-            .max_h(180.0)
-            .scroll(ScrollSpec {
-                stick_bottom: false,
-            });
-        for profile in &s.profiles {
-            let name = profile.name.clone();
-            let menu_name = name.clone();
-            picker = picker.child(
-                Button::new(&profile.label)
-                    .variant(ButtonVariant::GhostMuted)
-                    .on_press(move |s: &mut Viewer| s.select_profile(name.clone()))
-                    .build(k)
-                    .key(format!("pick-profile-{}", profile.name))
-                    .on_secondary_press(move |s: &mut Viewer, point, _| {
-                        s.open_profile_route_menu(menu_name.clone(), point)
-                    }),
-            );
-        }
-        footer = footer.child(picker);
-    }
-    footer
-        .child(el().w_full().h(1.0).fill(k.c.border_muted))
-        .child(rail)
+pub fn profile_rail(s: &Viewer, _p: &Pal, k: &Kit) -> El {
+    super::fleet::rail(s, k)
 }
 
 pub fn bots_sidebar(s: &Viewer, p: &Pal, k: &Kit) -> El {
@@ -547,6 +477,17 @@ pub fn conversation_context(s: &Viewer, p: &Pal, k: &Kit) -> El {
     let bot = s.bot_is_active(&s.profile);
     let profile = s.profiles.iter().find(|p| p.name == s.profile);
     let label = profile.map(|p| p.label.as_str()).unwrap_or("Hermes");
+    let activity = if s.chat_running() {
+        "Working"
+    } else if s.loading {
+        "Connecting…"
+    } else if s.error.is_some() {
+        "Unavailable"
+    } else if s.is_fixture() || s.page_connection_accepted() {
+        "Ready"
+    } else {
+        "Not connected"
+    };
     row()
         .key("conversation-context")
         .w_full()
@@ -563,7 +504,8 @@ pub fn conversation_context(s: &Viewer, p: &Pal, k: &Kit) -> El {
         )
         .child(el().grow(1.0))
         .child(
-            text(if s.chat_running() { "Working" } else { "Ready" })
+            text(activity)
+                .key("conversation-activity")
                 .font(k.ty.small)
                 .color(k.c.text_faint),
         )

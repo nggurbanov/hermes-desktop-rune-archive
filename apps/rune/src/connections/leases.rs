@@ -9,6 +9,7 @@ struct State {
     revision: String,
     connection: Connection,
     profiles: Vec<crate::gateway::Profile>,
+    passive_only: bool,
     alive: AtomicBool,
     error: Mutex<Option<String>>,
 }
@@ -32,6 +33,9 @@ impl std::fmt::Debug for LeaseGuard {
 }
 
 impl Lease {
+    pub(crate) fn passive_only(&self) -> bool {
+        self.0.passive_only
+    }
     pub fn guard(&self) -> LeaseGuard {
         LeaseGuard(Arc::downgrade(&self.0))
     }
@@ -75,11 +79,22 @@ impl Entry {
         profiles: Vec<crate::gateway::Profile>,
         tunnel: Option<Box<dyn core::Tunnel>>,
     ) -> (Self, Lease) {
+        Self::create(id, revision, connection, profiles, tunnel, false)
+    }
+    fn create(
+        id: String,
+        revision: String,
+        connection: Connection,
+        profiles: Vec<crate::gateway::Profile>,
+        tunnel: Option<Box<dyn core::Tunnel>>,
+        passive_only: bool,
+    ) -> (Self, Lease) {
         let state = Arc::new(State {
             id,
             revision,
             connection,
             profiles,
+            passive_only,
             alive: AtomicBool::new(true),
             error: Mutex::new(None),
         });
@@ -90,6 +105,9 @@ impl Entry {
             },
             Lease(state),
         )
+    }
+    pub fn passive(id: String, revision: String, connection: Connection) -> (Self, Lease) {
+        Self::create(id, revision, connection, vec![], None, true)
     }
     pub fn acquire(&self) -> Option<Lease> {
         self.state
@@ -123,7 +141,7 @@ impl Drop for Entry {
 }
 #[derive(Clone)]
 pub struct Resolver {
-    send: Sender<Work>,
+    pub(super) send: Sender<Work>,
 }
 impl Resolver {
     pub(super) fn new(send: Sender<Work>) -> Self {

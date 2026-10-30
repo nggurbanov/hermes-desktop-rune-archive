@@ -17,6 +17,20 @@ struct Parked {
     composer: Composer,
 }
 impl Viewer {
+    pub(in crate::app) fn inspect_owned_editor(
+        &self,
+        scope: &DraftScope,
+    ) -> Option<serde_json::Value> {
+        let id = self.editors.bindings.get(scope)?;
+        let composer = if self.composer.editor_id() == id {
+            &self.composer
+        } else {
+            &self.editors.parked.get(id)?.composer
+        };
+        Some(
+            serde_json::json!({"editor":id.as_str(), "draft":composer.draft(scope).map(|d|d.text.text.as_str()).unwrap_or("")}),
+        )
+    }
     pub(super) fn flush_window_editors(&mut self) -> Result<(), String> {
         self.composer.flush_storage()?;
         for editor in self.editors.parked.values_mut() {
@@ -124,7 +138,7 @@ impl Viewer {
         owner: DraftScope,
         result: Result<Option<PathBuf>, String>,
     ) {
-        if owner.connection != self.connection_epoch
+        if !self.retained_source_epoch(owner.connection)
             || self
                 .retired_profiles
                 .contains(&(owner.connection, owner.profile.clone()))

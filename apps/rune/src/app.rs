@@ -51,6 +51,10 @@ pub struct SavedSendConfirmation {
 pub struct Viewer {
     window: windows::State,
     routing: routing::State,
+    fleet: crate::fleet::Fleet,
+    fleet_state: fleet::State,
+    pub fleet_ui: crate::view::fleet::State,
+    pub fleet_preferences: crate::client::fleet::Preferences,
     editors: editors::Editors,
     retired_editor_input: TextEdit,
     pub notifications: crate::notifications::Notifications,
@@ -126,6 +130,8 @@ pub struct Viewer {
     pub artifacts: crate::pages::artifacts::Artifacts,
     page_network: crate::pages::PageNetwork,
     page_owner: Option<(u64, String)>,
+    page_accepted_owner: Option<(u64, String)>,
+    page_loaded_owner: Option<(u64, String)>,
     page_connection: Option<Connection>,
     pub composer: Composer,
     draft_storage_available: bool,
@@ -218,6 +224,10 @@ impl Viewer {
         Self {
             window: windows::State::default(),
             routing: Default::default(),
+            fleet: windows::shared_fleet(),
+            fleet_state: Default::default(),
+            fleet_ui: Default::default(),
+            fleet_preferences: Default::default(),
             editors: Default::default(),
             retired_editor_input: TextEdit::default(),
             notifications: crate::notifications::Notifications::new(),
@@ -293,6 +303,8 @@ impl Viewer {
             artifacts: crate::pages::artifacts::Artifacts::new(),
             page_network: crate::pages::PageNetwork::default(),
             page_owner: None,
+            page_accepted_owner: None,
+            page_loaded_owner: None,
             page_connection: None,
             composer: Composer::new(),
             draft_storage_available: true,
@@ -464,6 +476,7 @@ impl Viewer {
         self.bind_notifications(&connection);
         self.bind_sounds(&connection);
         self.endpoint_label = connection_label(&connection);
+        self.page_accepted_owner = None;
         self.loading = true;
         self.error = None;
         self.status = "Connecting…".into();
@@ -532,20 +545,34 @@ impl Viewer {
         if !self.allow_owner_change("") {
             return false;
         }
+        let parked = match self.park_source_workspace() {
+            Ok(parked) => parked,
+            Err(error) => {
+                self.client_error = Some(error);
+                return false;
+            }
+        };
+        let requested_profile = profile.clone();
         self.exact_connection_profile = profile.is_some();
         if let Some(profile) = profile {
             self.profile = profile;
         }
         self.switching_window_source();
-        self.preview.close_connection(self.connection_epoch);
-        self.media_players.close_connection(self.connection_epoch);
+        if !parked {
+            self.preview.close_connection(self.connection_epoch);
+            self.media_players.close_connection(self.connection_epoch);
+        }
         self.audio_preview = None;
         self.preview_return = None;
-        self.chat.close_connection(self.connection_epoch);
-        self.subagents.close_connection(self.connection_epoch);
-        self.conversation.close_connection(self.connection_epoch);
+        if !parked {
+            self.chat.close_connection(self.connection_epoch);
+            self.subagents.close_connection(self.connection_epoch);
+            self.conversation.close_connection(self.connection_epoch);
+        }
         self.audio.close_connection(self.connection_epoch);
-        self.terminal.close_connection(self.connection_epoch);
+        if !parked {
+            self.terminal.close_connection(self.connection_epoch);
+        }
         self.connection_epoch = windows::source_epoch();
         self.page_network.invalidate();
         self.composer.close();
@@ -560,6 +587,7 @@ impl Viewer {
         self.row_menu = None;
         self.bot_empty = false;
         self.history_truncated = false;
+        self.restore_source_workspace(requested_profile.as_deref());
         self.remember_legacy_window_source();
         self.configure_window_inspection();
         self.reconnect();
@@ -684,6 +712,15 @@ impl Viewer {
     }
 
     fn open_bot_with_intent(&mut self, profile: String, new_tab: bool) {
+        let replace = self.foreground_slot();
+        self.open_bot_with_slot(profile, new_tab, replace);
+    }
+    fn open_bot_with_slot(
+        &mut self,
+        profile: String,
+        new_tab: bool,
+        replace: Option<(String, String)>,
+    ) {
         self.cancel_device_route();
         if !self.allow_owner_change(&profile) {
             return;
@@ -692,7 +729,6 @@ impl Viewer {
             return;
         };
         if !self.fixture {
-            let replace = self.foreground_slot();
             if self.profile != profile {
                 self.sessions.clear();
                 self.search.replace_text("");
@@ -739,11 +775,22 @@ impl Viewer {
         bot: bool,
         new_tab: bool,
     ) {
+        let replace = self.foreground_slot();
+        self.open_conversation_with_slot(profile, id, title, bot, new_tab, replace);
+    }
+    fn open_conversation_with_slot(
+        &mut self,
+        profile: String,
+        id: String,
+        title: String,
+        bot: bool,
+        new_tab: bool,
+        replace: Option<(String, String)>,
+    ) {
         self.cancel_device_route();
         if !self.allow_owner_change(&profile) {
             return;
         }
-        let replace = self.foreground_slot();
         self.connection_form = false;
         self.pending_bot = None;
         self.bot_empty = false;
@@ -913,20 +960,24 @@ impl Viewer {
                 profile,
                 sessions,
             }) => {
-                let reopen_bot = self
-                    .pending_bot
-                    .take()
-                    .filter(|p| p.profile == profile)
-                    .or_else(|| {
-                        self.active_tab()
-                            .filter(|t| t.bot && t.profile == profile)
-                            .map(|t| BotOpen {
-                                profile: t.profile.clone(),
-                                new_tab: true,
-                                replace: None,
+                let fleet_waiting = self.fleet_navigation_waiting();
+                let reopen_bot = (!fleet_waiting)
+                    .then(|| {
+                        self.pending_bot
+                            .take()
+                            .filter(|p| p.profile == profile)
+                            .or_else(|| {
+                                self.active_tab()
+                                    .filter(|t| t.bot && t.profile == profile)
+                                    .map(|t| BotOpen {
+                                        profile: t.profile.clone(),
+                                        new_tab: true,
+                                        replace: None,
+                                    })
                             })
-                    });
-                let retained = if self.profile == profile {
+                    })
+                    .flatten();
+                let retained = if !fleet_waiting && self.profile == profile {
                     self.selected_session.clone().filter(|id| {
                         sessions.iter().any(|s| &s.id == id)
                             || profiles.iter().any(|p| {
@@ -947,6 +998,7 @@ impl Viewer {
                 self.messages.clear();
                 self.error = None;
                 self.status = "Connected".into();
+                self.page_accepted_owner = Some((self.connection_epoch, self.profile.clone()));
                 self.exact_connection_profile = true;
                 if let Some(bot) = reopen_bot {
                     let profile = bot.profile.clone();
@@ -980,6 +1032,7 @@ impl Viewer {
                 self.remember_connected_profile(&profile);
                 self.sessions = sessions;
                 self.status = "Connected".into();
+                self.page_accepted_owner = Some((self.connection_epoch, self.profile.clone()));
             }
             Ok(Update::Opened {
                 profile,
@@ -992,6 +1045,7 @@ impl Viewer {
                 self.messages = history.messages;
                 self.history_truncated = history.has_more;
                 self.status = "Connected".into();
+                self.page_accepted_owner = Some((self.connection_epoch, self.profile.clone()));
                 self.error = None;
             }
             Ok(Update::BotOpened {
@@ -1010,6 +1064,7 @@ impl Viewer {
                 self.profiles = profiles;
                 self.sessions = sessions;
                 self.status = "Connected".into();
+                self.page_accepted_owner = Some((self.connection_epoch, self.profile.clone()));
                 self.error = None;
                 if let Some((id, history)) = chat {
                     let title = self
@@ -1169,6 +1224,7 @@ pub fn setup(s: &mut Viewer, waker: Waker) {
         return;
     }
     s.connections.init(waker.clone());
+    s.setup_fleet(waker.clone());
     let (send, requests) = mpsc::channel::<Request>();
     let (replies, receive) = mpsc::channel();
     std::thread::spawn(move || {
@@ -1272,7 +1328,10 @@ pub fn setup(s: &mut Viewer, waker: Waker) {
 
 pub fn poll(s: &mut Viewer, now: f64, tx: &mut Tx) -> bool {
     s.ensure_editor();
-    let editors_changed = s.poll_editors(now, tx) | s.poll_windows(tx) | s.poll_device_routes(tx);
+    let editors_changed = s.poll_editors(now, tx)
+        | s.poll_windows(tx)
+        | s.poll_device_routes(tx)
+        | s.poll_fleet(now, tx);
     s.sync_tool_gate();
     if !s.key_capture_visible() {
         s.client_settings.capture = None;
@@ -1841,6 +1900,10 @@ mod deck_actions;
 mod notification_actions;
 pub fn on_focus(s: &mut Viewer, focused: bool, tx: &mut Tx) {
     s.notifications.set_focus(focused);
+    if focused && !s.fixture {
+        s.connections.observe_registry();
+        s.refresh_passive_fleet(crate::fleet::Reason::Focus);
+    }
     if !focused {
         s.client_settings.capture = None;
     }
@@ -1869,3 +1932,6 @@ pub(crate) mod windows;
 
 #[path = "app/routing.rs"]
 pub(crate) mod routing;
+
+#[path = "app/fleet.rs"]
+mod fleet;

@@ -1,10 +1,14 @@
 use super::*;
 mod leases;
+pub(super) mod passive;
 mod registry;
 mod startup;
 use std::{fs, net::TcpListener};
 
 pub(super) trait Secrets: Send {
+    fn get_passive(&mut self, _id: &str, _deadline: std::time::Instant) -> Result<String, String> {
+        Err("Passive saved credentials are unavailable".into())
+    }
     fn get(&mut self, id: &str) -> Result<String, String>;
     fn set(&mut self, id: &str, value: &str) -> Result<(), String>;
     fn delete(&mut self, id: &str) -> Result<(), String>;
@@ -26,6 +30,9 @@ pub(super) trait Tunnels: Send {
 }
 struct SystemSecrets;
 impl Secrets for SystemSecrets {
+    fn get_passive(&mut self, id: &str, deadline: std::time::Instant) -> Result<String, String> {
+        super::passive::credentials::read(id, deadline)
+    }
     fn get(&mut self, id: &str) -> Result<String, String> {
         keyring::Entry::new("Hermes Rune",id).map_err(|_|"The OS credential store could not be opened")?.get_password().map_err(|_|"The saved gateway credential is missing or the OS credential store is locked. Edit the connection to enter it again".into())
     }

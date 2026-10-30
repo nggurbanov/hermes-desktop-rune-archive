@@ -156,7 +156,7 @@ impl Viewer {
                 url.to_string()
             });
         let native=self.window.native.as_ref().and_then(WindowHandle::geometry).map(|f|serde_json::json!({"position":f.position,"inner_size":f.inner_size,"scale":f.scale_factor,"maximized":f.maximized}));
-        let snapshot = serde_json::json!({"id":lease.id().as_str(),"editor":self.composer.editor_id().as_str(),"window_editor":lease.editor_id().as_str(),"native_raw_handle":self.window.native.as_ref().and_then(|host|host.with_raw_handle(|handle|format!("{:?}",handle.as_raw())).ok()),"editor_state":editor_state,"retired_input_state":retired_input_state,"focused_inputs":focused_inputs,"last_unhandled_key":self.window.last_unhandled_key,"default_profile":self.default_profile_route(),"route_pending":self.device_route_pending(),"device_default_error":self.device_default_error(),"registry":{"loaded":self.connections.registry_loaded(),"primary":self.connections.primary(),"last_used":self.connections.last_used(),"launch_mode":self.connections.launch_mode(),"busy":self.connections.busy,"error":self.connections.error},"can_send":self.can_send(),"connection_form":self.connection_form,"connection_url":connection_url,"connection_token_set":!self.connection_token.text.is_empty(),"kind":lease.record().kind,"dark":self.theme.unwrap_or(self.client_settings.system_dark.get()),"profile":self.profile,"session":self.selected_session,"source_epoch":scope.connection,"principal":self.connection.as_ref().and_then(|c|crate::client::connection_key(c).ok()),"route":format!("{:?}",self.route),"loading":self.loading||self.history_loading,"error":self.error,"client_error":self.client_error,"compose_error":self.compose_error,"draft":self.composer.draft(&scope).map(|d|d.text.text.as_str()).unwrap_or(""),"running":self.chat_running(),"active_text":self.conversation.view(&scope).map(|v|v.active_text.as_str()).unwrap_or(""),"messages":self.messages.iter().map(|m|serde_json::json!({"role":m.role,"content":m.content})).collect::<Vec<_>>(),"geometry":geometry,"native":native});
+        let snapshot = serde_json::json!({"id":lease.id().as_str(),"editor":self.composer.editor_id().as_str(),"window_editor":lease.editor_id().as_str(),"native_raw_handle":self.window.native.as_ref().and_then(|host|host.with_raw_handle(|handle|format!("{:?}",handle.as_raw())).ok()),"editor_state":editor_state,"retired_input_state":retired_input_state,"focused_inputs":focused_inputs,"last_unhandled_key":self.window.last_unhandled_key,"default_profile":self.default_profile_route(),"route_pending":self.device_route_pending(),"device_default_error":self.device_default_error(),"registry":{"loaded":self.connections.registry_loaded(),"primary":self.connections.primary(),"last_used":self.connections.last_used(),"launch_mode":self.connections.launch_mode(),"busy":self.connections.busy,"error":self.connections.error},"can_send":self.can_send(),"connection_form":self.connection_form,"connection_url":connection_url,"connection_token_set":!self.connection_token.text.is_empty(),"kind":lease.record().kind,"dark":self.theme.unwrap_or(self.client_settings.system_dark.get()),"profile":self.profile,"session":self.selected_session,"source_stamp":self.connection.as_ref().and_then(|c|crate::source::SourceStamp::from_connection(c).ok()),"fleet":self.inspect_fleet_sources(),"parked":self.inspect_parked_sources(),"tabs":self.tabs.iter().map(|tab|serde_json::json!({"profile":tab.profile,"session":tab.session,"title":tab.title,"bot":tab.bot})).collect::<Vec<_>>(),"source_epoch":scope.connection,"principal":self.connection.as_ref().and_then(|c|crate::client::connection_key(c).ok()),"route":format!("{:?}",self.route),"loading":self.loading||self.history_loading,"error":self.error,"client_error":self.client_error,"compose_error":self.compose_error,"draft":self.composer.draft(&scope).map(|d|d.text.text.as_str()).unwrap_or(""),"running":self.chat_running(),"active_text":self.conversation.view(&scope).map(|v|v.active_text.as_str()).unwrap_or(""),"messages":self.messages.iter().map(|m|serde_json::json!({"role":m.role,"content":m.content})).collect::<Vec<_>>(),"geometry":geometry,"native":native});
         if let Ok(bytes) = serde_json::to_vec(&snapshot) {
             let _ = crate::client::private_write(
                 &directory.join(format!("{}.json", lease.id().as_str())),
@@ -178,7 +178,7 @@ pub(crate) fn inspect_native_frame(runtime: &rune::Runtime<Viewer>) {
         .elements()
         .into_iter()
         .filter(|e| {
-            e.key.is_some()
+            e.key.is_some() || e.text.is_some() || e.focusable || e.role == "button"
                 || pointer.is_some_and(|(x, y)| {
                     let r = e.visible;
                     x >= r[0] && y >= r[1] && x < r[0] + r[2] && y < r[1] + r[3]
@@ -186,7 +186,7 @@ pub(crate) fn inspect_native_frame(runtime: &rune::Runtime<Viewer>) {
         })
         .map(|e| {
             serde_json::json!({
-                "key":e.key,"path":e.path,"rect":e.rect,"visible":e.visible,
+                "key":e.key,"path":e.path,"role":e.role,"label":e.label,"text":e.text,"parent":e.parent,"rect":e.rect,"visible":e.visible,
                 "focusable":e.focusable,"focused":e.focused,"inert":e.inert,
                 "exiting":e.exiting,"opacity":e.opacity,"hover":e.hover,"press":e.press,
             })

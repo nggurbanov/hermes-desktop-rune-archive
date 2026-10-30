@@ -25,6 +25,8 @@ const pointerActions = []
 let failure, stderr = '', phase = 'boot', child, wm, xvfb, bus, env, clipboardInputs = null
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms))
 const hash = bytes => createHash('sha256').update(bytes).digest('hex')
+const harnessSha = hash(fs.readFileSync(fileURLToPath(import.meta.url)))
+fs.copyFileSync(fileURLToPath(import.meta.url), path.join(out, 'harness.mjs'))
 const title = (id, profile) => id.endsWith('-bot') ? 'Bot Chat' : `${profile} notes`
 const catalog = {provider: 'fixture', model: 'fixture-model', providers: [{slug: 'fixture', name: 'Fixture provider', models: ['fixture-model'], authenticated: true}]}
 class FakeGateway {
@@ -107,6 +109,7 @@ class FakeGateway {
       const history = /^\/api\/sessions\/([^/]+)\/messages$/.exec(url.pathname)
       if (history) { const session = this.find(decodeURIComponent(history[1])); assert.equal(profile, session.profile); result = {profile, session_id: session.id, messages: session.rows} }
       else switch (url.pathname) {
+        case '/api/profiles': result = {profiles: this.profileRows(), active: 'research'}; break;
         case '/api/profiles/sessions/sidebar': result = {recents: {sessions: this.rows(profile)}, messaging: {sessions: []}, cron: {sessions: []}}; break
         case '/api/profiles/sessions': result = {sessions: profile === 'all' ? [...this.rows('research'), ...this.rows('archive')] : this.rows(profile)}; break
         case '/api/cron/jobs': result = {jobs: []}; break
@@ -183,18 +186,83 @@ function key(id, chord) { focus(id); input('key', '--clearmodifiers', chord) }
 function xPointer(window) {
   return JSON.parse(execFileSync('/usr/bin/python3', ['-c', `import ctypes as c,json,os,sys;x=c.CDLL('libX11.so.6');x.XOpenDisplay.restype=c.c_void_p;d=x.XOpenDisplay(os.environ['DISPLAY'].encode());x.XQueryPointer.argtypes=[c.c_void_p,c.c_ulong,c.POINTER(c.c_ulong),c.POINTER(c.c_ulong),c.POINTER(c.c_int),c.POINTER(c.c_int),c.POINTER(c.c_int),c.POINTER(c.c_int),c.POINTER(c.c_uint)];r,h=c.c_ulong(),c.c_ulong();rx,ry,wx,wy=c.c_int(),c.c_int(),c.c_int(),c.c_int();m=c.c_uint();ok=x.XQueryPointer(d,int(sys.argv[1]),c.byref(r),c.byref(h),c.byref(rx),c.byref(ry),c.byref(wx),c.byref(wy),c.byref(m));print(json.dumps(dict(ok=bool(ok),root=[rx.value,ry.value],local=[wx.value,wy.value],child=h.value,mask=m.value)))`, window], {env, encoding: 'utf8', timeout: 5000}))
 }
-function click(id, name, button = 1, textInset = null) {
-  const s = current(id), rect = s?.geometry?.[name]
-  assert.ok(rect, `No ${name} rect in ${JSON.stringify(s)}`)
-  const window = focus(id), g = geometry(window)
-  const x = g.X + rect[0] + (textInset ?? rect[2] / 2), y = g.Y + rect[1] + rect[3] / 2
+const profileNames = ['default', 'research', 'archive']
+function drawnFrame(id) { try { return JSON.parse(fs.readFileSync(path.join(inspection, 'frames', id + '.json'), 'utf8')) } catch { return null } }
+const presented = element => element && !element.exiting && !element.inert && element.opacity > 0.95 && element.visible[2] > 1 && element.visible[3] > 1
+function sessionKey(id, profile, stored) {
+  const snapshot = current(id)
+  const row = snapshot?.fleet?.sidebar_groups?.filter(group => group.source?.principal === snapshot.principal).flatMap(group => group.rows).find(row => row.profile === profile && (row.id === stored || row.root === stored))
+  const exact = row && `session-${row.key}`
+  if (exact && drawnFrame(id)?.elements.some(e => e.key === exact && !e.exiting)) return exact
+  return drawnFrame(id)?.elements.find(e => {
+    if (!e.key?.startsWith('session-[') || e.exiting) return false
+    try { const [source, owner, root] = JSON.parse(e.key.slice(8)); return source.principal === snapshot?.principal && owner === profile && root === stored } catch { return false }
+  })?.key
+}
+function resolvedKey(id, name) {
+  if (drawnFrame(id)?.elements.some(e => e.key === name && !e.exiting)) return name
+  for (const profile of profileNames) {
+    const prefix = `session-${profile}-`
+    if (name.startsWith(prefix)) return sessionKey(id, profile, name.slice(prefix.length)) ?? name
+  }
+  return name
+}
+async function profileDoor(id, profile, compact = false) {
+  if (presented(drawnFrame(id)?.elements.find(e => e.key === `profile-${profile}` && !e.exiting))) return `profile-${profile}`
+  if (!drawnFrame(id)?.elements.some(e => e.key === 'profile-picker' && !e.exiting)) {
+    await click(id, compact ? 'status-profile' : 'profile-picker-toggle')
+  }
+  return `pick-profile-${profile}`
+}
+async function reveal(id, name) {
+  const xid = focus(id)
+  await delay(300)
+  for (let attempt = 0; attempt < 28; attempt++) {
+    const key = resolvedKey(id, name)
+    const element = drawnFrame(id)?.elements.find(e => e.key === key && !e.exiting)
+    if (presented(element)) {
+      let stable = true, latest = element
+      for (let sample = 0; sample < 3; sample++) {
+        await delay(100)
+        const next = drawnFrame(id)?.elements.find(e => e.key === key && !e.exiting)
+        if (!presented(next) || next.visible.some((value, index) => Math.abs(value - latest.visible[index]) > 0.35)) { stable = false; break }
+        latest = next
+      }
+      if (stable) return {xid, element: latest, key}
+      continue
+    }
+    const enteringPicker = drawnFrame(id)?.elements.find(e => e.key === 'profile-picker' && !e.exiting)
+    const picker = presented(enteringPicker) ? enteringPicker : null
+    if ((enteringPicker && !picker) || (element && element.opacity < 0.95) || (!picker && !element && attempt < 4)) {
+      await delay(100); continue
+    }
+    const frame = geometry(xid), viewport = picker?.visible ?? [0, 100, 220, Math.max(100, frame.HEIGHT - 300)]
+    const direction = element && element.rect[1] < viewport[1] ? 4 : 5
+    input('mousemove', frame.X + viewport[0] + Math.min(100, viewport[2] / 2), frame.Y + viewport[1] + viewport[3] / 2, 'sleep', '0.05', 'click', '--repeat', '2', '--delay', '60', direction)
+    pointerActions.push({phase, id, name, resolved_key: key, scroll: direction, viewport})
+    await delay(150)
+  }
+  throw new Error(`Native control cannot be revealed: ${name}`)
+}
+async function click(id, name, button = 1, inset = null) {
+  if (profileNames.some(profile => name === `profile-${profile}`)) name = await profileDoor(id, name.slice(8))
+  const {xid, element, key} = await reveal(id, name)
+  const rect = element.visible, frame = geometry(xid)
+  const x = frame.X + rect[0] + (inset ?? rect[2] / 2), y = frame.Y + rect[1] + rect[3] / 2
+  assert.ok(rect[2] > 0 && rect[3] > 0 && x >= frame.X && x < frame.X + frame.WIDTH && y >= frame.Y && y < frame.Y + frame.HEIGHT, `${name} is outside its native viewport`)
   input('mousemove', x, y, 'sleep', '0.08')
-  const pointer = input('getmouselocation', '--shell'), xquery = args.includes('--xquery-pointer') ? xPointer(window) : null
-  pointerActions.push({phase, id, name, button, window, geometry: g, rect, pointer, xquery, hold_ms: 40})
+  const runtime = await wait(`native Runtime pointer agrees with X11 for ${name}`, () => {
+    const value = drawnFrame(id)
+    return value?.pointer && Math.abs(value.pointer[0] - (x - frame.X)) <= 2 && Math.abs(value.pointer[1] - (y - frame.Y)) <= 2 && value
+  }, 5000)
+  const hit = runtime.elements.find(item => item.key === key && !item.exiting)
+  assert.ok(presented(hit) && hit.visible.every((value, index) => Math.abs(value - rect[index]) <= 0.5), `Actual native target moved before click: ${name}`)
+  pointerActions.push({phase, id, xid, name, resolved_key: key, button, rect, drawn_rect: element.rect, pointer: input('getmouselocation', '--shell'), runtime_pointer: runtime.pointer, hold_ms: 40})
   input('mousedown', button, 'sleep', '0.04', 'mouseup', button)
+  await delay(120)
 }
 async function type(id, text, name = 'composer-input') {
-  click(id, name, 1, 12); await delay(100)
+  await click(id, name, 1, 12); await delay(100)
   const target = osWindow(id), focusedBefore = input('getwindowfocus').trim()
   assert.equal(focusedBefore, target, `Keyboard focus changed before typing ${name}`)
   input('key', '--clearmodifiers', 'ctrl+a'); await delay(50); input('type', '--clearmodifiers', '--delay', '2', '--', text); await delay(100)
@@ -216,7 +284,7 @@ async function capture(name, id) {
   screenshots.push({file: path.basename(target), sha256: hash(fs.readFileSync(target)), window: id})
 }
 function clipboard() { return execFileSync('/usr/bin/python3', ['-c', `import gi;gi.require_version('Gtk','3.0');from gi.repository import Gtk,Gdk;Gtk.init([]);print(Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).wait_for_text() or '',end='')`], {env, encoding: 'utf8', timeout: 5000}) }
-async function copyDraft(id) { click(id, 'composer-input', 1, 12); await delay(700); click(id, 'composer-input', 1, 12); await delay(250); input('key', '--clearmodifiers', 'ctrl+a'); await delay(250); input('key', '--clearmodifiers', 'ctrl+c'); await delay(250); return clipboard() }
+async function copyDraft(id) { await click(id, 'composer-input', 1, 12); await delay(700); await click(id, 'composer-input', 1, 12); await delay(250); input('key', '--clearmodifiers', 'ctrl+a'); await delay(250); input('key', '--clearmodifiers', 'ctrl+c'); await delay(250); return clipboard() }
 async function clipboardLoop(primary) {
   const count = Number(option('--clipboard-windows') ?? '2'), rounds = Number(option('--clipboard-rounds') ?? '3')
   const assertPointer = args.includes('--assert-pointer-sync')
@@ -225,7 +293,7 @@ async function clipboardLoop(primary) {
   await type(primary.id, windows[0].expected)
   if (count === 2) {
     key(primary.id, 'ctrl+shift+n')
-    const peer = await wait('copy-loop actual native peer', () => snapshots().find(s => s.id !== primary.id && s.native?.position && !s.loading && !s.error && s.geometry['composer-input'] && s.geometry['session-research-A-research-notes']))
+    const peer = await wait('copy-loop actual native peer', () => snapshots().find(s => s.id !== primary.id && s.native?.position && !s.loading && !s.error && s.geometry['composer-input'] && sessionKey(s.id, 'research', 'A-research-notes')))
     await delay(700); await type(peer.id, 'peer native send'); windows.push({id: peer.id, expected: 'peer native send'})
   }
   for (let round = 0; round < rounds; round++) for (const window of windows) {
@@ -236,9 +304,9 @@ async function clipboardLoop(primary) {
       samples.push({stage, at: Date.now(), snapshot: current(window.id), frame, os_pointer: assertPointer ? xPointer(osWindow(window.id)).local : null, os_focus: input('getwindowfocus').trim()})
     }
     sample('before')
-    click(window.id, 'composer-input', 1, 12)
+    await click(window.id, 'composer-input', 1, 12)
     await delay(700); sample('first-click')
-    click(window.id, 'composer-input', 1, 12)
+    await click(window.id, 'composer-input', 1, 12)
     await delay(250); sample('second-click')
     input('key', '--clearmodifiers', 'ctrl+a'); await delay(250); sample('select-all')
     input('key', '--clearmodifiers', 'ctrl+c'); await delay(250); sample('copy')
@@ -292,7 +360,7 @@ try {
   fs.writeFileSync(path.join(state, 'preferences.json'), JSON.stringify({theme: false, speak_replies: false, sidebar_open: true, inspector_open: false}))
   const traceArgs = args.includes('--native-trace') ? ['--native', '--trace', path.join(out, 'primary-native-trace.jsonl'), '--trace-all'] : []
   child = spawn(binary, ['--gateway', a.endpoint, '--profile', 'research', '--peer-window-proof-dir', inspection, ...traceArgs], {cwd: app, env, stdio: ['ignore', 'ignore', 'pipe']}); owned.push(child); child.stderr.on('data', bytes => stderr += bytes)
-  const primary = await wait('primary connected native window', () => snapshots().find(s => s.kind === 'primary_launch' && s.native?.position && s.profile === 'research' && s.principal && !s.loading && !s.error && s.geometry['composer-input'] && s.geometry['session-research-A-research-notes']))
+  const primary = await wait('primary connected native window', () => snapshots().find(s => s.kind === 'primary_launch' && s.native?.position && s.profile === 'research' && s.principal && !s.loading && !s.error && s.geometry['composer-input'] && sessionKey(s.id, 'research', 'A-research-notes')))
   await delay(700)
   if (args.includes('--clipboard-only')) {
     await clipboardLoop(primary)
@@ -301,7 +369,7 @@ try {
   phase = 'independent-drafts'
   await type(primary.id, 'primary native send')
   key(primary.id, 'ctrl+shift+n')
-  const peer = await wait('new complete peer', () => snapshots().find(s => s.id !== primary.id && s.native?.position && !s.loading && !s.error && s.geometry['composer-input'] && s.geometry['session-research-A-research-notes']))
+  const peer = await wait('new complete peer', () => snapshots().find(s => s.id !== primary.id && s.native?.position && !s.loading && !s.error && s.geometry['composer-input'] && sessionKey(s.id, 'research', 'A-research-notes')))
   await delay(700)
   assert.equal(visible().length, 2); assert.equal(peer.profile, 'research'); assert.equal(peer.principal, primary.principal); assert.notEqual(peer.editor, primary.editor); assert.notEqual(peer.source_epoch, primary.source_epoch)
   await type(peer.id, 'peer native send')
@@ -313,57 +381,59 @@ try {
     const primaryCopied = await copyDraft(primary.id), peerCopied = await copyDraft(peer.id)
     clipboardInputs = primaryCopied === 'primary native send' && peerCopied === 'peer native send'
     fs.writeFileSync(path.join(out, 'clipboard-diagnostic.json'), JSON.stringify({copied_both_native_inputs: clipboardInputs, primaryCopied, peerCopied}) + '\n')
+    assert.equal(primaryCopied, 'primary native send', 'Primary native Ctrl+A/C did not copy its exact input')
+    assert.equal(peerCopied, 'peer native send', 'Peer native Ctrl+A/C did not copy its exact input')
   }
   assert.equal(current(primary.id).draft, 'primary native send'); assert.equal(current(peer.id).draft, 'peer native send')
   await capture('peer-independent-draft-light', peer.id)
   phase = 'ordinary-settings'
-  click(peer.id, 'settings'); await wait('peer settings', () => current(peer.id)?.route === 'Settings'); await delay(3000); await capture('peer-settings-before-expose', peer.id)
+  await click(peer.id, 'settings'); await wait('peer settings', () => current(peer.id)?.route === 'Settings'); await delay(3000); await capture('peer-settings-before-expose', peer.id)
   const settingsWindow = osWindow(peer.id), settingsGeometry = geometry(settingsWindow)
   input('windowsize', settingsWindow, settingsGeometry.WIDTH + 1, settingsGeometry.HEIGHT + 1)
   await delay(700); assert.equal(current(peer.id)?.route, 'Settings'); await capture('peer-settings-light', peer.id)
   assert.equal(current(primary.id).route, 'Chat'); assert.equal(current(primary.id).draft, 'primary native send')
-  click(peer.id, 'page-back'); await wait('peer back to chat', () => current(peer.id)?.route === 'Chat' && current(peer.id).geometry['composer-input'])
+  await click(peer.id, 'page-back'); await wait('peer back to chat', () => current(peer.id)?.route === 'Chat' && current(peer.id).geometry['composer-input'])
   phase = 'concurrent-streams'
-  click(peer.id, 'composer-send')
+  await click(peer.id, 'composer-send')
   await wait('peer streamed text', () => current(peer.id)?.running && JSON.stringify(current(peer.id)).includes('STREAM peer native send'))
-  click(primary.id, 'composer-send')
+  await click(primary.id, 'composer-send')
   await wait('primary streamed text', () => current(primary.id)?.running && JSON.stringify(current(primary.id)).includes('STREAM primary native send'))
   assert.ok(!JSON.stringify(current(primary.id)).includes('STREAM peer native send')); assert.ok(!JSON.stringify(current(peer.id)).includes('STREAM primary native send'))
   const peerAdmission = a.admissions.find(x => x.text === 'peer native send'), primaryAdmission = a.admissions.find(x => x.text === 'primary native send')
   assert.ok(peerAdmission && primaryAdmission); assert.notEqual(peerAdmission.runtime, primaryAdmission.runtime)
   await capture('peer-streaming-light', peer.id); await capture('primary-streaming-light', primary.id)
-  click(peer.id, 'composer-stop'); await wait('owned peer stop', () => current(peer.id)?.running === false)
+  await click(peer.id, 'composer-stop'); await wait('owned peer stop', () => current(peer.id)?.running === false)
   assert.equal(current(primary.id).running, true)
   const interrupts = calls.filter(c => c.method === 'session.interrupt'); assert.equal(interrupts.length, 1); assert.equal(interrupts[0].params.session_id, peerAdmission.runtime)
-  click(primary.id, 'composer-stop'); await wait('primary stop', () => current(primary.id)?.running === false)
+  await click(primary.id, 'composer-stop'); await wait('primary stop', () => current(primary.id)?.running === false)
   phase = 'source-capture'
-  click(primary.id, 'change-connection'); await wait('connection form', () => current(primary.id)?.geometry['connection-url']); await delay(700)
-  await type(primary.id, b.endpoint, 'connection-url'); await type(primary.id, token, 'connection-token'); await capture('source-connection-form', primary.id); click(primary.id, 'connect-url')
+  await click(primary.id, 'change-connection'); await wait('connection form', () => current(primary.id)?.geometry['connection-url']); await delay(700)
+  await type(primary.id, b.endpoint, 'connection-url'); await type(primary.id, token, 'connection-token'); await capture('source-connection-form', primary.id); await click(primary.id, 'connect-url')
   await wait('primary new source', () => current(primary.id)?.principal && current(primary.id).principal !== peer.principal && !current(primary.id).loading && !current(primary.id).error && current(primary.id).geometry['composer-input'])
   assert.equal(current(peer.id).principal, peer.principal)
-  click(primary.id, 'profile-picker-toggle'); await wait('profile picker', () => current(primary.id)?.geometry['pick-profile-archive']); await delay(350); await capture('primary-profile-picker', primary.id); click(primary.id, 'pick-profile-archive')
+  await click(primary.id, 'profile-picker-toggle'); await wait('profile picker', () => current(primary.id)?.geometry['pick-profile-archive']); await delay(350); await capture('primary-profile-picker', primary.id); await click(primary.id, 'pick-profile-archive')
   await wait('archive profile', () => current(primary.id)?.profile === 'archive' && !current(primary.id).loading)
   key(primary.id, 'ctrl+shift+n')
   const peerB = await wait('captured source and profile peer', () => snapshots().find(s => ![primary.id, peer.id].includes(s.id) && s.native?.position && s.profile === 'archive' && s.principal === current(primary.id).principal && !s.loading && s.geometry['composer-input']))
   assert.equal(visible().length, 3); assert.equal(current(peer.id).profile, 'research'); assert.equal(current(peer.id).principal, peer.principal)
   assert.equal(current(peerB.id).dark, false)
-  click(peerB.id, 'theme-toggle'); await wait('actual dark theme', () => current(peerB.id)?.dark === true); await capture('captured-source-profile-peer-dark', peerB.id)
+  await click(peerB.id, 'theme-toggle'); await wait('actual dark theme', () => current(peerB.id)?.dark === true); await capture('captured-source-profile-peer-dark', peerB.id)
   phase = 'existing-session-window'
   const beforeSession = new Set(snapshots().map(s => s.id))
-  click(peer.id, 'session-research-A-research-notes', 3)
+  await click(peer.id, 'session-research-A-research-notes', 3)
   await wait('session context', () => current(peer.id)?.geometry['sidebar-session-actions-item6']); await delay(350)
-  click(peer.id, 'sidebar-session-actions-item6')
+  await click(peer.id, 'sidebar-session-actions-item6')
   const sessionWindow = await wait('existing-session native window', () => snapshots().find(s => !beforeSession.has(s.id) && s.kind === 'interactive_session' && s.profile === 'research' && s.session === 'A-research-notes' && !s.loading && !s.error))
   assert.equal(sessionWindow.principal, peer.principal); assert.equal(visible().length, 4)
   assert.ok(JSON.stringify(sessionWindow.messages).includes('A / research source history')); await capture('existing-session-window', sessionWindow.id)
-  click(peer.id, 'session-research-A-research-notes', 3); await wait('repeat context', () => current(peer.id)?.geometry['sidebar-session-actions-item6']); await delay(350); click(peer.id, 'sidebar-session-actions-item6')
+  await click(peer.id, 'session-research-A-research-notes', 3); await wait('repeat context', () => current(peer.id)?.geometry['sidebar-session-actions-item6']); await delay(350); await click(peer.id, 'sidebar-session-actions-item6')
   await delay(250); assert.equal(visible().length, 4, 'Reopening the same owned session duplicated its window')
   assert.equal(input('getwindowfocus').trim(), osWindow(sessionWindow.id), 'Reopening did not focus the existing session window')
   key(sessionWindow.id, 'ctrl+shift+w'); await wait('session window local close', () => windowRecords().records[sessionWindow.id]?.closed && visible().length === 3)
   phase = 'profile-pinned-window'
   const beforeBot = new Set(snapshots().map(s => s.id))
-  click(peerB.id, 'bots-tab'); await wait('bot roster', () => current(peerB.id)?.geometry['bot-research']); await delay(700); click(peerB.id, 'bot-research', 3)
-  await wait('bot context', () => current(peerB.id)?.geometry['conversation-actions-item2']); await delay(350); click(peerB.id, 'conversation-actions-item2')
+  await click(peerB.id, 'bots-tab'); await wait('bot roster', () => current(peerB.id)?.geometry['bot-research']); await delay(700); await click(peerB.id, 'bot-research', 3)
+  await wait('bot context', () => current(peerB.id)?.geometry['conversation-actions-item2']); await delay(350); await click(peerB.id, 'conversation-actions-item2')
   const profileWindow = await wait('profile-pinned Bot Chat window', () => snapshots().find(s => !beforeBot.has(s.id) && s.kind === 'profile_pinned' && s.profile === 'research' && s.session === 'B-research-bot' && !s.loading && !s.error))
   assert.equal(profileWindow.principal, peerB.principal); assert.equal(visible().length, 4)
   const pinned = windowRecords().records[profileWindow.id].pinned_route
@@ -377,10 +447,10 @@ try {
   phase = 'independent-native-lifetime'
   key(primary.id, 'ctrl+shift+w'); await wait('primary native close', () => windowRecords().records[primary.id]?.closed && visible().length === 2)
   assert.equal(child.exitCode, null)
-  await type(peer.id, 'surviving peer send'); click(peer.id, 'composer-send')
+  await type(peer.id, 'surviving peer send'); await click(peer.id, 'composer-send')
   await wait('peer works after primary close', () => current(peer.id)?.running && JSON.stringify(current(peer.id)).includes('STREAM surviving peer send'))
   assert.equal(a.admissions.filter(x => x.text === 'surviving peer send').length, 1); assert.equal(b.admissions.length, 0)
-  click(peer.id, 'composer-stop'); await wait('surviving stop', () => current(peer.id)?.running === false); await capture('peer-after-primary-close', peer.id)
+  await click(peer.id, 'composer-stop'); await wait('surviving stop', () => current(peer.id)?.running === false); await capture('peer-after-primary-close', peer.id)
   key(peerB.id, 'ctrl+shift+w'); await wait('local close retains last peer', () => windowRecords().records[peerB.id]?.closed && visible().length === 1); assert.equal(child.exitCode, null)
   key(peer.id, 'ctrl+q')
   // The normal app command is used; no process kill is acceptance evidence.
@@ -389,7 +459,7 @@ try {
   assert.equal(child.exitCode, 0, 'Global Quit did not close the application cleanly')
   assert.equal(visible().length, 0)
   assert.ok(!JSON.stringify(windowRecords()).includes(token), 'Credentials leaked into window persistence')
-  const result = {binary_sha256: hash(fs.readFileSync(binary)), actual_native_windows: true, same_process: true, complete_viewers: true, independent_editors: true, clipboard_inputs: clipboardInputs, persisted_inputs: true, settings: true, concurrent_streams: true, scoped_stop: true, captured_source_and_profile: true, existing_session_window: true, existing_session_window_reused: true, profile_pinned_bot_window: true, profile_pinned_new_session: true, light_and_dark: true, primary_close_keeps_peers: true, surviving_peer_interactive: true, local_close: true, global_quit: true, physical_audio_used: false, live_agents_used: false, rpc_methods: [...new Set(calls.map(c => c.method))], nativeBindings, screenshots}
+  const result = {binary_sha256: hash(fs.readFileSync(binary)), harness_sha256: harnessSha, actual_native_windows: true, same_process: true, complete_viewers: true, independent_editors: true, clipboard_inputs: clipboardInputs, persisted_inputs: true, settings: true, concurrent_streams: true, scoped_stop: true, captured_source_and_profile: true, existing_session_window: true, existing_session_window_reused: true, profile_pinned_bot_window: true, profile_pinned_new_session: true, light_and_dark: true, primary_close_keeps_peers: true, surviving_peer_interactive: true, local_close: true, global_quit: true, physical_audio_used: false, live_agents_used: false, rpc_methods: [...new Set(calls.map(c => c.method))], nativeBindings, screenshots}
   fs.writeFileSync(path.join(out, 'result.json'), JSON.stringify(result, null, 2) + '\n'); console.log(JSON.stringify(result))
   }
 } catch (error) {

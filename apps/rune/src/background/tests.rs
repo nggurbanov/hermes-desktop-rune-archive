@@ -1,4 +1,5 @@
 use super::*;
+use crate::gateway::Connection;
 use serde_json::json;
 fn scope() -> DraftScope {
     DraftScope {
@@ -7,11 +8,18 @@ fn scope() -> DraftScope {
         session: Some("stored-one".into()),
     }
 }
-fn connection() -> Connection {
-    Connection::Url {
-        endpoint: "http://127.0.0.1:1".into(),
-        token: None,
-    }
+fn connection() -> Binding {
+    source("http://127.0.0.1:1".into())
+}
+fn source(endpoint: String) -> Binding {
+    Binding::new(
+        Connection::Url {
+            endpoint,
+            token: None,
+        },
+        None,
+    )
+    .unwrap()
 }
 fn row(id: &str, status: &str, code: Option<i64>) -> Value {
     json!({"session_id":id,"status":status,"command":"npm run build\nignored second line","exit_code":code,"output_tail":"first\nsecond\nthird\nlast\n"})
@@ -297,14 +305,7 @@ fn real_process_worker_sends_owned_snapshot_and_confirmed_kill_to_controlled_web
     });
     let mut b = Background::new();
     b.init(std::sync::Arc::new(|| {}));
-    b.bind(
-        Connection::Url {
-            endpoint,
-            token: None,
-        },
-        scope(),
-        "runtime-one".into(),
-    );
+    b.bind(source(endpoint), scope(), "runtime-one".into());
     let deadline = Instant::now() + Duration::from_secs(4);
     while b.items(&scope()).is_empty() {
         b.poll(0., &scope(), true);
@@ -415,14 +416,7 @@ fn lost_kill_ack_keeps_the_row_and_later_snapshots_never_retry_the_write() {
     });
     let mut b = Background::new();
     b.init(std::sync::Arc::new(|| {}));
-    b.bind(
-        Connection::Url {
-            endpoint,
-            token: None,
-        },
-        scope(),
-        "runtime-one".into(),
-    );
+    b.bind(source(endpoint), scope(), "runtime-one".into());
     let deadline = Instant::now() + Duration::from_secs(4);
     while b.items(&scope()).is_empty() {
         b.poll(0., &scope(), true);
@@ -456,14 +450,7 @@ fn retired_connection_releases_rows_and_cancels_queued_source_io_without_stoppin
     listener.set_nonblocking(true).unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
     let mut b = Background::new();
-    b.bind(
-        Connection::Url {
-            endpoint,
-            token: None,
-        },
-        scope(),
-        "runtime-one".into(),
-    );
+    b.bind(source(endpoint), scope(), "runtime-one".into());
     reconcile(&mut b, vec![row("p", "running", None)], 0.);
     let (send, receive) = mpsc::sync_channel(32);
     b.send = Some(send);
@@ -483,4 +470,143 @@ fn retired_connection_releases_rows_and_cancels_queued_source_io_without_stoppin
         matches!(listener.accept(),Err(error)if error.kind()==std::io::ErrorKind::WouldBlock),
         "retired source must not receive a queued mutation"
     );
+}
+
+#[test]
+fn parked_source_reads_keep_their_gateway_and_process_owner_while_another_source_is_visible() {
+    use std::{
+        net::TcpListener,
+        thread,
+        time::{Duration, Instant},
+    };
+    fn peer(states: Vec<&'static str>) -> (String, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        listener.set_nonblocking(true).unwrap();
+        let join = thread::spawn(move || {
+            for state in states {
+                let deadline = Instant::now() + Duration::from_secs(4);
+                let stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(Instant::now() < deadline, "missing owned process read");
+                            thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(error) => panic!("{error}"),
+                    }
+                };
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut socket = tungstenite::accept(stream).unwrap();
+                let raw = socket.read().unwrap();
+                let request: Value = serde_json::from_str(raw.to_text().unwrap()).unwrap();
+                assert_eq!(request["method"], "process.list");
+                assert_eq!(request["params"]["profile"], "work");
+                assert_eq!(request["params"]["session_id"], "same-runtime");
+                let result = json!({"processes":[row("same-process",state,if state=="exited" {Some(0)} else {None})]});
+                socket
+                    .send(tungstenite::Message::Text(
+                        json!({"jsonrpc":"2.0","id":request["id"],"result":result})
+                            .to_string()
+                            .into(),
+                    ))
+                    .unwrap();
+            }
+        });
+        (endpoint, join)
+    }
+    let (a_endpoint, a_peer) = peer(vec!["running", "exited"]);
+    let (b_endpoint, b_peer) = peer(vec!["running"]);
+    let a = scope();
+    let b = DraftScope {
+        connection: 8,
+        ..a.clone()
+    };
+    let mut monitor = Background::new();
+    monitor.init(Arc::new(|| {}));
+    monitor.bind(source(a_endpoint), a.clone(), "same-runtime".into());
+    let deadline = Instant::now() + Duration::from_secs(4);
+    while monitor.items(&a).is_empty() {
+        monitor.poll(0., &a, true);
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(5));
+    }
+    monitor.bind(source(b_endpoint), b.clone(), "same-runtime".into());
+    monitor.retain_connections(&[a.connection, b.connection]);
+    while monitor.items(&b).is_empty() {
+        monitor.poll(1., &b, true);
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(monitor.items(&a)[0].state, State::Running);
+    monitor.trigger(&a, "same-runtime");
+    let mut finished = vec![];
+    while monitor.items(&a)[0].state == State::Running {
+        for update in monitor.poll(1., &b, true) {
+            if let Update::Finished { scope, .. } = update {
+                finished.push(scope);
+            }
+        }
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(finished, vec![a.clone()]);
+    assert_eq!(monitor.items(&b)[0].state, State::Running);
+    monitor.expanded = Some((a.clone(), "same-process".into()));
+    monitor.retain_connections(&[b.connection]);
+    assert!(monitor.items(&a).is_empty());
+    assert!(monitor.expanded.is_none());
+    assert_eq!(monitor.items(&b).len(), 1);
+    a_peer.join().unwrap();
+    b_peer.join().unwrap();
+}
+
+#[test]
+fn retaining_another_source_cancels_only_the_retired_queued_owner_and_ignores_its_receipt() {
+    let a = scope();
+    let b = DraftScope {
+        connection: 8,
+        ..a.clone()
+    };
+    let mut monitor = state();
+    monitor.bind(
+        source("http://127.0.0.1:2".into()),
+        b.clone(),
+        "runtime-two".into(),
+    );
+    let (send, receive) = mpsc::sync_channel(32);
+    monitor.send = Some(send);
+    monitor.poll(0., &b, true);
+    let requests = receive.try_iter().collect::<Vec<_>>();
+    assert_eq!(requests.len(), 2);
+    monitor.retain_connections(&[b.connection]);
+    for work in requests {
+        if work.scope == a {
+            assert!(!work.active.load(Ordering::Acquire));
+            let mut updates = vec![];
+            monitor.apply(
+                worker::Reply {
+                    scope: work.scope,
+                    runtime: work.runtime,
+                    generation: work.generation,
+                    id: work.id,
+                    action: work.action,
+                    result: Ok(json!({"processes":[row("late","running",None)]})),
+                },
+                1.,
+                &mut updates,
+            );
+            assert!(updates.is_empty());
+        } else {
+            assert!(work.active.load(Ordering::Acquire));
+            assert_eq!(
+                work.binding.stamp(),
+                source("http://127.0.0.1:2".into()).stamp()
+            );
+        }
+    }
+    assert!(monitor.items(&a).is_empty());
+    assert!(monitor.entries.contains_key(&b));
 }

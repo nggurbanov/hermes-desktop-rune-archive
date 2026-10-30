@@ -28,7 +28,9 @@ impl Core {
         }
         let key = (row.id.clone(), row.revision.clone());
         if let Some(lease) = self.leases.get(&key).and_then(Entry::acquire) {
-            return Ok(lease);
+            if !lease.passive_only() {
+                return Ok(lease);
+            }
         }
         self.leases.remove(&key);
         let token = row

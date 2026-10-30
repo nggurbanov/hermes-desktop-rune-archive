@@ -1,4 +1,5 @@
 //! Durable sidebar rows are different from a live runtime handle.
+use crate::source::{SessionOwner, SessionRef, SourceId, SourceStamp};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -11,6 +12,9 @@ pub struct SidebarSession {
     pub root_title: Option<String>,
     pub profile: Option<String>,
     pub connection_id: Option<String>,
+    /// Native fetch provenance. Agent JSON cannot grant a desktop source identity.
+    #[serde(skip)]
+    pub provenance: Option<SourceStamp>,
     pub source: Option<String>,
     pub started_at: f64,
     pub last_active: f64,
@@ -33,6 +37,8 @@ pub struct SidebarSession {
     pub _lineage_root_id: Option<String>,
     pub _lineage_ids: Option<Vec<String>>,
     pub _branched_from: Option<String>,
+    pub parent_session_id: Option<String>,
+    pub _reset_from: Option<String>,
     pub continuation_kind: Option<String>,
     pub scheduler_owned: Option<bool>,
     pub is_active: Option<bool>,
@@ -51,12 +57,45 @@ impl SidebarSession {
             .filter(|s| !s.is_empty())
             .unwrap_or("default")
     }
+    pub fn owner(&self) -> Option<SessionOwner> {
+        self.provenance
+            .clone()
+            .map(|source| SessionOwner::new(source, self.profile()))
+    }
+    pub fn session_ref(&self) -> Option<SessionRef> {
+        self.owner().map(|owner| owner.session(&self.id))
+    }
+    pub fn root_id(&self) -> &str {
+        self._lineage_root_id
+            .as_deref()
+            .filter(|id| !id.trim().is_empty())
+            .unwrap_or(&self.id)
+    }
+    pub fn alias_key(&self, id: &str) -> String {
+        match self.owner() {
+            Some(owner) => owner.row_key(id),
+            None => serde_json::json!([null, self.profile(), id]).to_string(),
+        }
+    }
+    pub fn fork_parent(&self) -> Option<&str> {
+        if self
+            ._reset_from
+            .as_deref()
+            .is_some_and(|id| !id.trim().is_empty())
+        {
+            return None;
+        }
+        self._branched_from
+            .as_deref()
+            .or(self.parent_session_id.as_deref())
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+    }
     pub fn key(&self) -> String {
-        format!(
-            "{}\0{}",
-            self.profile(),
-            self._lineage_root_id.as_deref().unwrap_or(&self.id)
-        )
+        if let Some(owner) = self.owner() {
+            return owner.row_key(self.root_id());
+        }
+        format!("{}\0{}", self.profile(), self.root_id())
     }
     pub fn recency(&self) -> f64 {
         if self.last_active > 0.0 {
@@ -108,6 +147,35 @@ pub fn parse_sessions(
         }
     }
     Ok(sessions)
+}
+
+pub(crate) fn source_tag_matches(tag: Option<&str>, source: &SourceStamp) -> bool {
+    match (
+        &source.version().id,
+        tag.map(str::trim).filter(|id| !id.is_empty()),
+    ) {
+        (_, None) => true,
+        (SourceId::Saved(id), Some(tag)) => id == tag,
+        _ => false,
+    }
+}
+
+/// Attribute rows to the verified transport, never to an untrusted connection_id tag.
+pub fn parse_sessions_owned(
+    value: &Value,
+    fallback_profile: &str,
+    source: &SourceStamp,
+) -> Result<Vec<SidebarSession>, String> {
+    let mut rows = parse_sessions(value, fallback_profile)?;
+    for row in &mut rows {
+        if !source_tag_matches(row.connection_id.as_deref(), source) {
+            return Err(
+                "The session list names a source different from its verified transport".into(),
+            );
+        }
+        row.provenance = Some(source.clone());
+    }
+    Ok(rows)
 }
 
 #[cfg(test)]

@@ -137,3 +137,33 @@ fn background_process_snapshot_is_cancellable_but_stop_remains_a_mutation() {
         .is_read_only()
     );
 }
+
+#[test]
+fn retired_live_session_reads_are_skipped_before_transport_and_session_writes_stay_mutations() {
+    let (send, receive) = mpsc::channel();
+    let mut network = PageNetwork {
+        send: Some(send),
+        ..Default::default()
+    };
+    network
+        .request(
+            &scope(1, "research"),
+            Connection::Url {
+                endpoint: "http://127.0.0.1:0".into(),
+                token: None,
+            },
+            "sidebar.live.research",
+            PageRequest::rpc("session.list", serde_json::json!({"scope":"live"})),
+        )
+        .unwrap();
+    network.invalidate_prefix("sidebar.live.");
+    let read = receive.recv().unwrap();
+    assert!(
+        read.run(|_| panic!("a retired read cannot emit gateway events"))
+            .is_none(),
+        "a retired live read must be skipped before opening its captured transport"
+    );
+    for method in ["session.delete", "session.rename", "session.send"] {
+        assert!(!PageRequest::rpc(method, serde_json::json!({})).is_read_only());
+    }
+}

@@ -240,6 +240,7 @@ impl Viewer {
             self.pin_window_source();
             self.window.boot_target = Some(WindowRoute {
                 session: None,
+                title: None,
                 canonical_bot: false,
                 ..route
             });

@@ -193,6 +193,7 @@ fn an_explicit_launch_profile_keeps_the_restored_source_without_its_old_conversa
         source: Some(source.clone()),
         profile: "archive".into(),
         session: Some("old-archive-chat".into()),
+        title: Some("Old archive title".into()),
         canonical_bot: false,
     });
     let target = s.window.boot_target.as_ref().unwrap();
@@ -200,6 +201,7 @@ fn an_explicit_launch_profile_keeps_the_restored_source_without_its_old_conversa
     assert_eq!(target.profile, "research");
     assert_eq!(target.source, Some(source));
     assert!(target.session.is_none());
+    assert!(target.title.is_none());
     assert!(!target.canonical_bot);
     s.window.boot_target = None;
     s.connection = Some(connection("explicit"));
@@ -224,4 +226,65 @@ fn an_ordinary_restored_launch_keeps_its_exact_profile_and_conversation() {
         s.window.boot_target.as_ref().unwrap().session.as_deref(),
         Some("stored")
     );
+}
+
+#[test]
+fn captured_session_title_survives_peer_bootstrap_and_window_record_restoration() {
+    let root = Workspace::new();
+    let mut opener = root.viewer("research", Some("same"));
+    let stamp =
+        crate::source::SourceStamp::from_connection(opener.connection.as_ref().unwrap()).unwrap();
+    opener
+        .open_bound_session_window(
+            crate::source::SessionOwner::new(stamp, "research").session("same"),
+            "Captured renamed conversation".into(),
+        )
+        .unwrap();
+    let requested = opener.window.requested.pop_front().unwrap();
+    assert_eq!(
+        requested.route.title.as_deref(),
+        Some("Captured renamed conversation")
+    );
+    let record = root
+        .store()
+        .mint_peer(requested.kind, requested.route)
+        .unwrap()
+        .record()
+        .clone();
+    let mut peer = root.viewer("research", None);
+    peer.status = "Connected".into();
+    peer.profiles = vec![Profile {
+        name: "research".into(),
+        label: "Research".into(),
+        description: String::new(),
+        canonical_session: None,
+    }];
+    peer.window.boot_target = Some(record.route);
+    let (send, requests) = mpsc::channel();
+    let (_, receive) = mpsc::channel();
+    peer.network = Some(Network { send, receive });
+    assert!(peer.apply_window_target());
+    assert_eq!(
+        peer.active_tab().unwrap().title,
+        "Captured renamed conversation"
+    );
+    assert_eq!(peer.selected_session.as_deref(), Some("same"));
+    assert!(
+        matches!(requests.recv().unwrap().command,Command::History(ref profile,ref session) if profile=="research" && session=="same")
+    );
+    peer.save_window_record(false).unwrap();
+    assert_eq!(
+        peer.window
+            .lease
+            .as_ref()
+            .unwrap()
+            .record()
+            .route
+            .title
+            .as_deref(),
+        Some("Captured renamed conversation")
+    );
+    let legacy: WindowRoute =
+        serde_json::from_value(serde_json::json!({"profile":"research","session":"old"})).unwrap();
+    assert!(legacy.title.is_none());
 }

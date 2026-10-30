@@ -84,7 +84,7 @@ impl SidebarState {
     }
 
     pub(super) fn save_preferences(&mut self, fields: &[&str]) {
-        if self.demo {
+        if self.demo || self.partition_preferences {
             return;
         }
         self.preferences_storage
@@ -97,6 +97,7 @@ impl SidebarState {
     /// preserved without preventing its window from closing.
     pub fn flush_storage(&mut self) -> Result<(), String> {
         if self.demo
+            || self.partition_preferences
             || (self.preferences_storage.touched.is_empty()
                 && self.prefs == self.preferences_storage.baseline)
         {

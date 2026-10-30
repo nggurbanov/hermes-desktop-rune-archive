@@ -5,10 +5,25 @@ impl Viewer {
     pub fn page_request(&mut self, operation: &str, request: PageRequest) {
         let error = if self.fixture {
             Some("Backend operations are disabled in synthetic scenes".into())
+        } else if self.connection.is_some() && !self.page_owner_ready() {
+            Some("Wait for the selected agent and profile to finish connecting".into())
         } else if let Some(connection) = self.connection.clone() {
-            self.page_network
-                .request(&self.composer_scope(), connection, operation, request)
-                .err()
+            let request = if request.connection.is_none()
+                && request.source_lease.is_none()
+                && matches!(connection, crate::gateway::Connection::Saved { .. })
+            {
+                self.current_source_binding()
+                    .and_then(|binding| binding.request(request))
+            } else {
+                Ok(request)
+            };
+            match request {
+                Ok(request) => self
+                    .page_network
+                    .request(&self.composer_scope(), connection, operation, request)
+                    .err(),
+                Err(error) => Some(error),
+            }
         } else {
             Some("Connect a Hermes gateway before using this page".into())
         };
@@ -38,6 +53,9 @@ impl Viewer {
         self.route = route;
         self.settings_local_navigation();
         self.composer.close();
+        self.reload_page_route(route);
+    }
+    fn reload_page_route(&mut self, route: Route) {
         if route != Route::Chat {
             if self.fixture {
                 match route {
@@ -53,7 +71,7 @@ impl Viewer {
                     Route::Artifacts => self.artifacts.fixture(),
                     _ => {}
                 }
-            } else {
+            } else if self.page_owner_ready() {
                 let requests = match route {
                     Route::CommandCenter => self.operations.load(),
                     Route::Settings => self.settings.load(),
@@ -137,75 +155,96 @@ impl Viewer {
 }
 
 impl Viewer {
+    pub(crate) fn page_connection_accepted(&self) -> bool {
+        self.connection.is_some()
+            && !self.loading
+            && self.page_accepted_owner.as_ref()
+                == Some(&(self.composer_scope().connection, self.profile.clone()))
+    }
+    fn page_owner_ready(&self) -> bool {
+        self.fixture
+            || (self.page_connection_accepted()
+                && self.page_loaded_owner.as_ref()
+                    == Some(&(self.composer_scope().connection, self.profile.clone())))
+    }
     pub fn ensure_page_owner(&mut self) -> bool {
         let owner = (self.composer_scope().connection, self.profile.clone());
-        if self.page_owner.as_ref() == Some(&owner) {
-            return false;
+        let changed = self.page_owner.as_ref() != Some(&owner);
+        if changed {
+            if let (Some((epoch, profile)), Some(connection)) =
+                (self.page_owner.clone(), self.page_connection.clone())
+            {
+                let scope = crate::composer::DraftScope {
+                    connection: epoch,
+                    profile: profile.clone(),
+                    session: None,
+                };
+                for (op, mut request) in self.settings.cancel_owned() {
+                    if request.profile.is_none() {
+                        request = request.profile(&profile);
+                    }
+                    if self
+                        .page_network
+                        .request(
+                            &scope,
+                            connection.clone(),
+                            &format!("cleanup.{op}"),
+                            request,
+                        )
+                        .is_err()
+                    {
+                        self.client_error =
+                            Some("The previous sign-in cleanup could not be queued".into());
+                    }
+                }
+            }
+            self.page_owner = Some(owner.clone());
+            self.page_loaded_owner = None;
+            self.page_connection = self.connection.clone();
+            self.page_network.invalidate();
+            self.settings = crate::pages::settings::Settings::new();
+            self.files.reset();
+            self.restore_profile_appearance();
+            self.review.reset();
+            self.review.hydrate_preferences(&self.review_preferences);
+            self.tool_owner = None;
+            self.operations.reset();
+            self.chrome.reset();
+            self.workspace_menu = false;
+            self.directories = Default::default();
+            self.health_open = false;
+            self.bots.reset();
+            self.bots_revision = 0;
+            self.capabilities = crate::pages::capabilities::Capabilities::new();
+            self.cron = crate::pages::cron::Cron::new();
+            self.messaging.reset();
+            self.artifacts.reset();
+            self.sidebar_state.reset_data();
+            if let Some(connection) = &self.connection {
+                self.sidebar_state
+                    .bind_connection(connection, self.composer_scope().connection);
+                if !self.fixture && self.draft_storage_available {
+                    if let Err(error) = self
+                        .composer
+                        .bind_storage(connection, self.composer_scope().connection)
+                    {
+                        self.client_error = Some(error);
+                    }
+                }
+            }
+            if self.fixture {
+                self.chrome.fixture();
+                self.seed_sidebar_fixture();
+                self.page_loaded_owner = Some(owner.clone());
+            }
         }
-        if let (Some((epoch, profile)), Some(connection)) =
-            (self.page_owner.clone(), self.page_connection.clone())
+        // Installing a route does not prove that the agent still serves its profile.
+        // The foreground worker's correlated receipt enables the deferred reads.
+        if !self.fixture
+            && self.page_connection_accepted()
+            && self.page_loaded_owner.as_ref() != Some(&owner)
         {
-            let scope = crate::composer::DraftScope {
-                connection: epoch,
-                profile: profile.clone(),
-                session: None,
-            };
-            for (op, mut request) in self.settings.cancel_owned() {
-                if request.profile.is_none() {
-                    request = request.profile(&profile);
-                }
-                if self
-                    .page_network
-                    .request(
-                        &scope,
-                        connection.clone(),
-                        &format!("cleanup.{op}"),
-                        request,
-                    )
-                    .is_err()
-                {
-                    self.client_error =
-                        Some("The previous sign-in cleanup could not be queued".into());
-                }
-            }
-        }
-        self.page_owner = Some(owner);
-        self.page_connection = self.connection.clone();
-        self.page_network.invalidate();
-        self.settings = crate::pages::settings::Settings::new();
-        self.files.reset();
-        self.restore_profile_appearance();
-        self.review.reset();
-        self.review.hydrate_preferences(&self.review_preferences);
-        self.tool_owner = None;
-        self.operations.reset();
-        self.chrome.reset();
-        self.workspace_menu = false;
-        self.directories = Default::default();
-        self.health_open = false;
-        self.bots.reset();
-        self.bots_revision = 0;
-        self.capabilities = crate::pages::capabilities::Capabilities::new();
-        self.cron = crate::pages::cron::Cron::new();
-        self.messaging.reset();
-        self.artifacts.reset();
-        self.sidebar_state.reset_data();
-        if let Some(connection) = &self.connection {
-            self.sidebar_state
-                .bind_connection(connection, self.composer_scope().connection);
-            if !self.fixture && self.draft_storage_available {
-                if let Err(error) = self
-                    .composer
-                    .bind_storage(connection, self.composer_scope().connection)
-                {
-                    self.client_error = Some(error);
-                }
-            }
-        }
-        if self.fixture {
-            self.chrome.fixture();
-            self.seed_sidebar_fixture();
-        } else if self.connection.is_some() {
+            self.page_loaded_owner = Some(owner);
             let effects = self.client_settings.bind(self.composer_scope());
             self.page_requests(effects);
             let effects = self.identities.bind(self.composer_scope().connection);
@@ -216,13 +255,14 @@ impl Viewer {
             self.page_requests(effects);
             let effects = self.sidebar_state.load(&self.profile);
             self.page_requests(effects);
+            return true;
         }
-        true
+        changed
     }
     pub fn poll_pages(&mut self, now: f64) -> bool {
         let mut changed = self.ensure_page_owner();
         if changed && self.route != Route::Chat {
-            self.open_route(self.route);
+            self.reload_page_route(self.route);
         }
         let replies = self.page_network.poll(&self.composer_scope());
         changed |= !replies.is_empty();
@@ -234,7 +274,7 @@ impl Viewer {
             };
             self.apply_page_result(&operation, reply.result);
         }
-        if !self.fixture {
+        if !self.fixture && self.page_owner_ready() {
             if self.connection.is_some() {
                 let effects = self.client_settings.poll(now);
                 changed |= !effects.is_empty();
@@ -326,5 +366,290 @@ impl Viewer {
                 .sidebar_state
                 .apply("sidebar.recents", Ok(serde_json::json!({"sessions":rows})));
         }
+    }
+}
+
+#[cfg(test)]
+mod readiness_tests {
+    use super::*;
+    use crate::app::{Profile, Reply, Update};
+    use std::{
+        io::{BufRead, BufReader, Write},
+        net::{TcpListener, TcpStream},
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, Ordering},
+        },
+        thread,
+        time::{Duration, Instant},
+    };
+
+    struct Wire {
+        endpoint: String,
+        calls: Arc<Mutex<Vec<String>>>,
+        stop: Arc<AtomicBool>,
+        worker: Option<thread::JoinHandle<()>>,
+        directory: std::path::PathBuf,
+    }
+    impl Wire {
+        fn new() -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let endpoint = format!("http://{}", listener.local_addr().unwrap());
+            let calls = Arc::new(Mutex::new(vec![]));
+            let stop = Arc::new(AtomicBool::new(false));
+            let recorded = calls.clone();
+            let stopping = stop.clone();
+            let worker = thread::spawn(move || {
+                let mut workers = vec![];
+                while !stopping.load(Ordering::Acquire) {
+                    match listener.accept() {
+                        Ok((stream, _)) => {
+                            let recorded = recorded.clone();
+                            workers.push(thread::spawn(move || serve(stream, recorded)));
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            thread::sleep(Duration::from_millis(2))
+                        }
+                        Err(error) => panic!("private page fixture: {error}"),
+                    }
+                }
+                for worker in workers {
+                    worker.join().unwrap();
+                }
+            });
+            Self {
+                endpoint,
+                calls,
+                stop,
+                worker: Some(worker),
+                directory: std::env::temp_dir()
+                    .join(format!("hermes-page-ready-{}", uuid::Uuid::new_v4())),
+            }
+        }
+        fn viewer(&self) -> Viewer {
+            let mut s = Viewer::empty();
+            s.fixture = false;
+            s.connection = Some(crate::gateway::Connection::Url {
+                endpoint: self.endpoint.clone(),
+                token: None,
+            });
+            s.connection_epoch = 42;
+            s.profile = "research".into();
+            s.status = "Connecting…".into();
+            s.loading = true;
+            s.draft_storage_available = false;
+            s.sidebar_state.bind_connection_at(
+                s.connection.as_ref().unwrap(),
+                42,
+                self.directory.clone(),
+            );
+            s.page_network.init(Arc::new(|| {}));
+            s
+        }
+        fn calls(&self) -> Vec<String> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+    impl Drop for Wire {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::Release);
+            let result = self.worker.take().unwrap().join();
+            if !thread::panicking() {
+                result.unwrap();
+            }
+            let _ = std::fs::remove_dir_all(&self.directory);
+        }
+    }
+    fn serve(mut stream: TcpStream, calls: Arc<Mutex<Vec<String>>>) {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut buffer = [0; 1024];
+        let size = stream.peek(&mut buffer).unwrap();
+        if String::from_utf8_lossy(&buffer[..size]).contains("Upgrade: websocket") {
+            let Ok(mut socket) = tungstenite::accept(stream) else {
+                return;
+            };
+            if let Ok(tungstenite::Message::Text(text)) = socket.read() {
+                let frame: Value = serde_json::from_str(text.as_ref()).unwrap();
+                let method = frame["method"].as_str().unwrap();
+                assert_eq!(frame["params"]["profile"], "research");
+                calls.lock().unwrap().push(format!("RPC {method}"));
+                let result = match method {
+                    "profiles.list" => serde_json::json!({"profiles":[]}),
+                    "config.get" => serde_json::json!({"value":"smart"}),
+                    "session.list" => {
+                        assert_eq!(frame["params"]["scope"], "live");
+                        serde_json::json!({"sessions":[]})
+                    }
+                    "setup.status" | "setup.runtime_check" => {
+                        serde_json::json!({"ok":true,"ready":true})
+                    }
+                    _ => panic!("unexpected page RPC {method}"),
+                };
+                let _ = socket.send(tungstenite::Message::Text(
+                    serde_json::json!({"jsonrpc":"2.0","id":frame["id"],"result":result})
+                        .to_string()
+                        .into(),
+                ));
+            }
+            return;
+        }
+        let mut reader = BufReader::new(&mut stream);
+        let mut first = String::new();
+        reader.read_line(&mut first).unwrap();
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            if line == "\r\n" || line.is_empty() {
+                break;
+            }
+        }
+        let target = first.split_whitespace().nth(1).unwrap();
+        assert!(first.starts_with("GET "));
+        let url = url::Url::parse(&format!("http://fixture{target}")).unwrap();
+        assert_eq!(
+            url.query_pairs()
+                .find(|(key, _)| key == "profile")
+                .unwrap()
+                .1,
+            "research"
+        );
+        calls.lock().unwrap().push(format!("GET {}", url.path()));
+        let result = match url.path() {
+            "/api/config" => serde_json::json!({"config":{"approvals":{"mode":"smart"}}}),
+            "/api/status" => serde_json::json!({"running":true,"ready":true}),
+            "/api/profiles/sessions/sidebar" => serde_json::json!({"recents":{"sessions":[{"id":"notes","profile":"research","title":"Verified profile notes","source":"desktop","message_count":1}]},"messaging":{"sessions":[]},"cron":{"sessions":[]}}),
+            "/api/cron/jobs" => serde_json::json!({"jobs":[]}),
+            "/api/cron/blueprints" => serde_json::json!({"blueprints":[]}),
+            "/api/cron/delivery-targets" => serde_json::json!({"targets":[]}),
+            "/api/model/options" => serde_json::json!({"provider":"fixture","model":"fixture-model","providers":[]}),
+            _ => panic!("unexpected page path {}", url.path()),
+        }.to_string();
+        write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{result}",result.len()).unwrap();
+    }
+    fn accepted(s: &mut Viewer) {
+        s.apply(Reply {
+            intent: s.intent,
+            result: Ok(Update::Connected {
+                profiles: vec![Profile {
+                    name: "research".into(),
+                    label: "Research".into(),
+                    description: String::new(),
+                    canonical_session: None,
+                }],
+                profile: "research".into(),
+                sessions: vec![],
+            }),
+        });
+    }
+    #[test]
+    fn connecting_owner_defers_wire_reads_and_initializes_same_owner_after_acceptance() {
+        let wire = Wire::new();
+        let mut s = wire.viewer();
+        s.open_route(Route::Cron);
+        for now in [1., 20., 60.] {
+            s.poll_pages(now);
+        }
+        thread::sleep(Duration::from_millis(150));
+        assert!(
+            wire.calls().is_empty(),
+            "Unaccepted source/profile reached page wire: {:?}",
+            wire.calls()
+        );
+        assert_eq!(s.page_owner, Some((42, "research".into())));
+        accepted(&mut s);
+        let until = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < until {
+            s.poll_pages(61.);
+            if s.sidebar_state.find("research", "notes").is_some()
+                && wire.calls().contains(&"RPC session.list".into())
+                && wire.calls().contains(&"GET /api/model/options".into())
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            s.sidebar_state.find("research", "notes").is_some(),
+            "Same owner never initialized after accepted receipt: {:?}",
+            wire.calls()
+        );
+        assert!(wire.calls().contains(&"GET /api/config".into()));
+        assert!(wire.calls().contains(&"RPC session.list".into()));
+        assert!(s.route == Route::Cron);
+        assert!(
+            wire.calls().contains(&"GET /api/model/options".into()),
+            "Deferred current route did not load after acceptance"
+        );
+        let count = wire
+            .calls()
+            .iter()
+            .filter(|path| path.as_str() == "GET /api/config")
+            .count();
+        s.history_loading = true;
+        for _ in 0..5 {
+            s.poll_pages(61.);
+        }
+        thread::sleep(Duration::from_millis(50));
+        assert_eq!(
+            wire.calls()
+                .iter()
+                .filter(|path| path.as_str() == "GET /api/config")
+                .count(),
+            count,
+            "Accepted owner initialized more than once"
+        );
+        // A history failure does not revoke an already accepted agent/profile.
+        s.apply(Reply {
+            intent: s.intent,
+            result: Err("History is temporarily unavailable".into()),
+        });
+        s.page_request("client-display.config", PageRequest::get("/api/config"));
+        let until = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < until
+            && wire
+                .calls()
+                .iter()
+                .filter(|path| path.as_str() == "GET /api/config")
+                .count()
+                == count
+        {
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(
+            wire.calls()
+                .iter()
+                .filter(|path| path.as_str() == "GET /api/config")
+                .count(),
+            count + 1,
+            "History error blocked the accepted owner's settings"
+        );
+    }
+    #[test]
+    fn rejected_exact_owner_blocks_automatic_and_explicit_page_wire() {
+        let wire = Wire::new();
+        let mut s = wire.viewer();
+        s.apply(Reply {
+            intent: s.intent,
+            result: Err("The requested profile is no longer served by this agent".into()),
+        });
+        s.open_route(Route::Cron);
+        for now in [1., 20., 60.] {
+            s.poll_pages(now);
+        }
+        s.page_request("client-display.config", PageRequest::get("/api/config"));
+        thread::sleep(Duration::from_millis(150));
+        assert!(
+            wire.calls().is_empty(),
+            "Rejected exact source/profile reached page wire: {:?}",
+            wire.calls()
+        );
+        assert_eq!(
+            s.error.as_deref(),
+            Some("The requested profile is no longer served by this agent")
+        );
+        assert!(s.sidebar_state.find("research", "notes").is_none());
     }
 }

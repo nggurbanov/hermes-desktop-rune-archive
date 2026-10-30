@@ -18,8 +18,10 @@ const out = path.resolve(option('--out') ?? fs.mkdtempSync(path.join(os.tmpdir()
 fs.mkdirSync(out, {recursive: true})
 const token = 'private-audio-navigation-fixture'
 const reads = [], calls = [], sockets = new Set()
-let failure, activeCase = '', count = 0
+let failure, activeCase = '', count = 0, renderCount = 0
 const sha = value => createHash('sha256').update(value).digest('hex')
+const harnessSha = sha(fs.readFileSync(fileURLToPath(import.meta.url)))
+fs.copyFileSync(fileURLToPath(import.meta.url), path.join(out, 'harness.mjs'))
 const tap = (key, t) => ({type: 'tap', key, t, hold: .02})
 const get = (tree, key) => tree.elements.find(e => e.key === key && !e.exiting)
 const has = (tree, value) => tree.elements.some(e => e.text === value && !e.exiting)
@@ -69,6 +71,7 @@ const http = createServer((request, response) => {
     }
     assert.equal(request.method, 'GET')
     const route = url.pathname
+    if (route === '/api/profiles') return json(response, profiles)
     if (route === '/api/profiles/sessions/sidebar') return json(response, {recents: {sessions: [researchSession]}, messaging: {sessions: []}, cron: {sessions: []}})
     if (route === '/api/profiles/sessions') { assert.equal(profile, 'all'); return json(response, {sessions: [archiveSession]}) }
     if (route === '/api/cron/jobs') return json(response, {jobs: []})
@@ -122,7 +125,7 @@ ws.on('connection', (socket, request) => {
 await new Promise(resolve => http.listen(0, '127.0.0.1', resolve))
 const endpoint = `http://127.0.0.1:${http.address().port}`
 const group = (id, panes) => ({type: 'group', id, panes, active: panes[0]})
-async function render(name, events, {theme = 'light', size = '1440x900', filesVisible = false, at = 4.4} = {}) {
+async function render(name, events, {theme = 'light', size = '1440x900', filesVisible = false, at = 4.4, countCase = true} = {}) {
   activeCase = name
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-audio-navigation-home-'))
   const state = path.join(home, 'state', 'hermes-desktop-rune'); fs.mkdirSync(state, {recursive: true})
@@ -144,13 +147,11 @@ async function render(name, events, {theme = 'light', size = '1440x900', filesVi
     if (failure) throw failure
     assert.equal(timedOut, false, name + ' timed out')
     assert.equal(child.exitCode, 0, name + ': ' + stderr.slice(-2500))
-    count++
+    renderCount++
+    if (countCase) count++
     return JSON.parse(fs.readFileSync(tree, 'utf8'))
   } finally { clearTimeout(timer); if (child.exitCode == null) child.kill('SIGTERM'); fs.rmSync(home, {recursive: true, force: true}) }
 }
-const boot = [tap('reconnect', .2), tap('session-research-audio-session', 1.2)]
-const fileOpen = [...boot, tap('file-row-%2Ffixture%2Fvoice.wav', 2.4)]
-const transcriptOpen = [...boot, tap('row-11-part-0', 2.4)]
 function paused(tree, label, duration, owner = 'research · audio-session') {
   assert.ok(get(tree, 'native-audio-preview'), 'The actual workspace did not mount the production audio player')
   assert.equal(get(tree, 'audio-state')?.text, 'Paused')
@@ -160,6 +161,24 @@ function paused(tree, label, duration, owner = 'research · audio-session') {
   assert.ok(get(tree, 'audio-play-pause') && get(tree, 'audio-close'))
 }
 try {
+  const discovery = await render('boot-source-discovery', [tap('reconnect', .2)], {filesVisible: true, countCase: false})
+  // This isolated CLI fixture has exactly one authenticated URL source. Validate
+  // its ordinary client principal, then use the actual rendered key verbatim.
+  const expectedPrincipal = sha(`url:${new URL(endpoint).toString()}\0${token}`)
+  const rows = discovery.elements.filter(element => {
+    if (element.exiting || !element.key?.startsWith('session-[')) return false
+    let identity
+    try { identity = JSON.parse(element.key.slice('session-'.length)) } catch { return false }
+    const [source, profile, lineage] = identity
+    return source?.principal === expectedPrincipal && source.version?.id?.kind === 'direct' && source.version.id.id === expectedPrincipal && source.version.revision === expectedPrincipal && profile === 'research' && lineage === 'audio-session'
+  })
+  assert.equal(rows.length, 1, 'Discovery did not find one exact fixture-source Research/audio-session row')
+  assert.ok(discovery.elements.some(element => !element.exiting && element.path.startsWith(rows[0].path) && element.text === 'Field notes'), 'The captured source-qualified row is not the actual Field notes conversation')
+  const sourceRow = {key: rows[0].key, identity: JSON.parse(rows[0].key.slice('session-'.length)), title: 'Field notes'}
+  fs.writeFileSync(path.join(out, 'source-discovery.json'), JSON.stringify(sourceRow, null, 2) + '\n')
+  const boot = [tap('reconnect', .2), tap(sourceRow.key, 1.2)]
+  const fileOpen = [...boot, tap('file-row-%2Ffixture%2Fvoice.wav', 2.4)]
+  const transcriptOpen = [...boot, tap('row-11-part-0', 2.4)]
   for (const theme of ['light', 'dark']) {
     const tree = await render('files-audio-' + theme, fileOpen, {theme, filesVisible: true})
     paused(tree, 'voice.wav', '0:08')
@@ -195,7 +214,7 @@ try {
   assert.ok(!get(retired, 'native-audio-preview'), 'Changing the source incarnation retained the old player')
   assert.ok(!get(retired, 'connection-form'), 'The fresh scoped connection did not settle')
   assert.ok(reads.some(r => r.query.path === '/fixture/archive.wav' && r.query.profile === 'archive' && r.query.session_id === 'archive-audio'))
-  const result = {binary_sha256: sha(fs.readFileSync(binary)), native_rune_viewer: true, cases: count, actual_navigation: ['Files', 'transcript', 'Artifacts'], cross_profile_artifact_owner: true, return_selection: true, replacement: true, source_retirement: true, themes: true, short_window: true, play_clicked: false, physical_audio_used: false, rpc_methods: [...new Set(calls.map(c => c.method))], screenshots: out}
+  const result = {binary_sha256: sha(fs.readFileSync(binary)), harness_sha256: harnessSha, native_rune_viewer: true, cases: count, renders: renderCount, auxiliary_discovery_renders: renderCount - count, source_row: sourceRow, actual_navigation: ['Files', 'transcript', 'Artifacts'], cross_profile_artifact_owner: true, return_selection: true, replacement: true, source_retirement: true, themes: true, short_window: true, play_clicked: false, physical_audio_used: false, rpc_methods: [...new Set(calls.map(c => c.method))], screenshots: out}
   fs.writeFileSync(path.join(out, 'result.json'), JSON.stringify(result, null, 2) + '\n')
   console.log(JSON.stringify(result))
 } finally {

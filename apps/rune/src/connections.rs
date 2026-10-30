@@ -9,6 +9,7 @@ use std::{
 };
 mod core;
 mod leases;
+pub(crate) mod passive;
 pub use leases::{Lease, LeaseGuard, Resolver};
 pub(crate) mod plugin;
 mod ssh;
@@ -293,6 +294,19 @@ enum Outcome {
     Lost(String, String, String),
 }
 enum Work {
+    RetainPassive {
+        version: crate::source::SourceVersion,
+        connection: Connection,
+        reply: Sender<Result<Lease, String>>,
+    },
+    Passive {
+        version: crate::source::SourceVersion,
+        reply: Sender<Result<passive::Plan, String>>,
+    },
+    ValidatePassive {
+        version: crate::source::SourceVersion,
+        reply: Sender<Result<(), String>>,
+    },
     Ui(Request),
     Observe,
     Maintain(Command),

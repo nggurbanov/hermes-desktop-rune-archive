@@ -11,6 +11,31 @@ pub(super) fn run(
     let mut next_registry_read = std::time::Instant::now() + std::time::Duration::from_secs(1);
     loop {
         match requests.recv_timeout(std::time::Duration::from_millis(200)) {
+            Ok(Work::RetainPassive {
+                version,
+                connection,
+                reply,
+            }) => {
+                let result = match &mut state {
+                    Ok(core) => core.retain_passive(&version, connection),
+                    Err(error) => Err(error.clone()),
+                };
+                let _ = reply.send(result);
+            }
+            Ok(Work::Passive { version, reply }) => {
+                let result = match &mut state {
+                    Ok(core) => core.passive_plan(&version),
+                    Err(error) => Err(error.clone()),
+                };
+                let _ = reply.send(result);
+            }
+            Ok(Work::ValidatePassive { version, reply }) => {
+                let result = match &mut state {
+                    Ok(core) => core.validate_passive(&version),
+                    Err(error) => Err(error.clone()),
+                };
+                let _ = reply.send(result);
+            }
             Ok(Work::Ui(request)) => {
                 let result = match &mut state {
                     Ok(core) => core.execute(request.command),

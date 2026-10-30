@@ -20,6 +20,7 @@ pub(crate) mod conversation;
 mod local;
 mod pages;
 pub(crate) mod plugin;
+pub(crate) mod roster;
 pub(crate) mod sidebar;
 pub(crate) mod stream;
 pub(crate) mod terminal;

@@ -39,6 +39,7 @@ pub(super) struct Owner {
 enum Reason {
     NewSession,
     Initial,
+    Fleet,
 }
 struct Pending {
     id: u64,
@@ -46,6 +47,7 @@ struct Pending {
     owner: Owner,
     reason: Reason,
     stage: Stage,
+    destination: Option<super::fleet::Destination>,
 }
 enum Stage {
     Registry,
@@ -84,6 +86,7 @@ impl Viewer {
     }
     pub(crate) fn cancel_device_route(&mut self) {
         self.cancel_window_fresh();
+        self.cancel_fleet_destination();
         self.routing.pending = None;
         self.routing.waiting_initial = false;
         self.routing.initial_considered = true;
@@ -356,6 +359,16 @@ impl Viewer {
             });
             Stage::Direct(receive)
         };
+        self.queue_route_stage(target, reason, stage, None);
+        Ok(())
+    }
+    fn queue_route_stage(
+        &mut self,
+        target: Route,
+        reason: Reason,
+        stage: Stage,
+        destination: Option<super::fleet::Destination>,
+    ) {
         self.routing.sequence = self.routing.sequence.wrapping_add(1);
         let pending = Pending {
             id: self.routing.sequence,
@@ -363,11 +376,83 @@ impl Viewer {
             owner: self.route_owner(),
             reason,
             stage,
+            destination,
         };
         let notice = format!("Opening {}…", pending.target.profile);
         self.routing.notice = Some(notice.clone());
         self.client_notice = Some(notice);
         self.routing.pending = Some(pending);
+    }
+    pub(super) fn queue_fleet_route(
+        &mut self,
+        version: crate::source::SourceVersion,
+        profile: String,
+        destination: super::fleet::Destination,
+    ) -> Result<(), String> {
+        use crate::source::SourceId;
+        if matches!(&version.id, SourceId::Direct(_)) {
+            if !self.allow_owner_change("") {
+                return Err(
+                    "Finish the pending workspace change before opening this source".into(),
+                );
+            }
+            let binding = self
+                .fleet
+                .binding(&version)
+                .ok_or("The captured direct source is no longer retained")?;
+            binding.validate()?;
+            if binding.stamp().version() != &version {
+                return Err("The retained source does not match the clicked route".into());
+            }
+            let target = Route::new(None, profile.clone())?;
+            let (send, receive) = mpsc::channel();
+            std::thread::spawn(move || {
+                let result = (|| {
+                    binding.validate()?;
+                    let mut gateway = Gateway::connect(binding.connection())?;
+                    if !gateway.profiles()?.iter().any(|p| p.name == profile) {
+                        return Err(
+                            "The requested profile is no longer served by its captured source"
+                                .into(),
+                        );
+                    }
+                    binding.validate()?;
+                    Ok(binding.connection().clone())
+                })();
+                let _ = send.send(result);
+            });
+            self.queue_route_stage(
+                target,
+                Reason::Fleet,
+                Stage::Direct(receive),
+                Some(destination),
+            );
+            return Ok(());
+        }
+        let SourceId::Saved(id) = &version.id else {
+            return Err(
+                "This legacy source must be resolved through its own routing configuration".into(),
+            );
+        };
+        if !self.connections.registry_loaded() {
+            return Err("Saved sources have not loaded yet; refresh the fleet".into());
+        }
+        if !self
+            .connections
+            .rows
+            .iter()
+            .any(|row| &row.id == id && row.revision == version.revision)
+        {
+            return Err(
+                "The clicked source changed or was removed; refresh before opening it".into(),
+            );
+        }
+        self.queue_default_route(Route::new(Some(id.clone()), profile)?, Reason::Fleet)?;
+        self.routing
+            .pending
+            .as_mut()
+            .expect("a queued route owns its pending request")
+            .destination = Some(destination);
         Ok(())
     }
     fn resolve_saved_default(&self, target: &Route) -> Result<Stage, String> {
@@ -392,8 +477,14 @@ impl Viewer {
             self.connections.rows.iter().find(|row| &row.id == id)
         }
         .ok_or("The default profile's saved source is unavailable")?;
+        let version = crate::source::SourceVersion {
+            id: crate::source::SourceId::Saved(row.id.clone()),
+            revision: row.revision.clone(),
+        };
         let resolver = self
-            .window_route_resolver(&row.id, &row.revision)
+            .captured_fleet_binding(&version, None)
+            .and_then(|binding| binding.resolver().cloned())
+            .or_else(|| self.window_route_resolver(&row.id, &row.revision))
             .ok_or("The saved connection service is unavailable")?;
         let receive = resolver.resolve(row.id.clone(), Some(row.revision.clone()))?;
         Ok(Stage::Resolve { receive, resolver })
@@ -533,6 +624,7 @@ impl Viewer {
                                     Some((resolver, lease)),
                                     pending.target.profile,
                                     pending.reason,
+                                    pending.destination,
                                 );
                                 return true;
                             }
@@ -556,6 +648,7 @@ impl Viewer {
                         None,
                         pending.target.profile,
                         pending.reason,
+                        pending.destination,
                     );
                     return true;
                 }
@@ -582,6 +675,7 @@ impl Viewer {
         retained: Option<(Resolver, Lease)>,
         profile: String,
         reason: Reason,
+        destination: Option<super::fleet::Destination>,
     ) {
         if !self.allow_owner_change("") {
             self.route_open_failed(
@@ -600,6 +694,10 @@ impl Viewer {
             );
             return;
         }
+        let replace = destination
+            .as_ref()
+            .and_then(|_| self.target_foreground_slot(&connection));
+        let target_profile = profile.clone();
         let same = self
             .connection
             .as_ref()
@@ -631,7 +729,11 @@ impl Viewer {
                 self.connections.release_foreground(&id, &revision);
             }
         }
-        self.new_draft_on_current_source();
+        if let Some(destination) = destination {
+            self.queue_fleet_destination(target_profile, destination, replace);
+        } else {
+            self.new_draft_on_current_source();
+        }
     }
     fn route_open_failed(&mut self, error: String, reason: Reason) {
         self.cancel_device_route();

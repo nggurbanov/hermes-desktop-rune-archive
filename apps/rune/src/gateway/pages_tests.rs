@@ -292,3 +292,95 @@ fn messaging_test_preserves_business_diagnostic_while_other_refusals_fail_closed
         server.join().unwrap();
     }
 }
+
+#[test]
+fn live_session_workspace_read_uses_captured_profile_and_keeps_session_mutations_rejected() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut ws = tungstenite::accept(stream).unwrap();
+        let mut seen = 0;
+        for profile in ["research", "work"] {
+            // The denied pre-fix read sends no frame. Dropping the client still
+            // joins this private fixture cleanly before reporting the RED.
+            let Ok(Message::Text(raw)) = ws.read() else {
+                break;
+            };
+            let request: Value = serde_json::from_str(&raw).unwrap();
+            assert_eq!(request["method"], "session.list");
+            assert_eq!(request["params"]["profile"], profile);
+            assert_eq!(request["params"]["scope"], "live");
+            assert_eq!(request["params"]["include_hidden"], false);
+            assert_eq!(request["params"]["limit"], 200);
+            super::tests::answer(
+                &mut ws,
+                &request,
+                json!({"sessions":[{"session_id":format!("{profile}-runtime"),"profile":profile,"status":"working"}]}),
+            );
+            seen += 1;
+        }
+        seen
+    });
+    let mut gateway = Gateway::connect(&Connection::Url {
+        endpoint,
+        token: None,
+    })
+    .unwrap();
+    let first = gateway.page_request(
+        "research",
+        &PageRequest::rpc(
+            "session.list",
+            json!({"profile":"wrong-body-owner","scope":"live","include_hidden":false,"limit":200}),
+        )
+        .timeout_secs(1),
+    );
+    let denied: Vec<_> = [
+        "session.delete",
+        "session.rename",
+        "session.send",
+        "session.history",
+        "session.list.extra",
+        "terminal.execute",
+    ]
+    .into_iter()
+    .map(|method| {
+        (
+            method,
+            gateway.page_request(
+                "research",
+                &PageRequest::rpc(method, json!({"profile":"wrong-body-owner"})).timeout_secs(1),
+            ),
+        )
+    })
+    .collect();
+    let second = gateway.page_request(
+        "work",
+        &PageRequest::rpc(
+            "session.list",
+            json!({"profile":"research","scope":"live","include_hidden":false,"limit":200}),
+        )
+        .timeout_secs(1),
+    );
+    drop(gateway);
+    let seen = server.join().unwrap();
+    let first = first.expect("the sidebar's live read must reach its captured profile");
+    let rows = super::sidebar::parse_sessions(&first, "research").unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].id, "research-runtime");
+    assert_eq!(rows[0].profile(), "research");
+    assert_eq!(first["sessions"][0]["status"], "working");
+    let second = second.unwrap();
+    assert_eq!(second["sessions"][0]["session_id"], "work-runtime");
+    assert_eq!(seen, 2);
+    for (method, result) in denied {
+        assert_eq!(
+            result.unwrap_err(),
+            "This method is not part of the native workspace API",
+            "{method} must be rejected locally without a session.* wildcard"
+        );
+    }
+}

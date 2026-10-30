@@ -1,6 +1,7 @@
 //! Client-owned preferences and private runtime files, never an agent home.
 mod file_lock;
 pub(crate) use file_lock::FileLock;
+pub mod fleet;
 pub mod profiles;
 pub mod startup;
 pub(crate) mod store;

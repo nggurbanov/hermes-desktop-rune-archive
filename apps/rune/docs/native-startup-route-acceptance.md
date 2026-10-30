@@ -108,3 +108,31 @@ the delayed pin-cancellation result and recoverable error states were visually
 reviewed. All cases exited through normal Quit; the run made zero agent mutations
 or provider requests and used no physical audio or live agents. This acceptance
 has the scope and platform limits stated above.
+
+## Ninth checkpoint regression
+
+The frozen candidate5, SHA-256
+`aaf68a8f613fb04034fff00ee5d47e26f0cb80a9eae49a005ce2c514e9983897`,
+passed all sixteen ordinary native startup/default cases with twenty-eight PNGs.
+Exact scripts, frames, requests and executable/harness hashes are in
+`/tmp/hermes-goal-nine-startup-native-final5/result.json` and its siblings.
+The existing many-profile fixture now uses the real condensed source-qualified
+picker and stable presented row bounds while scrolling. Source/profile/input,
+cancellation, no-fallback, storage and normal Close/Quit assertions are intact.
+
+Fleet integration exposed two production regressions before this final run.
+Automatic fleet reads must wait for successful exact activation or explicit
+user refresh, preserving the invalid/future default's exact zero-request contract.
+Installing a foreground Connection also must not initialize page data before its
+correlated exact-profile receipt: when that profile disappears during the final
+check, the accepted route is absent and page loaders, timers and explicit page
+requests remain off. The unchanged disappeared-profile case now makes exactly
+three validation reads and no session read. Its actual presented frame also
+shows Unavailable and a connection explanation for Cron, without a false
+Ready/loading status. Two actual loopback contracts went
+RED then GREEN, including deferred same-owner initialization and settings reads
+after an ordinary history error. Local Settings/Connections navigation remains.
+
+This revalidates the startup slice only; full legacy/project/tile and native
+macOS/Windows/distribution acceptance are still open. See the ninth fleet
+acceptance record and functional ledger for the integrated checkpoint.

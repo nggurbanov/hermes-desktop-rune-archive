@@ -44,7 +44,7 @@ pub fn bar(s: &Viewer, k: &Kit) -> El {
                 .key("command-center"),
         )
         .child(button(&s.endpoint_label, |s| s.change_connection(), k).key("change-connection"));
-    if !s.show_profile_rail {
+    if !super::fleet::rail_visible(s) {
         bar = bar.child(
             button(&s.profile, |s| s.profile_picker = !s.profile_picker, k).key("status-profile"),
         );
@@ -314,28 +314,8 @@ pub fn overlays(s: &Viewer, k: &Kit, layer: &mut Vec<El>) {
             layer.push(menu);
         }
     }
-    if s.profile_picker && (!s.show_profile_rail || s.simple_mode) {
-        let mut menu = popup("Choose profile", k);
-        for p in &s.profiles {
-            let name = p.name.clone();
-            let menu_name = name.clone();
-            menu = menu.child(
-                button(&p.label, move |s| s.select_profile(name.clone()), k)
-                    .key(format!("pick-profile-{}", p.name))
-                    .on_secondary_press(move |s: &mut Viewer, point, _| {
-                        s.open_profile_route_menu(menu_name.clone(), point)
-                    }),
-            );
-        }
-        menu = menu.child(button(
-            "Manage bots",
-            |s| {
-                s.profile_picker = false;
-                s.open_route(crate::pages::Route::Bots);
-            },
-            k,
-        ));
-        layer.push(menu);
+    if s.profile_picker && !super::fleet::rail_visible(s) {
+        layer.push(popup("Choose profile", k).child(super::fleet::picker(s, k, true)));
     }
     if let Some(detail) = &s.chrome.detail {
         let mut body = popup(detail, k);

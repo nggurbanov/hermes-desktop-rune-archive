@@ -414,24 +414,7 @@ impl Viewer {
         for reply in replies {
             match reply {
                 chat::Reply::Catalog { owner, result } => {
-                    if owner.connection != self.connection_epoch
-                        || !self.chat.views.contains_key(&owner)
-                        || self
-                            .retired_profiles
-                            .contains(&(owner.connection, owner.profile.clone()))
-                    {
-                        continue;
-                    }
-                    let view = self.chat.presentation(owner);
-                    view.slash_loading = false;
-                    view.slash_loaded = true;
-                    match result {
-                        Ok(value) => {
-                            view.slash = chat::catalog_rows(&value);
-                            view.slash_catalog = value;
-                        }
-                        Err(error) => view.error = Some(error),
-                    }
+                    self.apply_source_catalog(owner, result);
                 }
                 chat::Reply::Branch { owner, result } => {
                     if owner.connection != self.connection_epoch
@@ -513,13 +496,7 @@ impl Viewer {
                     query,
                     result,
                 } => {
-                    if owner.connection == self.connection_epoch
-                        && !self
-                            .retired_profiles
-                            .contains(&(owner.connection, owner.profile.clone()))
-                    {
-                        self.chat.apply_completions(&owner, &query, result);
-                    }
+                    self.apply_source_completions(&owner, &query, result);
                 }
                 chat::Reply::Media { .. } | chat::Reply::MediaReady => {}
             }

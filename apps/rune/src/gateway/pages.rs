@@ -255,6 +255,7 @@ impl Gateway {
                     | "config.get"
                     | "config.set"
                     | "process.list"
+                    | "session.list"
                     | "process.kill"
             )
             || ["vault.", "billing.", "connectors.", "mcp.servers."]

@@ -245,41 +245,10 @@ impl Viewer {
                         self.spoken_completion.insert(destination.clone(), sequence);
                     }
                     self.rehome_editors(&origin, destination);
-                    if origin.connection == self.connection_epoch {
-                        if !self
-                            .tabs
-                            .iter()
-                            .any(|t| t.profile == origin.profile && t.session == stored)
-                        {
-                            self.tabs.push(ConversationTab {
-                                profile: origin.profile.clone(),
-                                session: stored.clone(),
-                                title: self
-                                    .conversation
-                                    .view(&DraftScope {
-                                        session: Some(stored.clone()),
-                                        ..origin.clone()
-                                    })
-                                    .filter(|v| !v.title.is_empty())
-                                    .map(|v| v.title.clone())
-                                    .unwrap_or_else(|| "New conversation".into()),
-                                bot: self
-                                    .conversation
-                                    .view(&DraftScope {
-                                        session: Some(stored.clone()),
-                                        ..origin.clone()
-                                    })
-                                    .is_some_and(|v| v.canonical_bot),
-                            });
-                        }
-                        if active {
-                            self.selected_session = Some(stored);
-                            self.history_loading = false;
-                            self.bot_empty = false;
-                        }
-                    }
+                    self.bind_source_conversation(&origin, &stored, active);
                 }
                 Update::Changed { scope } => {
+                    self.update_parked_conversation(&scope);
                     if let Some(view) = self.conversation.view(&scope) {
                         self.reconcile_editor_policy(&scope, &view.policy.clone());
                     }

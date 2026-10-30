@@ -27,6 +27,7 @@ const catalog = {provider: 'fixture', model: 'fixture-model', providers: [{slug:
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms))
 const hash = value => createHash('sha256').update(value).digest('hex')
 const harnessSha = hash(fs.readFileSync(fileURLToPath(import.meta.url)))
+fs.copyFileSync(fileURLToPath(import.meta.url), path.join(out, 'harness.mjs'))
 let env, active = null, phase = 'setup', failure = null, displayProcess, wm, bus
 const scoped = () => ({case: active?.name ?? 'suite', phase})
 const atomic = (file, value) => {
@@ -114,6 +115,7 @@ class Gateway {
         const session = this.session(decodeURIComponent(history[1]), profile)
         result = {profile, session_id: session.stored_session_id, messages: session.messages}
       } else switch (url.pathname) {
+        case '/api/profiles': result = {profiles: this.profileRows(), active: 'default'}; break;
         case '/api/profiles/sessions/sidebar': result = {recents: {sessions: this.sessions(profile)}, messaging: {sessions: []}, cron: {sessions: []}}; break
         case '/api/profiles/sessions': result = {sessions: profile === 'all' ? names.flatMap(p => this.sessions(p)) : this.sessions(profile)}; break
         case '/api/cron/jobs': result = {jobs: []}; break
@@ -206,11 +208,65 @@ function key(id, chord) { focus(id); input('key', '--clearmodifiers', chord) }
 function drawnFrame(id) {
   try { return JSON.parse(fs.readFileSync(path.join(active.inspection, 'frames', id + '.json'), 'utf8')) } catch { return null }
 }
-async function click(id, name, button = 1, inset = null) {
-  await wait(`native control ${name}`, () => current(id)?.geometry?.[name] || drawnFrame(id)?.elements.some(element => element.key === name && !element.exiting))
+const presented = element => element && !element.exiting && !element.inert && element.opacity > 0.95 && element.visible[2] > 1 && element.visible[3] > 1
+function sessionKey(id, profile, stored) {
+  const snapshot = current(id)
+  const row = snapshot?.fleet?.sidebar_groups?.filter(group => group.source?.principal === snapshot.principal).flatMap(group => group.rows).find(row => row.profile === profile && (row.id === stored || row.root === stored))
+  const exact = row && `session-${row.key}`
+  if (exact && drawnFrame(id)?.elements.some(e => e.key === exact && !e.exiting)) return exact
+  return drawnFrame(id)?.elements.find(e => {
+    if (!e.key?.startsWith('session-[') || e.exiting) return false
+    try { const [source, owner, root] = JSON.parse(e.key.slice(8)); return source.principal === snapshot?.principal && owner === profile && root === stored } catch { return false }
+  })?.key
+}
+function resolvedKey(id, name) {
+  if (drawnFrame(id)?.elements.some(e => e.key === name && !e.exiting)) return name
+  for (const profile of names) {
+    const prefix = `session-${profile}-`
+    if (name.startsWith(prefix)) return sessionKey(id, profile, name.slice(prefix.length)) ?? name
+  }
+  return name
+}
+async function profileDoor(id, profile, compact = active.config.compact) {
+  if (presented(drawnFrame(id)?.elements.find(e => e.key === `profile-${profile}` && !e.exiting))) return `profile-${profile}`
+  if (!drawnFrame(id)?.elements.some(e => e.key === 'profile-picker' && !e.exiting)) {
+    await click(id, compact ? 'status-profile' : 'profile-picker-toggle')
+  }
+  return `pick-profile-${profile}`
+}
+async function reveal(id, name) {
   const xid = focus(id)
-  await delay(250)
-  const element = await wait(`actually drawn control ${name}`, () => drawnFrame(id)?.elements.find(element => element.key === name && !element.exiting && element.opacity > 0 && element.visible[2] > 0 && element.visible[3] > 0))
+  await delay(300)
+  for (let attempt = 0; attempt < 28; attempt++) {
+    const key = resolvedKey(id, name)
+    const element = drawnFrame(id)?.elements.find(e => e.key === key && !e.exiting)
+    if (presented(element)) {
+      let stable = true, latest = element
+      for (let sample = 0; sample < 3; sample++) {
+        await delay(100)
+        const next = drawnFrame(id)?.elements.find(e => e.key === key && !e.exiting)
+        if (!presented(next) || next.visible.some((value, index) => Math.abs(value - latest.visible[index]) > 0.35)) { stable = false; break }
+        latest = next
+      }
+      if (stable) return {xid, element: latest, key}
+      continue
+    }
+    const enteringPicker = drawnFrame(id)?.elements.find(e => e.key === 'profile-picker' && !e.exiting)
+    const picker = presented(enteringPicker) ? enteringPicker : null
+    if ((enteringPicker && !picker) || (element && element.opacity < 0.95) || (!picker && !element && attempt < 4)) {
+      await delay(100); continue
+    }
+    const frame = geometry(xid), viewport = picker?.visible ?? [0, 100, 220, Math.max(100, frame.height - 300)]
+    const direction = element && element.rect[1] < viewport[1] ? 4 : 5
+    input('mousemove', frame.x + viewport[0] + Math.min(100, viewport[2] / 2), frame.y + viewport[1] + viewport[3] / 2, 'sleep', '0.05', 'click', '--repeat', '2', '--delay', '60', direction)
+    gestures.push({...scoped(), id, name, resolved_key: key, scroll: direction, viewport})
+    await delay(150)
+  }
+  throw new Error(`Native control cannot be revealed: ${name}`)
+}
+async function click(id, name, button = 1, inset = null) {
+  if (names.some(profile => name === `profile-${profile}`)) name = await profileDoor(id, name.slice(8))
+  const {xid, element, key} = await reveal(id, name)
   const rect = element.visible, frame = geometry(xid)
   const x = frame.x + rect[0] + (inset ?? rect[2] / 2), y = frame.y + rect[1] + rect[3] / 2
   assert.ok(rect[2] > 0 && rect[3] > 0 && x >= frame.x && x < frame.x + frame.width && y >= frame.y && y < frame.y + frame.height, `${name} is outside its native viewport`)
@@ -219,8 +275,9 @@ async function click(id, name, button = 1, inset = null) {
     const value = drawnFrame(id)
     return value?.pointer && Math.abs(value.pointer[0] - (x - frame.x)) <= 2 && Math.abs(value.pointer[1] - (y - frame.y)) <= 2 && value
   }, 5000)
-  assert.ok(runtime.elements.some(item => item.key === name && !item.exiting), `Actual native pointer does not hit ${name}`)
-  gestures.push({...scoped(), id, xid, name, button, rect, drawn_rect: element.rect, pointer: input('getmouselocation', '--shell'), runtime_pointer: runtime.pointer, hold_ms: 40})
+  const hit = runtime.elements.find(item => item.key === key && !item.exiting)
+  assert.ok(presented(hit) && hit.visible.every((value, index) => Math.abs(value - rect[index]) <= 0.5), `Actual native target moved before click: ${name}`)
+  gestures.push({...scoped(), id, xid, name, resolved_key: key, button, rect, drawn_rect: element.rect, pointer: input('getmouselocation', '--shell'), runtime_pointer: runtime.pointer, hold_ms: 40})
   input('mousedown', button, 'sleep', '0.04', 'mouseup', button)
   await delay(120)
 }
@@ -241,7 +298,7 @@ function sameSource(snapshot, source) { return snapshot?.principal === principal
 async function ready(id, source, profile) {
   return wait(`connected ${source}/${profile}`, () => {
     const snapshot = current(id)
-    return snapshot && sameSource(snapshot, source) && snapshot.profile === profile && !snapshot.loading && !snapshot.route_pending && !snapshot.error && snapshot.geometry['composer-input'] && (active.config.compact ? snapshot.geometry['status-profile'] : snapshot.geometry[`profile-${profile}`]) && snapshot
+    return snapshot && sameSource(snapshot, source) && snapshot.profile === profile && !snapshot.loading && !snapshot.route_pending && !snapshot.error && snapshot.geometry['composer-input'] && (snapshot.geometry['status-profile'] || snapshot.geometry[`profile-${profile}`] || drawnFrame(id)?.elements.some(e => e.key === 'profile-picker-toggle' && presented(e))) && snapshot
   })
 }
 async function captureXid(name, xid, id = null) {
@@ -371,6 +428,13 @@ async function primary() {
 }
 
 
+// Successful startup may populate the newly ported at-rest fleet. These reads
+// do not authorize opening another foreground session.
+function passiveFleetRead(read) {
+  return (read.transport === 'http' && read.method === 'GET' && [
+    '/api/profiles', '/api/status', '/api/profiles/sessions/sidebar', '/api/profiles/sessions', '/api/cron/jobs'
+  ].includes(read.path)) || (read.transport === 'rpc' && read.method === 'session.list' && read.params?.scope === 'live')
+}
 async function checkBoot(source, profile, {started}) {
   const first = await primary()
   await ready(first.id, source, profile)
@@ -380,15 +444,12 @@ async function checkBoot(source, profile, {started}) {
   assert.equal(current(first.id).registry.primary, IDS.A)
   const bootReads = requests.slice(started)
   assert.ok(bootReads.some(read => read.source === source && read.method === 'session.list'))
-  assert.ok(bootReads.every(read => read.source === source), 'Startup probed a different source instead of the selected default/policy')
+  assert.ok(bootReads.every(read => read.source === source || passiveFleetRead(read)), 'Startup activated a different source instead of the selected default/policy')
   await capture(`startup-${source}-${profile}`, first.id)
 }
 async function profileMenu(id, profile, compact = false) {
-  if (compact) {
-    await click(id, 'status-profile')
-    await wait('compact profile door', () => current(id)?.geometry[`pick-profile-${profile}`])
-  }
-  await click(id, compact ? `pick-profile-${profile}` : `profile-${profile}`, 3)
+  const door = await profileDoor(id, profile, compact || active.config.compact)
+  await click(id, door, 3)
   await wait('profile route context menu', () => current(id)?.geometry['profile-route-actions-item1'])
   await delay(200)
 }
@@ -480,7 +541,7 @@ async function windowDefaultIntents() {
 
   phase = 'explicit-current-owner-session-and-profile'
   await click(main.id, 'sessions-tab')
-  await wait('explicit current-source session door', () => current(main.id)?.geometry['session-research-A-research-notes'])
+  await wait('explicit current-source session door', () => sessionKey(main.id, 'research', 'A-research-notes'))
   await click(main.id, 'session-research-A-research-notes')
   await wait('explicit stored session owner', () => current(main.id)?.session === 'A-research-notes' && !current(main.id)?.loading)
   assert.ok(sameSource(current(main.id), 'A'))
@@ -553,7 +614,7 @@ async function pendingInputCancelsRoute() {
   assert.equal(current(main.id).editor, before.editor)
   assert.equal(current(main.id).profile, 'research')
   assert.equal(registryDocument().lastUsed, registry.lastUsed)
-  assert.equal(requests.slice(started).filter(request => request.source === 'B' && request.method === 'session.list').length, 0)
+  assert.equal(requests.slice(started).filter(request => request.source === 'B' && request.method === 'session.list' && request.params?.scope !== 'live').length, 0)
   await capture('new-input-fences-delayed-route', main.id)
   await retainedDraft(before.editor, 'research', newer, 'A')
   key(main.id, 'ctrl+n'); await ready(main.id, 'B', 'archive')
@@ -664,6 +725,11 @@ async function missingDefaultProfile({started}) {
   assert.deepEqual(fs.readFileSync(storeFile('startup.json')), before)
   const observed = snapshots()
   if (observed.length) assert.ok(observed.some(snapshot => snapshot.error || snapshot.client_error), 'Missing explicit profile did not expose an error')
+  if (active.config.dropProfileBeforeViewer) {
+    const rejected = await wait('inspected final rejected profile', () => snapshots().find(snapshot => snapshot.error || snapshot.client_error))
+    await wait('unavailable conversation is actually presented after profile rejection', () => drawnFrame(rejected.id)?.elements.some(element => element.key === 'conversation-activity' && element.text === 'Unavailable' && presented(element)))
+    await wait('Cron truthful connection state is actually presented after profile rejection', () => drawnFrame(rejected.id)?.elements.some(element => element.key === 'cron-connection-state' && element.text === 'Connect this profile to view scheduled jobs.' && presented(element)))
+  }
   await captureXid('missing-explicit-profile-no-fallback', xid, observed[0]?.id ?? null)
   fs.writeFileSync(path.join(active.directory, 'no-profile-fallback.json'), JSON.stringify({only_target_source_validated: true, no_wrong_profile_session_reads: true, no_viewer_session_rpc: true, file_unchanged: true, snapshots: observed}, null, 2) + '\n')
 }

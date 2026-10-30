@@ -12,6 +12,7 @@ mod conversation;
 mod decks;
 mod directories;
 pub(crate) mod files;
+pub(crate) mod fleet;
 pub(crate) mod layout;
 pub(crate) mod media_player;
 pub(crate) mod notifications;

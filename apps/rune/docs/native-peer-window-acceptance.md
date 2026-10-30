@@ -49,10 +49,12 @@ binary SHA-256 and PNG hashes alongside exact HTTP/RPC requests and private
 window metadata. Renderer bounds do not substitute for native window-manager
 interaction; this harness performs both.
 
-`--clipboard-diagnostic` additionally attempts native Ctrl+A/C from each input
-and records the exact synthetic strings and its independent result. It does not
-replace the mandatory persisted ownership/input assertions. A failed clipboard
-diagnostic must not be reported as passed keyboard clipboard behavior.
+`--clipboard-diagnostic` additionally performs native Ctrl+A/C from each input
+and asserts every exact synthetic string returned by the independent GTK
+clipboard reader. In the ninth integration a mismatch fails the run; the older
+seventh-checkpoint behavior below only recorded the diagnostic. These checks do
+not replace the mandatory persisted ownership/input assertions. A failed copy
+remains failed evidence and cannot be reported as keyboard clipboard acceptance.
 
 ## Seventh checkpoint
 
@@ -130,3 +132,25 @@ in `native-startup-route-acceptance.md`. These proofs use private synthetic peer
 and private X11/D-Bus/WM sessions. They establish no live provider, physical audio,
 macOS/Windows, dirty-global-Quit, full topology/fleet or final SSH-service shutdown
 acceptance.
+
+## Ninth checkpoint regression
+
+The frozen candidate5, SHA-256
+`aaf68a8f613fb04034fff00ee5d47e26f0cb80a9eae49a005ce2c514e9983897`,
+passed the complete ordinary native flow again, including every strict
+`--clipboard-diagnostic` assertion. Evidence is
+`/tmp/hermes-goal-nine-peer-native-final5/result.json`, exact copied harness
+SHA-256 `2794b6254dceb060da6bb848dd42113c7d0d0c4924d549cb5a77be6a503e63bf`,
+and its sibling request/frame/clipboard/PNG records. The source-qualified fleet
+integration preserves the original five lifetime XIDs in one process, up to four
+coexisting windows, twelve PNGs, independent real persisted inputs, captured
+source/profile/session and Bot targets, simultaneous streams and scoped Stop,
+normal local Close/global Quit and an interactive survivor after primary close.
+No pointer wiggle, physical audio, provider or user agent is involved.
+
+The existing fake peer now supplies the exact passive GET `/api/profiles` read;
+other unknown operations and HTTP mutations still fail. Actual native geometry
+helpers reveal source-qualified condensed rows and wait for stable presented
+bounds before pressing; editor, source, cancellation, persistence and window
+lifetime assertions remain mandatory. This Linux proof does not establish
+complete workspace restoration, tiles or native macOS/Windows distribution.

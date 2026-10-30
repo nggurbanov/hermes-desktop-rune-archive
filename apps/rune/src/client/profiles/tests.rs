@@ -214,3 +214,30 @@ fn explicit_removal_is_not_suppressed_by_an_unavailable_overlay_fallback() {
     prefs.remember_implicit(&c, "bot", fallback).unwrap();
     assert!(prefs.flush_storage().is_err());
 }
+
+#[test]
+fn rail_archive_bridge_preserves_exact_css_and_exports_auto_as_null() {
+    let directory = root();
+    let mut fleet = crate::client::fleet::Preferences::at_path(directory.join("fleet.json"));
+    let imported = json!({"profileColor":"#aBcD","future":{"keep":true}});
+    import_rail_color(&mut fleet, "shared", &imported).unwrap();
+    let mut exported = imported.clone();
+    export_rail_color(&mut exported, &fleet, "shared");
+    assert_eq!(exported, imported);
+    assert_eq!(
+        fleet.profile_color("shared").unwrap().unwrap().hex(),
+        "#aabbccdd"
+    );
+    import_rail_color(&mut fleet, "shared", &json!({"profileColor":null})).unwrap();
+    assert_eq!(
+        fleet.explicit_profile_color("shared").as_deref(),
+        Some("#aBcD"),
+        "baseline import null carries no replacement intent"
+    );
+    fleet.set_profile_color("shared".into(), None).unwrap();
+    export_rail_color(&mut exported, &fleet, "shared");
+    assert!(exported["profileColor"].is_null());
+    assert_eq!(exported["future"]["keep"], true);
+    assert!(fleet.explicit_profile_color("default").is_none());
+    std::fs::remove_dir_all(directory).unwrap();
+}

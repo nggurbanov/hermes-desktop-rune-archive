@@ -3,7 +3,7 @@ mod reconcile;
 #[cfg(test)]
 mod tests;
 mod worker;
-use crate::{composer::DraftScope, gateway::Connection};
+use crate::{composer::DraftScope, source::Binding};
 use rune::Waker;
 use serde_json::Value;
 use std::{
@@ -31,7 +31,7 @@ pub struct Item {
     pub until: Option<f64>,
 }
 struct Entry {
-    connection: Connection,
+    binding: Binding,
     active: Arc<AtomicBool>,
     runtime: String,
     generation: u64,
@@ -91,10 +91,14 @@ impl Background {
     }
     pub fn fixture(&mut self, scope: DraftScope) {
         self.bind(
-            Connection::Url {
-                endpoint: "http://127.0.0.1:1".into(),
-                token: None,
-            },
+            Binding::new(
+                crate::gateway::Connection::Url {
+                    endpoint: "http://127.0.0.1:1".into(),
+                    token: None,
+                },
+                None,
+            )
+            .expect("fixture source is valid"),
             scope.clone(),
             "fixture-background".into(),
         );
@@ -123,14 +127,14 @@ impl Background {
         self.replies = Some(replies);
         self.initialized = true;
     }
-    pub fn bind(&mut self, connection: Connection, scope: DraftScope, runtime: String) {
-        if runtime.is_empty() || scope.session.is_none() {
+    pub fn bind(&mut self, binding: Binding, scope: DraftScope, runtime: String) {
+        if runtime.is_empty() || scope.session.is_none() || binding.validate().is_err() {
             return;
         }
         if self
             .entries
             .get(&scope)
-            .is_some_and(|e| e.runtime == runtime)
+            .is_some_and(|e| e.runtime == runtime && e.binding.stamp() == binding.stamp())
         {
             return;
         }
@@ -141,7 +145,7 @@ impl Background {
         self.entries.insert(
             scope,
             Entry {
-                connection,
+                binding,
                 active: Arc::new(AtomicBool::new(true)),
                 runtime,
                 generation: self.serial,
@@ -174,9 +178,9 @@ impl Background {
             }
         }
     }
-    pub fn retain_connection(&mut self, connection: u64) {
+    pub fn retain_connections(&mut self, connections: &[u64]) {
         self.entries.retain(|scope, entry| {
-            let keep = scope.connection == connection;
+            let keep = connections.contains(&scope.connection) && entry.binding.validate().is_ok();
             if !keep {
                 entry.active.store(false, Ordering::Release);
             }
@@ -185,7 +189,7 @@ impl Background {
         if self
             .expanded
             .as_ref()
-            .is_some_and(|(scope, _)| scope.connection != connection)
+            .is_some_and(|(scope, _)| !self.entries.contains_key(scope))
         {
             self.expanded = None;
         }
@@ -270,7 +274,7 @@ impl Background {
             runtime: entry.runtime.clone(),
             generation: entry.generation,
             id: request,
-            connection: entry.connection.clone(),
+            binding: entry.binding.clone(),
             active: entry.active.clone(),
             action: worker::Action::Kill(id.into()),
         };
@@ -319,7 +323,7 @@ impl Background {
                     runtime: entry.runtime.clone(),
                     generation: entry.generation,
                     id: self.requests,
-                    connection: entry.connection.clone(),
+                    binding: entry.binding.clone(),
                     active: entry.active.clone(),
                     action: worker::Action::RewindKill(process),
                 };
@@ -378,7 +382,7 @@ impl Background {
                 runtime: entry.runtime.clone(),
                 generation: entry.generation,
                 id: self.requests,
-                connection: entry.connection.clone(),
+                binding: entry.binding.clone(),
                 active: entry.active.clone(),
                 action: worker::Action::Read,
             };

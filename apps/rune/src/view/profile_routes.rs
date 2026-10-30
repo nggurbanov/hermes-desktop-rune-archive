@@ -4,6 +4,10 @@ use rune::El;
 use rune_kit::{Kit, Menu, MenuItem};
 
 pub fn menu(s: &Viewer, k: &Kit, layer: &mut Vec<El>) {
+    super::fleet::overlays(s, k, layer);
+    if s.fleet_ui.profile.is_some() {
+        return;
+    }
     let Some(target) = s.profile_route_menu() else {
         return;
     };

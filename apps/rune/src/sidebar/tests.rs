@@ -135,6 +135,8 @@ fn invalid_snapshot_never_sends_a_write_and_ambiguous_retries_keep_the_identity(
         delete: false,
         identity: None,
         owner_connection: 0,
+        source: None,
+        other: BTreeMap::new(),
     };
     state.mutation = Some(mutation.clone());
     assert!(
@@ -171,6 +173,8 @@ fn resetting_visible_data_keeps_a_pending_mutation_receipt() {
         delete: false,
         identity: Some(json!({"request_id":"test"})),
         owner_connection: 3,
+        source: None,
+        other: BTreeMap::new(),
     });
     state.reset_data();
     assert!(state.blocks_owner_change());

@@ -77,7 +77,10 @@ pub struct PageRequest {
     pub destination: Option<std::path::PathBuf>,
     pub connection: Option<Connection>,
     pub source_lease: Option<crate::connections::Lease>,
+    // Hold the originating actor through the actual I/O and final receipt.
+    pub source_resolver: Option<crate::connections::Resolver>,
     pub upload: Option<PageUpload>,
+    pub edit_claim: Option<Arc<crate::client::FileLock>>,
 }
 pub type PageEffect = (String, PageRequest);
 impl PageRequest {
@@ -92,7 +95,9 @@ impl PageRequest {
             destination: None,
             connection: None,
             source_lease: None,
+            source_resolver: None,
             upload: None,
+            edit_claim: None,
         }
     }
     pub fn get(path: impl Into<String>) -> Self {
@@ -147,6 +152,10 @@ impl PageRequest {
     pub fn lease(mut self, lease: crate::connections::Lease) -> Self {
         self.connection = Some(lease.connection().clone());
         self.source_lease = Some(lease);
+        self
+    }
+    pub fn edit_claim(mut self, claim: Arc<crate::client::FileLock>) -> Self {
+        self.edit_claim = Some(claim);
         self
     }
     pub fn download_to(mut self, path: std::path::PathBuf) -> Self {
@@ -347,6 +356,7 @@ impl PageRequest {
                     | "config.get"
                     | "mcp.catalog"
                     | "process.list"
+                    | "session.list"
                     | "session.context_breakdown"
                     | "pet.thumb"
             ),

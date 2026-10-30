@@ -25,6 +25,7 @@ thread_local! { static WORKSPACE: RefCell<Weak<RefCell<Registry>>> = const { Ref
 struct Registry {
     proof: Option<PathBuf>,
     legacy: Option<Connection>,
+    fleet: Option<crate::fleet::Fleet>,
     entries: BTreeMap<WindowId, Entry>,
 }
 struct Entry {
@@ -51,6 +52,11 @@ impl Registry {
             shared
         })
     }
+}
+pub(super) fn shared_fleet() -> crate::fleet::Fleet {
+    let registry = Registry::shared();
+    let mut registry = registry.borrow_mut();
+    registry.fleet.get_or_insert_with(Default::default).clone()
 }
 pub(super) struct State {
     lease: Option<WindowLease>,
@@ -185,6 +191,7 @@ impl Viewer {
         if self.exact_connection_profile {
             route.profile = self.profile.clone();
             route.session = None;
+            route.title = None;
             route.canonical_bot = false;
         } else {
             self.profile = route.profile.clone();
@@ -271,9 +278,10 @@ impl Viewer {
             ..WindowRoute::default()
         };
         let kind = match target {
-            Some(ConversationTarget::Session { profile, id, .. }) => {
+            Some(ConversationTarget::Session { profile, id, title }) => {
                 route.profile = profile;
                 route.session = Some(id);
+                route.title = Some(title);
                 BootstrapKind::InteractiveSession
             }
             Some(ConversationTarget::Bot(profile)) => {
@@ -510,7 +518,17 @@ impl Viewer {
         if route.canonical_bot {
             self.open_bot(route.profile);
         } else if let Some(id) = route.session {
-            self.open_conversation(route.profile, id, "Conversation".into(), false, true);
+            let title = route
+                .title
+                .filter(|title| !title.trim().is_empty())
+                .or_else(|| {
+                    self.sessions
+                        .iter()
+                        .find(|session| session.id == id)
+                        .map(|session| session.title.clone())
+                })
+                .unwrap_or_else(|| "Conversation".into());
+            self.open_conversation(route.profile, id, title, false, true);
         }
         true
     }
@@ -529,6 +547,11 @@ impl Viewer {
                 None
             } else {
                 self.selected_session.clone()
+            },
+            title: if bot {
+                None
+            } else {
+                self.active_tab().map(|tab| tab.title.clone())
             },
             canonical_bot: bot,
         };
@@ -605,12 +628,14 @@ impl Viewer {
         if let Some(store) = &mut self.device_startup {
             store.flush()?;
         }
+        self.fleet_preferences.flush_storage()?;
         self.client_settings.flush_preferences()?;
         self.sidebar_state.flush_storage()?;
         self.profile_preferences.flush_storage()
     }
 }
 pub(crate) fn closed(s: &mut Viewer, _tx: &mut Tx) {
+    s.fleet.detach();
     let _ = s.flush_window_editors();
     if let Err(error) = s.save_window_record(true) {
         eprintln!("Window state: {error}");
@@ -701,5 +726,125 @@ impl Viewer {
             .retained
             .as_ref()
             .is_some_and(|retained| retained.lease.is_valid())
+    }
+}
+
+impl Viewer {
+    pub(super) fn current_source_binding(&self) -> Result<crate::source::Binding, String> {
+        let connection = self.connection.clone().ok_or("Connect an agent first")?;
+        let binding = crate::source::Binding::new(
+            connection,
+            self.window.retained.as_ref().map(|r| r.lease.clone()),
+        )?;
+        Ok(match &self.window.retained {
+            Some(retained) => binding.retaining_resolver(retained._resolver.clone()),
+            None => binding,
+        })
+    }
+    pub(super) fn open_bound_profile_window(
+        &mut self,
+        version: crate::source::SourceVersion,
+        profile: String,
+    ) -> Result<(), String> {
+        self.open_fleet_window(version, profile, None, true, None, None)
+    }
+    fn open_fleet_window(
+        &mut self,
+        version: crate::source::SourceVersion,
+        profile: String,
+        session: Option<String>,
+        bot: bool,
+        expected: Option<String>,
+        title: Option<String>,
+    ) -> Result<(), String> {
+        let binding = self.captured_fleet_binding(&version, expected.as_deref());
+        if expected.is_some() && binding.is_none() {
+            return Err("The exact captured source is no longer retained".into());
+        }
+        let (source, descriptor, principal) = match (&version.id, binding) {
+            (crate::source::SourceId::Saved(id), binding) => {
+                let resolver = binding
+                    .as_ref()
+                    .and_then(|binding| binding.resolver().cloned())
+                    .or_else(|| self.fleet.resolver(&version))
+                    .or_else(|| self.window_route_resolver(id, &version.revision))
+                    .ok_or("The saved source resolver is unavailable")?;
+                let principal =
+                    expected.or_else(|| binding.as_ref().map(|b| b.stamp().principal().to_owned()));
+                let receive = resolver.resolve(id.clone(), Some(version.revision.clone()))?;
+                (
+                    Source::Saved {
+                        expected_principal: principal.clone(),
+                        resolver,
+                        receive,
+                    },
+                    crate::client::windows::SourceDescriptor::Saved {
+                        id: id.clone(),
+                        revision: version.revision.clone(),
+                    },
+                    principal,
+                )
+            }
+            (_, Some(binding)) => {
+                binding.validate()?;
+                if expected
+                    .as_deref()
+                    .is_some_and(|p| p != binding.stamp().principal())
+                {
+                    return Err("The captured source changed before opening its window".into());
+                }
+                let descriptor = crate::client::windows::SourceDescriptor::from_connection(
+                    binding.connection(),
+                )?;
+                (
+                    Source::Direct(binding.connection().clone()),
+                    descriptor,
+                    Some(binding.stamp().principal().to_owned()),
+                )
+            }
+            _ => return Err("The one-time source is no longer available".into()),
+        };
+        let target = principal.map(|principal| FocusTarget {
+            principal,
+            profile: profile.clone(),
+            session: session.clone(),
+            bot,
+        });
+        self.window.requested.push_back(Open {
+            kind: if bot {
+                BootstrapKind::ProfilePinned
+            } else {
+                BootstrapKind::InteractiveSession
+            },
+            route: WindowRoute {
+                source: Some(descriptor),
+                profile,
+                session,
+                title,
+                canonical_bot: bot,
+            },
+            source: Some(source),
+            target,
+            presentation: self.client_preferences_snapshot(),
+            geometry: Geometry::default(),
+        });
+        Ok(())
+    }
+}
+
+impl Viewer {
+    pub(super) fn open_bound_session_window(
+        &mut self,
+        target: crate::source::SessionRef,
+        title: String,
+    ) -> Result<(), String> {
+        self.open_fleet_window(
+            target.owner.source.version().clone(),
+            target.owner.profile,
+            Some(target.stored_id),
+            false,
+            Some(target.owner.source.principal().to_owned()),
+            Some(title),
+        )
     }
 }

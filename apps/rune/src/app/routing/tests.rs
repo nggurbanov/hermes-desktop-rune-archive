@@ -93,6 +93,7 @@ fn validated_reply(s: &mut Viewer, profile: &str) -> mpsc::Sender<Result<Connect
         owner: s.route_owner(),
         reason: Reason::NewSession,
         stage: Stage::Direct(receive),
+        destination: None,
     });
     send
 }

@@ -14,6 +14,7 @@ use std::{
 };
 use url::Url;
 
+#[derive(Clone)]
 pub(super) struct Endpoint {
     pub profile_id: PathBuf,
     pub origin: String,
@@ -88,6 +89,10 @@ impl Endpoint {
 }
 
 pub(super) fn identify(requested: &Path) -> Result<Endpoint, String> {
+    identify_until(requested, Instant::now() + Duration::from_secs(5))
+}
+
+pub(super) fn identify_until(requested: &Path, deadline: Instant) -> Result<Endpoint, String> {
     let home = fs::canonicalize(requested).map_err(|_| "Local Hermes home is unavailable")?;
     private_home(&home)?;
     let published = [home.join("gateway.sock"), home.join("gateway.sock.path")]
@@ -123,12 +128,7 @@ pub(super) fn identify(requested: &Path) -> Result<Endpoint, String> {
     } else {
         return Err("No private gateway control socket; start Hermes separately".into());
     };
-    let value = control(
-        &control_home,
-        "identify",
-        None,
-        Instant::now() + Duration::from_secs(5),
-    )?;
+    let value = control(&control_home, "identify", None, deadline)?;
     if value.get("runtime_protocol").and_then(Value::as_u64) != Some(1)
         || value.get("state").and_then(Value::as_str) != Some("ready")
         || !value

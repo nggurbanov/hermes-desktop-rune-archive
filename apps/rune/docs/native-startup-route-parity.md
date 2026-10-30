@@ -61,10 +61,12 @@ indication/action and the startup switch, including when only one source exists.
 Make Primary remains available in last-used mode. Reuse native Menu/Switch,
 existing avatars and both themes.
 
-The current rail lists the active source only. Full fleet needs cached named
-profiles grouped by source, with demand-driven refresh on mount/focus/visibility,
-registry changes and connection-open edges. Coalesce stale/inflight requests;
-rendering or periodic fleet polling must not dial every SSH source.
+The original coordinator audit found an active-source-only rail. The ninth
+integration adds cached source-qualified groups and demand-driven refresh on
+mount/focus/visibility, registry changes and successful connection-open edges;
+see `native-fleet-parity.md`. Stale/inflight reads coalesce, and cache expiry or
+rendering alone does not dial SSH sources. Complete hidden/unlisted/persisted
+activity and legacy route consumers still require their separate acceptance.
 
 ## Required evidence
 
@@ -105,8 +107,9 @@ Source-qualified successful profile rename/delete/Forget maintains only the
 matching logical default and remembered profile. Context actions and startup
 controls use native Rune/OpenCode components in the Hermes positions.
 
-Full fleet grouping/activity/status/order/color, project-scoped generic New
-Session and simultaneous tile ownership remain open. Explicit legacy null-source
+Source-qualified fleet grouping/status/order/color now exists; complete fleet
+attention and legacy route consumers, project-scoped generic New Session and
+simultaneous tile ownership remain open. Explicit legacy null-source
 routing currently requires the primary legacy connection retained in this
 process; complete persisted legacy/global/per-profile remote override recovery
 is still required. It must not be approximated by mapping null to registered

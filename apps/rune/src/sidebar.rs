@@ -1,10 +1,15 @@
 //! Sidebar slices, view preferences and session edits keep their own owner.
 use crate::{
-    gateway::sidebar::{SidebarSession, parse_sessions},
+    gateway::sidebar::{SidebarSession, parse_sessions, parse_sessions_owned},
     pages::{PageEffect, PageRequest, segment},
+    source::{SessionOwner, SourceStamp},
 };
 use chrono::{Datelike, Duration, Local, NaiveDate, TimeZone};
+pub mod fleet;
+#[cfg(test)]
+mod owned_tests;
 mod persistence;
+mod receipt;
 #[cfg(test)]
 mod tests;
 use rune::TextEdit;
@@ -171,6 +176,12 @@ pub enum Action {
     SaveRename,
     Confirm,
     Cancel,
+    Context {
+        profile: String,
+        id: String,
+        point: rune::PointerPress,
+    },
+    CloseMenu,
     RetryMutation,
     PeekJob(String),
     ManageJob(String),
@@ -186,9 +197,17 @@ pub struct Mutation {
     pub delete: bool,
     pub identity: Option<Value>,
     pub owner_connection: u64,
+    #[serde(default)]
+    pub source: Option<SourceStamp>,
+    #[serde(flatten)]
+    other: BTreeMap<String, Value>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct SavedReceipt {
+    #[serde(default)]
+    version: u32,
+    #[serde(flatten)]
+    other: BTreeMap<String, Value>,
     owner: String,
     mutation: Mutation,
 }
@@ -203,6 +222,7 @@ pub struct SidebarState {
     pub owner_profile: String,
     pub owner_connection: u64,
     pub demo: bool,
+    pub retired: bool,
     pub recents: Slice,
     pub messaging: Slice,
     pub cron_sessions: Slice,
@@ -238,6 +258,10 @@ pub struct SidebarState {
     recovery: Option<SavedReceipt>,
     recovery_loaded: bool,
     unread_queue: Vec<SidebarSession>,
+    source: Option<SourceStamp>,
+    receipt_store: Option<receipt::Store>,
+    partition_preferences: bool,
+    canonical_profiles: BTreeMap<String, BTreeSet<String>>,
 }
 impl Default for SidebarState {
     fn default() -> Self {
@@ -252,6 +276,7 @@ impl SidebarState {
             owner_profile: "default".into(),
             owner_connection: 0,
             demo: false,
+            retired: false,
             recents: Slice::default(),
             messaging: Slice::default(),
             cron_sessions: Slice::default(),
@@ -287,12 +312,65 @@ impl SidebarState {
             recovery: None,
             recovery_loaded: false,
             unread_queue: vec![],
+            source: None,
+            receipt_store: None,
+            partition_preferences: false,
+            canonical_profiles: BTreeMap::new(),
         }
     }
     pub fn blocks_owner_change(&self) -> bool {
         self.mutation.is_some() || self.mutation_inflight || !self.jobs_busy.is_empty()
     }
     pub fn bind_connection(&mut self, connection: &crate::gateway::Connection, epoch: u64) {
+        let directory = match crate::client::state_dir() {
+            Ok(directory) => directory,
+            Err(error) => {
+                self.notice = Some(error);
+                return;
+            }
+        };
+        self.bind_connection_at(connection, epoch, directory);
+    }
+    pub fn bind_connection_at(
+        &mut self,
+        connection: &crate::gateway::Connection,
+        epoch: u64,
+        directory: std::path::PathBuf,
+    ) {
+        let source = match crate::source::SourceStamp::from_connection(connection) {
+            Ok(source) => source,
+            Err(error) => {
+                self.notice = Some(error);
+                return;
+            }
+        };
+        self.bind_stamp_at(connection, source, epoch, directory);
+    }
+    pub fn bind_source_at(
+        &mut self,
+        binding: &crate::source::Binding,
+        epoch: u64,
+        directory: std::path::PathBuf,
+    ) -> Result<(), String> {
+        binding.validate()?;
+        self.bind_stamp_at(
+            binding.connection(),
+            binding.stamp().clone(),
+            epoch,
+            directory,
+        );
+        if self.source.as_ref() != Some(binding.stamp()) {
+            return Err("The sidebar source could not be rebound while an edit is pending".into());
+        }
+        Ok(())
+    }
+    fn bind_stamp_at(
+        &mut self,
+        connection: &crate::gateway::Connection,
+        source: SourceStamp,
+        epoch: u64,
+        directory: std::path::PathBuf,
+    ) {
         let key = match crate::client::connection_key(connection) {
             Ok(key) => key,
             Err(error) => {
@@ -301,21 +379,30 @@ impl SidebarState {
             }
         };
         if self.connection_key != key {
+            if self.mutation.is_some() {
+                self.notice = Some("Reconcile the pending edit on its original source before rebinding the sidebar".into());
+                return;
+            }
             self.reset_data();
             self.connection_key = key.clone();
+            self.recovery_loaded = false;
+            self.receipt_store = None;
+            self.recovery = None;
         }
         self.owner_connection = epoch;
+        self.source = Some(source);
         if !self.recovery_loaded && !self.demo {
             self.recovery_loaded = true;
-            let result = (|| -> Result<Option<SavedReceipt>, String> {
-                let path = crate::client::state_dir()?.join("sidebar-edit.json");
-                match std::fs::read(path) {
-                    Ok(bytes) => serde_json::from_slice(&bytes)
-                        .map_err(|_| "Saved session edit is invalid; it was not replayed".into()),
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-                    Err(_) => Err("Saved session edit could not be read".into()),
-                }
-            })();
+            let result = self
+                .source
+                .as_ref()
+                .ok_or("The source identity is unavailable".to_owned())
+                .and_then(|source| {
+                    let mut store = receipt::Store::new(directory, source.clone());
+                    let loaded = store.load();
+                    self.receipt_store = Some(store);
+                    loaded
+                });
             match result {
                 Ok(receipt) => self.recovery = receipt,
                 Err(error) => self.notice = Some(error),
@@ -324,9 +411,20 @@ impl SidebarState {
         if self.mutation.is_none()
             && let Some(receipt) = &self.recovery
         {
-            if receipt.owner == key {
+            if receipt.owner == key
+                || receipt
+                    .mutation
+                    .source
+                    .as_ref()
+                    .zip(self.source.as_ref())
+                    .is_some_and(|(old, current)| receipt::can_reconcile(old, current))
+            {
                 let mut mutation = receipt.mutation.clone();
                 mutation.owner_connection = epoch;
+                if mutation.source.is_none() {
+                    mutation.source = self.source.clone();
+                }
+                mutation.session.provenance = mutation.source.clone();
                 self.mutation = Some(mutation);
                 self.notice=Some("A saved session edit needs reconciliation. Retry uses its original identity and preconditions.".into());
             } else {
@@ -340,24 +438,38 @@ impl SidebarState {
         }
         let mutation = self.mutation.clone().ok_or("No session edit is prepared")?;
         let receipt = SavedReceipt {
+            version: 1,
+            other: self
+                .recovery
+                .as_ref()
+                .map(|receipt| receipt.other.clone())
+                .unwrap_or_default(),
             owner: self.connection_key.clone(),
             mutation,
         };
-        let bytes = serde_json::to_vec(&Some(&receipt))
-            .map_err(|_| "The pending session edit could not be encoded")?;
-        crate::client::private_write(
-            &crate::client::state_dir()?.join("sidebar-edit.json"),
-            &bytes,
-        )?;
+        let retained = self
+            .receipt_store
+            .as_mut()
+            .ok_or("The source-qualified edit store is unavailable")?
+            .save(&receipt)?;
+        if !retained {
+            self.recovery = None;
+            self.mutation = None;
+            return Err("Another desktop window already reconciled this edit. Refresh before editing again.".into());
+        }
         self.recovery = Some(receipt);
         Ok(())
     }
     fn retire_receipt(&mut self) -> Result<(), String> {
         if !self.demo {
-            crate::client::private_write(
-                &crate::client::state_dir()?.join("sidebar-edit.json"),
-                b"null\n",
-            )?;
+            self.receipt_store
+                .as_mut()
+                .ok_or("The source-qualified edit store is unavailable")?
+                .retire(
+                    self.recovery
+                        .as_ref()
+                        .ok_or("The pending edit receipt is unavailable")?,
+                )?;
         }
         self.recovery = None;
         self.mutation = None;
@@ -391,6 +503,16 @@ impl SidebarState {
         let key = format!("sidebar.{key}");
         self.pending.insert(key.clone());
         self.errors.remove(&key);
+        let request = if let Some(claim) = self
+            .receipt_store
+            .as_ref()
+            .filter(|_| matches!(key.as_str(), "sidebar.snapshot" | "sidebar.mutation"))
+            .and_then(receipt::Store::worker_claim)
+        {
+            request.edit_claim(claim)
+        } else {
+            request
+        };
         (
             key,
             if request.profile.is_none() {
@@ -525,7 +647,11 @@ impl SidebarState {
             .collect()
     }
     pub fn status(&self, row: &SidebarSession) -> Status {
-        for alias in row.aliases() {
+        for alias in row
+            .aliases()
+            .into_iter()
+            .filter(|_| row.provenance.as_ref() == self.source.as_ref())
+        {
             if let Some(status) = self.live.get(&(row.profile().into(), alias.into())) {
                 if *status != Status::Idle {
                     return *status;
@@ -574,10 +700,89 @@ impl SidebarState {
         });
         rows
     }
+    pub fn set_canonical_profiles(&mut self, profiles: &[crate::gateway::Profile]) {
+        self.canonical_profiles = profiles
+            .iter()
+            .filter_map(|profile| {
+                profile.canonical_session.as_ref().map(|session| {
+                    (
+                        profile.name.clone(),
+                        [session.id.clone(), session.resolved_id.clone()]
+                            .into_iter()
+                            .collect(),
+                    )
+                })
+            })
+            .collect();
+    }
+    pub fn is_canonical(&self, row: &SidebarSession) -> bool {
+        row.hidden
+            || row.is_internal_child
+            || row.title.as_deref().map(str::trim) == Some("Bot Chat")
+            || row.root_title.as_deref().map(str::trim) == Some("Bot Chat")
+            || row.provenance.as_ref() == self.source.as_ref()
+                && self
+                    .canonical_profiles
+                    .get(row.profile())
+                    .is_some_and(|ids| row.aliases().iter().any(|id| ids.contains(*id)))
+    }
+    pub fn branch_depth(&self, row: &SidebarSession) -> usize {
+        let mut current = row.clone();
+        let mut seen = HashSet::new();
+        let mut depth = 0;
+        while seen.insert(current.key()) {
+            let Some(parent) = current.fork_parent() else {
+                break;
+            };
+            let Some(parent) = self.all_rows().into_iter().find(|candidate| {
+                candidate.provenance == current.provenance
+                    && candidate.profile() == current.profile()
+                    && candidate.aliases().contains(&parent)
+                    && candidate.key() != current.key()
+            }) else {
+                break;
+            };
+            current = parent.clone();
+            depth += 1;
+        }
+        depth
+    }
+    pub fn group_key(&self, section: &str, kind: &str, value: &str) -> String {
+        serde_json::json!([
+            "sidebar",
+            section,
+            self.source.as_ref().map(|source| &source.version().id),
+            kind,
+            value
+        ])
+        .to_string()
+    }
+    pub fn source_stamp(&self) -> Option<&SourceStamp> {
+        self.source.as_ref()
+    }
+    pub fn owner(&self, profile: &str) -> Option<SessionOwner> {
+        self.source
+            .clone()
+            .map(|source| SessionOwner::new(source, profile))
+    }
+    pub fn find_owned(&self, owner: &SessionOwner, id: &str) -> Option<SidebarSession> {
+        if self.source.as_ref() != Some(&owner.source) {
+            return None;
+        }
+        self.find(&owner.profile, id)
+    }
+    pub fn set_partition_preferences(&mut self, preferences: &Preferences) {
+        self.partition_preferences = true;
+        self.prefs = preferences.clone();
+    }
     pub fn find(&self, profile: &str, id: &str) -> Option<SidebarSession> {
         self.all_rows()
             .into_iter()
-            .find(|row| row.profile() == profile && row.aliases().contains(&id))
+            .find(|row| {
+                row.provenance.as_ref() == self.source.as_ref()
+                    && row.profile() == profile
+                    && row.aliases().contains(&id)
+            })
             .cloned()
     }
     pub fn action(&mut self, action: Action) -> Vec<PageEffect> {
@@ -661,10 +866,19 @@ impl SidebarState {
                 if self.demo || self.mutation.is_some() {
                     return vec![];
                 }
+                let mut seen = HashSet::new();
                 self.unread_queue = self
                     .all_rows()
                     .into_iter()
-                    .filter(|r| r.unread == Some(true) && r.connection_id.is_none())
+                    .filter(|r| {
+                        r.unread == Some(true)
+                            && seen.insert(r.key())
+                            && (self
+                                .source
+                                .as_ref()
+                                .is_some_and(|source| r.provenance.as_ref() == Some(source))
+                                || self.source.is_none() && r.connection_id.is_none())
+                    })
                     .cloned()
                     .collect();
                 self.next_unread()
@@ -675,7 +889,9 @@ impl SidebarState {
                     Grouping::Date => date_rows(rows, self.now)
                         .into_iter()
                         .filter_map(|row| match row {
-                            ListRow::Divider(key, _) => Some(key),
+                            ListRow::Divider(key, _) => {
+                                Some(self.group_key("recents", "date", &key))
+                            }
                             _ => None,
                         })
                         .collect(),
@@ -683,13 +899,14 @@ impl SidebarState {
                     group => rows
                         .iter()
                         .map(|row| {
-                            format!(
-                                "group:{}",
-                                match group {
+                            self.group_key(
+                                "recents",
+                                group.label(),
+                                &match group {
                                     Grouping::Profile => row.profile().to_owned(),
                                     Grouping::Project => project(row).into(),
                                     _ => self.status(row).label().into(),
-                                }
+                                },
                             )
                         })
                         .collect(),
@@ -757,6 +974,8 @@ impl SidebarState {
                         delete: true,
                         identity: None,
                         owner_connection: self.owner_connection,
+                        source: self.source.clone(),
+                        other: BTreeMap::new(),
                     }));
                 }
                 vec![]
@@ -766,13 +985,32 @@ impl SidebarState {
                 Some(Confirmation::Job(id)) => self.job_write(&id, "delete"),
                 None => vec![],
             },
+            Action::Context { profile, id, point } => {
+                self.menu = Some((profile, id, point));
+                vec![]
+            }
+            Action::CloseMenu => {
+                self.menu = None;
+                vec![]
+            }
             Action::Cancel => {
                 self.confirm = None;
                 self.rename = None;
                 vec![]
             }
             Action::RetryMutation => {
-                if let Some(mutation) = self.mutation.clone() {
+                if let Some(mut mutation) = self.mutation.clone() {
+                    if let (Some(old), Some(current)) = (&mutation.source, &self.source) {
+                        if !receipt::can_reconcile(old, current) {
+                            self.notice = Some(
+                                "This pending edit belongs to a different source version".into(),
+                            );
+                            return vec![];
+                        }
+                        mutation.source = Some(current.clone());
+                        mutation.session.provenance = Some(current.clone());
+                        self.mutation = Some(mutation.clone());
+                    }
                     if mutation.owner_connection != self.owner_connection {
                         self.notice = Some(
                             "Return to the gateway that owns this pending edit before retrying it"
@@ -833,6 +1071,8 @@ impl SidebarState {
             delete: false,
             identity: None,
             owner_connection: self.owner_connection,
+            source: self.source.clone(),
+            other: BTreeMap::new(),
         })
     }
     fn start_flag(
@@ -851,6 +1091,8 @@ impl SidebarState {
             delete,
             identity: None,
             owner_connection: self.owner_connection,
+            source: self.source.clone(),
+            other: BTreeMap::new(),
         })
     }
     fn prepare(&mut self, mutation: Mutation) -> Vec<PageEffect> {
@@ -862,14 +1104,52 @@ impl SidebarState {
                 Some("Retry the pending session edit before starting another edit".into());
             return vec![];
         }
-        if mutation.session.connection_id.is_some() {
+        if mutation.source.as_ref() != self.source.as_ref()
+            || mutation
+                .session
+                .provenance
+                .as_ref()
+                .is_some_and(|source| Some(source) != self.source.as_ref())
+        {
+            self.notice = Some("The session edit belongs to a different source incarnation".into());
+            return vec![];
+        }
+        if self.source.is_none() && mutation.session.connection_id.is_some() {
             self.notice = Some(
                 "This session names another gateway. Connect its owner before editing it".into(),
             );
             return vec![];
         }
+        if !self.demo {
+            let result = self
+                .receipt_store
+                .as_mut()
+                .ok_or("The source-qualified edit store is unavailable".to_owned())
+                .and_then(|store| store.begin());
+            if let Err(error) = result {
+                if let Some(store) = &mut self.receipt_store {
+                    if let Ok(Some(receipt)) = store.load() {
+                        if receipt
+                            .mutation
+                            .source
+                            .as_ref()
+                            .zip(self.source.as_ref())
+                            .is_some_and(|(old, current)| receipt::can_reconcile(old, current))
+                        {
+                            let mut pending = receipt.mutation.clone();
+                            pending.owner_connection = self.owner_connection;
+                            pending.session.provenance = pending.source.clone();
+                            self.mutation = Some(pending);
+                            self.recovery = Some(receipt);
+                        }
+                    }
+                }
+                self.notice = Some(error);
+                return vec![];
+            }
+        }
         let row = &mutation.session;
-        let id = row._lineage_root_id.as_deref().unwrap_or(&row.id);
+        let id = row.root_id();
         let request = PageRequest::get(format!("/api/sessions/{}/mutation-snapshot", segment(id)))
             .profile(row.profile());
         self.mutation = Some(mutation);
@@ -883,8 +1163,12 @@ impl SidebarState {
         let Some(identity) = &mutation.identity else {
             return vec![];
         };
+        if mutation.source.as_ref() != self.source.as_ref() {
+            self.notice = Some("The pending edit belongs to a different source incarnation".into());
+            return vec![];
+        }
         let row = &mutation.session;
-        let id = row._lineage_root_id.as_deref().unwrap_or(&row.id);
+        let id = row.root_id();
         let path = format!("/api/sessions/{}", segment(id));
         let request = if mutation.delete {
             let mut request = PageRequest::delete(path, Value::Null);
@@ -995,6 +1279,9 @@ impl SidebarState {
                     }
                     "jobs" => self.jobs_error = Some(error.clone()),
                     "snapshot" => {
+                        if let Some(store) = &mut self.receipt_store {
+                            store.release_unprepared();
+                        }
                         self.mutation = None;
                         self.unread_queue.clear();
                     }
@@ -1028,7 +1315,7 @@ impl SidebarState {
                 ));
                 return vec![];
             }
-            self.notice = Some("The session edit was confirmed by its owning agent".into());
+            self.notice = Some("Session updated.".into());
             if !self.unread_queue.is_empty() {
                 return self.next_unread();
             }
@@ -1041,6 +1328,25 @@ impl SidebarState {
             return self.load(&profile);
         }
         if let Some(profile) = key.strip_prefix("live.") {
+            if let Some(source) = &self.source {
+                let invalid = value["sessions"].as_array().is_some_and(|rows| {
+                    rows.iter().any(|row| {
+                        !crate::gateway::sidebar::source_tag_matches(
+                            row["connection_id"].as_str(),
+                            source,
+                        ) || row["profile"]
+                            .as_str()
+                            .is_some_and(|owner| owner != profile)
+                    })
+                });
+                if invalid {
+                    self.errors.insert(
+                        op.into(),
+                        "The live session list contradicts its verified source/profile".into(),
+                    );
+                    return vec![];
+                }
+            }
             self.live.retain(|(owner, _), _| owner != profile);
             for row in value
                 .get("sessions")
@@ -1095,18 +1401,44 @@ impl SidebarState {
                     }
                     slice
                 };
-                apply_slice(&mut self.recents, &slice("recents"), &self.owner_profile);
+                apply_slice(
+                    &mut self.recents,
+                    &slice("recents"),
+                    &self.owner_profile,
+                    self.source.as_ref(),
+                );
                 apply_slice(
                     &mut self.messaging,
                     &slice("messaging"),
                     &self.owner_profile,
+                    self.source.as_ref(),
                 );
-                apply_slice(&mut self.cron_sessions, &slice("cron"), &self.owner_profile);
+                apply_slice(
+                    &mut self.cron_sessions,
+                    &slice("cron"),
+                    &self.owner_profile,
+                    self.source.as_ref(),
+                );
                 self.storage = serde_json::from_value(value["storage"].clone()).unwrap_or_default();
             }
-            "recents" => apply_slice(&mut self.recents, &value, &self.owner_profile),
-            "messaging" => apply_slice(&mut self.messaging, &value, &self.owner_profile),
-            "cron" => apply_slice(&mut self.cron_sessions, &value, &self.owner_profile),
+            "recents" => apply_slice(
+                &mut self.recents,
+                &value,
+                &self.owner_profile,
+                self.source.as_ref(),
+            ),
+            "messaging" => apply_slice(
+                &mut self.messaging,
+                &value,
+                &self.owner_profile,
+                self.source.as_ref(),
+            ),
+            "cron" => apply_slice(
+                &mut self.cron_sessions,
+                &value,
+                &self.owner_profile,
+                self.source.as_ref(),
+            ),
             "jobs" => {
                 match serde_json::from_value::<Vec<crate::pages::cron::Job>>(
                     value
@@ -1159,6 +1491,9 @@ impl SidebarState {
         if !exists || revision.is_none() || generation.is_none() {
             self.errors.insert("sidebar.snapshot".into(),"The agent could not confirm a revision-fenced session identity. Refresh before editing.".into());
             self.mutation = None;
+            if let Some(store) = &mut self.receipt_store {
+                store.release_unprepared();
+            }
             return vec![];
         }
         if let Some(mutation) = &mut self.mutation {
@@ -1182,13 +1517,16 @@ impl SidebarState {
         self.jobs=serde_json::from_value(json!([{"id":"morning","name":"Morning brief","enabled":true,"state":"scheduled","schedule_display":"Every morning","next_run_at":(Local::now()+Duration::hours(2)).to_rfc3339()}])).unwrap();
     }
 }
-fn apply_slice(slice: &mut Slice, value: &Value, fallback: &str) {
+fn apply_slice(slice: &mut Slice, value: &Value, fallback: &str, source: Option<&SourceStamp>) {
     slice.loading = false;
     if value["failed"].as_bool() == Some(true) || value["retry"].as_bool() == Some(true) {
         slice.error = Some("This session slice failed to load. Retry to recover it.".into());
         return;
     }
-    match parse_sessions(value, fallback) {
+    match source
+        .map(|source| parse_sessions_owned(value, fallback, source))
+        .unwrap_or_else(|| parse_sessions(value, fallback))
+    {
         Ok(mut rows) => {
             let failed: BTreeSet<String> = value["profiles_failed"]
                 .as_object()
@@ -1300,20 +1638,63 @@ pub enum ListRow {
     Divider(String, String),
     Session(SidebarSession),
 }
-fn flatten_branches(rows: Vec<&SidebarSession>) -> Vec<&SidebarSession> {
-    let present: HashSet<String> = rows.iter().map(|row| row.id.clone()).collect();
+pub fn lineage_rows(rows: Vec<&SidebarSession>) -> Vec<&SidebarSession> {
+    // Compression aliases belong to one exact source/profile namespace; forks have a new root.
+    let mut lineages: HashMap<String, Vec<&SidebarSession>> = HashMap::new();
+    for row in &rows {
+        lineages.entry(row.key()).or_default().push(*row);
+    }
+    let mut winners = HashMap::new();
+    for (key, group) in lineages {
+        let continued: HashSet<_> = group
+            .iter()
+            .filter_map(|row| row.parent_session_id.as_deref().map(|id| row.alias_key(id)))
+            .collect();
+        let best = group
+            .iter()
+            .copied()
+            .reduce(|best, row| {
+                let rank = |row: &SidebarSession| {
+                    if continued.contains(&row.alias_key(&row.id)) {
+                        f64::NEG_INFINITY
+                    } else {
+                        row.recency()
+                    }
+                };
+                if rank(row) > rank(best) { row } else { best }
+            })
+            .unwrap();
+        winners.insert(key, best);
+    }
+    let selected: Vec<_> = rows
+        .iter()
+        .copied()
+        .filter(|row| std::ptr::eq(*row, winners[&row.key()]))
+        .collect();
+    let mut aliases = HashMap::new();
+    for row in &rows {
+        let winner = winners[&row.key()];
+        for id in row.aliases() {
+            aliases.insert(row.alias_key(id), winner);
+        }
+    }
     let mut children: HashMap<String, Vec<&SidebarSession>> = HashMap::new();
     let mut roots = vec![];
-    for row in rows {
-        if let Some(parent) = &row._branched_from
-            && present.contains(parent)
-        {
-            children.entry(parent.clone()).or_default().push(row);
+    for row in selected {
+        let parent = row
+            .fork_parent()
+            .and_then(|id| aliases.get(&row.alias_key(id)).copied())
+            .filter(|parent| parent.key() != row.key());
+        if let Some(parent) = parent {
+            children.entry(parent.key()).or_default().push(row);
         } else {
             roots.push(row);
         }
     }
-    fn visit<'a>(
+    for children in children.values_mut() {
+        children.sort_by(|a, b| b.recency().total_cmp(&a.recency()));
+    }
+    fn walk<'a>(
         row: &'a SidebarSession,
         children: &HashMap<String, Vec<&'a SidebarSession>>,
         seen: &mut HashSet<String>,
@@ -1323,30 +1704,44 @@ fn flatten_branches(rows: Vec<&SidebarSession>) -> Vec<&SidebarSession> {
             return;
         }
         out.push(row);
-        if let Some(children_rows) = children.get(&row.id) {
-            for child in children_rows {
-                visit(child, children, seen, out);
+        if let Some(nested) = children.get(&row.key()) {
+            for child in nested {
+                walk(child, children, seen, out);
             }
         }
     }
     let mut output = vec![];
     let mut seen = HashSet::new();
     for root in roots {
-        visit(root, &children, &mut seen, &mut output);
+        walk(root, &children, &mut seen, &mut output);
     }
-    for rows in children.values() {
-        for row in rows {
-            visit(row, &children, &mut seen, &mut output);
+    for group in children.values() {
+        for row in group {
+            walk(row, &children, &mut seen, &mut output);
         }
     }
     output
 }
 pub fn date_rows(rows: Vec<&SidebarSession>, now: f64) -> Vec<ListRow> {
-    let sorted = flatten_branches(rows);
+    let branches: HashSet<_> = rows
+        .iter()
+        .filter(|row| {
+            row.fork_parent().is_some_and(|parent| {
+                rows.iter().any(|candidate| {
+                    candidate.provenance == row.provenance
+                        && candidate.profile() == row.profile()
+                        && candidate.aliases().contains(&parent)
+                        && candidate.key() != row.key()
+                })
+            })
+        })
+        .map(|row| row.key())
+        .collect();
+    let sorted = lineage_rows(rows);
     let mut roots: Vec<&SidebarSession> = sorted
         .iter()
         .copied()
-        .filter(|r| r._branched_from.is_none())
+        .filter(|r| !branches.contains(&r.key()))
         .collect();
     roots.sort_by(|a, b| b.recency().total_cmp(&a.recency()));
     let mut best = None;
@@ -1382,7 +1777,7 @@ pub fn date_rows(rows: Vec<&SidebarSession>, now: f64) -> Vec<ListRow> {
     let mut emitted = HashSet::new();
     let mut last = String::new();
     for row in sorted {
-        if row._branched_from.is_some() {
+        if branches.contains(&row.key()) {
             output.push(ListRow::Session(row.clone()));
             continue;
         }
@@ -1442,7 +1837,9 @@ impl crate::app::Viewer {
     pub fn sidebar_action(&mut self, action: Action) {
         if let Action::Open(profile, id) = &action {
             if let Some(row) = self.sidebar_state.find(profile, id) {
-                if row.connection_id.is_some() {
+                if row.provenance.as_ref() != self.sidebar_state.source_stamp()
+                    || row.provenance.is_none() && row.connection_id.is_some()
+                {
                     self.sidebar_state.notice =
                         Some("Connect the gateway that owns this session before opening it".into());
                     return;
@@ -1496,5 +1893,6 @@ impl crate::app::Viewer {
         }
         let effects = self.sidebar_state.action(action);
         self.page_requests(effects);
+        self.mirror_sidebar_preferences();
     }
 }

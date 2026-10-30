@@ -12,7 +12,7 @@ pub(super) struct Work {
     pub runtime: String,
     pub generation: u64,
     pub id: u64,
-    pub connection: Connection,
+    pub binding: Binding,
     pub active: Arc<AtomicBool>,
     pub action: Action,
 }
@@ -52,8 +52,15 @@ pub(super) fn start(waker: Waker) -> (mpsc::SyncSender<Work>, mpsc::Receiver<Rep
                 let request = PageRequest::rpc(method, body)
                     .profile(&work.scope.profile)
                     .timeout_secs(10);
-                let result = Gateway::connect(&work.connection)
-                    .and_then(|mut gateway| gateway.page_request(&work.scope.profile, &request));
+                let result = work.binding.request(request).and_then(|request| {
+                    if !work.active.load(Ordering::Acquire) {
+                        return Err("The background source was retired".into());
+                    }
+                    Gateway::connect(work.binding.connection()).and_then(|mut gateway| {
+                        work.binding.validate()?;
+                        gateway.page_request(&work.scope.profile, &request)
+                    })
+                });
                 if replies
                     .send(Reply {
                         scope: work.scope,

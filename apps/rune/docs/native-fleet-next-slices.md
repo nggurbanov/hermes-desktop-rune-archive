@@ -3,7 +3,10 @@
 Read-only implementation map against the retained Electron baseline named by
 `desktop-baseline.json` (`ef75bc708867e3884cb40a91363be6dc6fddc034`). Paths below
 refer to retained client behavior; no upstream agent implementation is required.
-This audit did not run native or network acceptance. Current startup/window work
+This is the pre-implementation audit; statements below about missing fleet code
+describe that snapshot. Current source-owned fleet/sidebar implementation and
+its remaining gaps are tracked in `native-fleet-parity.md`. This audit did not
+run native or network acceptance. Current startup/window work
 is covered separately by `native-startup-route-parity.md` and
 `native-startup-route-acceptance.md`; it does not establish fleet/project parity.
 
