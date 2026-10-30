@@ -1,7 +1,7 @@
 //! A writer submits only its own changed JSON leaves under an OS file lock.
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value};
-use std::{fs::File, path::Path};
+use std::path::Path;
 
 /// Loading does not create a file. Callers retain this value as their save baseline.
 pub(crate) fn load<T: DeserializeOwned + Default>(
@@ -95,7 +95,7 @@ fn read(path: &Path) -> Result<Option<Value>, String> {
         }
     }
 }
-fn lock(path: &Path) -> Result<File, String> {
+fn lock(path: &Path) -> Result<super::FileLock, String> {
     let parent = path.parent().ok_or("Invalid client preferences path")?;
     std::fs::create_dir_all(parent)
         .map_err(|_| "Client preferences directory could not be created")?;
@@ -120,7 +120,7 @@ fn lock(path: &Path) -> Result<File, String> {
         .map_err(|_| "Client preferences lock could not be opened")?;
     file.lock()
         .map_err(|_| "Client preferences could not be locked")?;
-    Ok(file)
+    Ok(super::FileLock::from_locked(file))
 }
 fn merge(current: &mut Value, before: &Value, after: &Value) {
     if before == after {

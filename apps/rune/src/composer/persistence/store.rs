@@ -1,10 +1,7 @@
 //! Cross-process transactions merge only edited keys, never another editor's snapshot.
 use super::*;
-use std::{
-    fs::{File, OpenOptions},
-    path::Path,
-};
-fn lock(path: &Path) -> Result<File, String> {
+use std::{fs::OpenOptions, path::Path};
+fn lock(path: &Path) -> Result<crate::client::FileLock, String> {
     let parent = path.parent().ok_or("Invalid draft storage path")?;
     std::fs::create_dir_all(parent).map_err(|_| "Draft storage directory could not be created")?;
     #[cfg(unix)]
@@ -25,7 +22,7 @@ fn lock(path: &Path) -> Result<File, String> {
         .map_err(|_| "Draft storage lock could not be opened")?;
     file.lock()
         .map_err(|_| "Draft storage could not be locked")?;
-    Ok(file)
+    Ok(crate::client::FileLock::from_locked(file))
 }
 fn read(path: &Path) -> Result<State, String> {
     let bytes = match std::fs::read(path) {
@@ -143,10 +140,11 @@ pub(super) fn commit(
     before: &Snapshot,
     after: &Snapshot,
     seen: &Observed,
+    migration_owner: &EditorId,
 ) -> Result<Observed, String> {
     let _lock = lock(path)?;
     let mut state = read(path)?;
-    let mut changed = migrate(&mut state, editor)?;
+    let mut changed = migrate(&mut state, migration_owner)?;
     let mut observed = seen.clone();
     let keys: HashSet<_> = before
         .drafts
@@ -250,10 +248,15 @@ pub(super) fn primary(path: &Path) -> Result<EditorId, String> {
     }
 }
 
-pub(super) fn slot(path: &Path, window: &EditorId, key: &Key) -> Result<EditorId, String> {
+pub(super) fn slot(
+    path: &Path,
+    window: &EditorId,
+    key: &Key,
+    migration_owner: &EditorId,
+) -> Result<EditorId, String> {
     let _lock = lock(path)?;
     let mut state = read(path)?;
-    let migrated = migrate(&mut state, window)?;
+    let migrated = migrate(&mut state, migration_owner)?;
     if let Some(slot) = state.owner_slots.iter().find(|slot| {
         &slot.window == window && slot.profile == key.profile && slot.session == key.session
     }) {

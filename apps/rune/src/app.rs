@@ -42,7 +42,14 @@ struct BotOpen {
     replace: Option<(String, String)>,
 }
 
+pub struct SavedSendConfirmation {
+    pub scope: DraftScope,
+    pub id: String,
+    pub revision: u64,
+}
+
 pub struct Viewer {
+    window: windows::State,
     editors: editors::Editors,
     retired_editor_input: TextEdit,
     pub notifications: crate::notifications::Notifications,
@@ -91,7 +98,7 @@ pub struct Viewer {
     pub admission_mode: crate::conversation::AdmissionMode,
     pub recoverable_sends: Vec<(String, String)>,
     read_only_chats: HashMap<DraftScope, String>,
-    pub discard_send_confirm: Option<String>,
+    pub discard_send_confirm: Option<SavedSendConfirmation>,
     policy_sends: HashMap<String, crate::composer::Draft>,
     recovery_scope: Option<DraftScope>,
     pub prompt_responses: HashMap<(DraftScope, String), TextEdit>,
@@ -100,6 +107,7 @@ pub struct Viewer {
     pub client_error: Option<String>,
     pub client_notice: Option<String>,
     preferences: crate::client::Preferences,
+    preferences_read_only_baseline: Option<crate::client::Preferences>,
     preferences_writable: bool,
     preferences_retry_at: Option<std::time::Instant>,
     preferences_error: Option<String>,
@@ -204,6 +212,7 @@ enum Update {
 impl Viewer {
     fn empty() -> Self {
         Self {
+            window: windows::State::default(),
             editors: Default::default(),
             retired_editor_input: TextEdit::default(),
             notifications: crate::notifications::Notifications::new(),
@@ -261,6 +270,7 @@ impl Viewer {
             client_error: None,
             client_notice: None,
             preferences: crate::client::Preferences::default(),
+            preferences_read_only_baseline: None,
             preferences_writable: true,
             preferences_retry_at: None,
             preferences_error: None,
@@ -332,52 +342,7 @@ impl Viewer {
             }
             return s;
         }
-        s.sidebar_state.load_preferences();
-        match crate::client::profiles::ProfilePreferences::load() {
-            Ok(p) => s.profile_preferences = p,
-            Err(error) => s.client_error = Some(error),
-        }
-        match crate::client::Preferences::load() {
-            Ok(prefs) => {
-                s.speak_replies = prefs.speak_replies;
-                s.review_preferences = prefs.review.clone();
-                s.review.hydrate_preferences(&prefs.review);
-                s.show_statusbar = prefs.show_statusbar;
-                s.show_profile_rail = prefs.show_profile_rail;
-                s.hidden_status_items = prefs.hidden_status_items.clone();
-                s.theme = prefs.theme;
-                s.layout = prefs
-                    .layout
-                    .clone()
-                    .normalize()
-                    .filter(|t| t.panes().iter().any(|p| p == "workspace"))
-                    .unwrap_or_default();
-                s.simple_mode = prefs.simple_mode;
-                s.sidebar.set_width(prefs.sidebar_width);
-                s.inspector.set_width(prefs.inspector_width);
-                if !prefs.sidebar_open {
-                    s.sidebar.toggle();
-                }
-                if prefs.inspector_open {
-                    s.inspector.toggle();
-                    s.advanced_tools_open = true;
-                }
-                s.decks = prefs.decks.clone().unwrap_or_else(|| {
-                    let mut decks = crate::decks::Decks::default();
-                    if prefs.inspector_open {
-                        decks.hidden.clear();
-                    }
-                    decks
-                });
-                s.decks.normalize();
-                s.decks.tool_gate = s.inspector.is_open();
-                s.preferences = prefs;
-            }
-            Err(error) => {
-                s.preferences_writable = false;
-                s.client_error = Some(error);
-            }
-        }
+        s.load_client_state();
         if let Some(endpoint) = argument("--gateway") {
             let token = std::env::var("HERMES_GATEWAY_TOKEN")
                 .ok()
@@ -398,6 +363,56 @@ impl Viewer {
         }
         s.connection_form = s.connection.is_none();
         s
+    }
+
+    fn load_client_state(&mut self) {
+        self.sidebar_state.load_preferences();
+        match crate::client::profiles::ProfilePreferences::load() {
+            Ok(p) => self.profile_preferences = p,
+            Err(error) => self.client_error = Some(error),
+        }
+        match crate::client::Preferences::load() {
+            Ok(prefs) => self.hydrate_client_preferences(prefs),
+            Err(error) => {
+                self.preferences_writable = false;
+                self.preferences_read_only_baseline = Some(self.client_preferences_snapshot());
+                self.client_error = Some(error);
+            }
+        }
+    }
+    fn hydrate_client_preferences(&mut self, prefs: crate::client::Preferences) {
+        self.speak_replies = prefs.speak_replies;
+        self.review_preferences = prefs.review.clone();
+        self.review.hydrate_preferences(&prefs.review);
+        self.show_statusbar = prefs.show_statusbar;
+        self.show_profile_rail = prefs.show_profile_rail;
+        self.hidden_status_items = prefs.hidden_status_items.clone();
+        self.theme = prefs.theme;
+        self.layout = prefs
+            .layout
+            .clone()
+            .normalize()
+            .filter(|t| t.panes().iter().any(|p| p == "workspace"))
+            .unwrap_or_default();
+        self.simple_mode = prefs.simple_mode;
+        self.sidebar.set_width(prefs.sidebar_width);
+        self.inspector.set_width(prefs.inspector_width);
+        self.sidebar.set_open(prefs.sidebar_open);
+        self.inspector.set_open(prefs.inspector_open);
+        self.advanced_tools_open = prefs.inspector_open;
+        self.decks = prefs.decks.clone().unwrap_or_else(|| {
+            let mut decks = crate::decks::Decks::default();
+            if prefs.inspector_open {
+                decks.hidden.clear();
+            }
+            decks
+        });
+        self.decks.normalize();
+        self.decks.tool_gate = self.inspector.is_open();
+        self.preferences = prefs;
+        if !self.preferences_writable {
+            self.preferences_read_only_baseline = Some(self.client_preferences_snapshot());
+        }
     }
 
     pub fn key_capture_visible(&self) -> bool {
@@ -483,10 +498,21 @@ impl Viewer {
         }
         self.use_connection(Connection::Local { home });
     }
-    fn use_connection(&mut self, connection: Connection) {
+    fn use_connection(&mut self, connection: Connection) -> bool {
+        self.use_connection_for_profile(connection, None)
+    }
+    fn use_connection_for_profile(
+        &mut self,
+        connection: Connection,
+        profile: Option<String>,
+    ) -> bool {
         if !self.allow_owner_change("") {
-            return;
+            return false;
         }
+        if let Some(profile) = profile {
+            self.profile = profile;
+        }
+        self.switching_window_source();
         self.preview.close_connection(self.connection_epoch);
         self.media_players.close_connection(self.connection_epoch);
         self.audio_preview = None;
@@ -496,7 +522,7 @@ impl Viewer {
         self.conversation.close_connection(self.connection_epoch);
         self.audio.close_connection(self.connection_epoch);
         self.terminal.close_connection(self.connection_epoch);
-        self.connection_epoch += 1;
+        self.connection_epoch = windows::source_epoch();
         self.page_network.invalidate();
         self.composer.close();
         self.connection = Some(connection);
@@ -511,6 +537,7 @@ impl Viewer {
         self.bot_empty = false;
         self.history_truncated = false;
         self.reconnect();
+        true
     }
     pub fn toggle_theme(&mut self, system_dark: bool) {
         self.theme = Some(!self.theme.unwrap_or(system_dark));
@@ -1074,13 +1101,7 @@ impl Viewer {
 
 pub fn setup(s: &mut Viewer, waker: Waker) {
     if !s.fixture {
-        match Composer::primary() {
-            Ok(composer) => s.composer = composer,
-            Err(error) => {
-                s.client_error = Some(error);
-                s.draft_storage_available = false;
-            }
-        }
+        s.init_window_storage();
         s.sounds.load();
         s.sounds.init(waker.clone());
         s.notifications.muted = s.sounds.muted();
@@ -1210,7 +1231,7 @@ pub fn setup(s: &mut Viewer, waker: Waker) {
 
 pub fn poll(s: &mut Viewer, now: f64, tx: &mut Tx) -> bool {
     s.ensure_editor();
-    let editors_changed = s.poll_editors(now, tx);
+    let editors_changed = s.poll_editors(now, tx) | s.poll_windows(tx);
     s.sync_tool_gate();
     if !s.key_capture_visible() {
         s.client_settings.capture = None;
@@ -1498,6 +1519,7 @@ pub fn error_scene(s: &mut Viewer) {
 mod tests;
 
 pub fn on_key(s: &mut Viewer, event: &rune::KeyEvent, tx: &mut Tx) -> bool {
+    s.inspect_unhandled_window_key(event, tx);
     if !s.key_capture_visible() {
         s.client_settings.capture = None;
     }
@@ -1795,3 +1817,6 @@ pub fn background_scene(s: &mut Viewer) {
 
 #[path = "app/editors.rs"]
 mod editors;
+
+#[path = "app/windows.rs"]
+pub(crate) mod windows;

@@ -17,6 +17,13 @@ struct Parked {
     composer: Composer,
 }
 impl Viewer {
+    pub(super) fn flush_window_editors(&mut self) -> Result<(), String> {
+        self.composer.flush_storage()?;
+        for editor in self.editors.parked.values_mut() {
+            editor.composer.flush_storage()?;
+        }
+        Ok(())
+    }
     pub(super) fn init_editors(&mut self, waker: Waker) {
         self.editors.base = Some(self.composer.editor_id().clone());
         self.editors.waker = Some(waker);
@@ -29,7 +36,8 @@ impl Viewer {
         }
     }
     pub fn editor_ready(&self) -> bool {
-        !self.editors.blocked
+        (self.fixture || self.connection.is_some())
+            && !self.editors.blocked
             && self
                 .editors
                 .active
@@ -37,6 +45,11 @@ impl Viewer {
                 .is_none_or(|(owner, _)| *owner == self.composer_scope())
     }
     pub(super) fn ensure_editor(&mut self) -> bool {
+        // A new peer may resolve a saved source after its first frame. Do not
+        // bind the editor to a source-less placeholder before that reply.
+        if !self.fixture && self.connection.is_none() {
+            return false;
+        }
         if self.editors.base.is_none() {
             return true;
         }

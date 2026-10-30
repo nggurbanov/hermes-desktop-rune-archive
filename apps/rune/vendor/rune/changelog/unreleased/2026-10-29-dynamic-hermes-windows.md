@@ -1,0 +1,1 @@
+- Add event-thread dynamic ordinary windows with independent lifetime, explicit creation receipts, bounded pending requests and stale-route isolation; expose native geometry and local close-request guards for Hermes peer windows.

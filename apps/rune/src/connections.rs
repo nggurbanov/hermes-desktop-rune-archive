@@ -12,6 +12,7 @@ mod leases;
 pub use leases::{Lease, LeaseGuard, Resolver};
 pub(crate) mod plugin;
 mod ssh;
+mod worker;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -91,6 +92,7 @@ impl Registry {
 
 pub struct Editor {
     pub id: Option<String>,
+    expected_revision: Option<String>,
     pub kind: Kind,
     pub label: TextEdit,
     pub home: TextEdit,
@@ -109,6 +111,7 @@ impl Editor {
     fn new(kind: Kind) -> Self {
         Self {
             id: None,
+            expected_revision: None,
             kind,
             label: TextEdit::new(""),
             home: TextEdit::new(""),
@@ -127,6 +130,7 @@ impl Editor {
     fn existing(saved: &Saved) -> Self {
         let mut e = Self::new(saved.kind());
         e.id = Some(saved.id.clone());
+        e.expected_revision = Some(saved.revision.clone());
         e.label.replace_text(saved.label.clone());
         e.had_token = saved.has_credential();
         match &saved.destination {
@@ -173,6 +177,7 @@ impl Editor {
         };
         Ok(Input {
             id: self.id.clone(),
+            expected_revision: self.expected_revision.clone(),
             label,
             destination,
             secret: if !self.token.text.is_empty() {
@@ -195,6 +200,7 @@ fn port(value: &str, name: &str) -> Result<u16, String> {
 }
 struct Input {
     id: Option<String>,
+    expected_revision: Option<String>,
     label: String,
     destination: Destination,
     secret: SecretChange,
@@ -302,55 +308,7 @@ impl Connections {
         let (replies, receive) = mpsc::channel();
         std::thread::spawn(move || {
             let path = crate::client::state_dir().map(|p| p.join("connections.json"));
-            let mut state = path.map(core::Core::system);
-            loop {
-                match requests.recv_timeout(std::time::Duration::from_millis(200)) {
-                    Ok(Work::Ui(request)) => {
-                        let result = match &mut state {
-                            Ok(core) => core.execute(request.command),
-                            Err(e) => Err(e.clone()),
-                        };
-                        if replies
-                            .send(Reply {
-                                id: request.id,
-                                result,
-                            })
-                            .is_err()
-                        {
-                            break;
-                        }
-                        waker();
-                    }
-                    Ok(Work::Resolve {
-                        id,
-                        expected_revision,
-                        reply,
-                    }) => {
-                        let result = match &mut state {
-                            Ok(core) => core.resolve_lease(&id, expected_revision.as_deref()),
-                            Err(error) => Err(error.clone()),
-                        };
-                        let _ = reply.send(result);
-                        waker();
-                    }
-                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                    Err(mpsc::RecvTimeoutError::Timeout) => {}
-                }
-                if let Ok(core) = &mut state {
-                    if let Some((id, revision, error)) = core.poll_tunnel() {
-                        if replies
-                            .send(Reply {
-                                id: 0,
-                                result: Ok(Outcome::Lost(id, revision, error)),
-                            })
-                            .is_err()
-                        {
-                            break;
-                        }
-                        waker();
-                    }
-                }
-            }
+            worker::run(path.map(core::Core::system), requests, replies, waker);
         });
         self.network = Some(Network { send, receive });
         self.load();

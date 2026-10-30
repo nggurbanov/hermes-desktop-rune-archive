@@ -52,6 +52,11 @@ invocation. They are independent from desktop installation and startup.
   originating input. Hermes dictation and voice actions remain.
 - Native rich transcript, earlier history, canonical edit/retry/restore/branch
   with durable mutation recovery, copy/quote/read aloud, tools and images.
+- Complete native peer windows use the same Hermes application factory, with
+  independently claimed editors, captured sources/profiles, interactive sessions
+  and Bot Chat targets. Close Window and Quit are separate commands. Remaining
+  lifetime/default/restore/platform work is tracked in
+  [native window parity](docs/native-full-windows-parity.md).
 - Separate native Rune subagent windows: lazy read-only history/streaming,
   focus/reuse, theme propagation and viewer-only closure.
 - Settings, Capabilities, Messaging, Artifacts, Scheduled jobs, saved Connections
@@ -93,6 +98,8 @@ node apps/rune/scripts/check-notifications.mjs
 xvfb-run -a node apps/rune/scripts/check-preview.mjs
 xvfb-run -a node apps/rune/scripts/check-audio-preview.mjs
 node apps/rune/scripts/check-audio-navigation.mjs
+node apps/rune/scripts/check-peer-windows.mjs --binary /absolute/hermes-rune --out /absolute/evidence
+python3 apps/rune/vendor/rune/scripts/verify-hermes-source.py
 xvfb-run -a node apps/rune/scripts/check-subagent-windows.mjs
 xvfb-run -a node apps/rune/scripts/check-plugin-host.mjs --canonical
 xvfb-run -a node apps/rune/scripts/check-builtin-bots.mjs

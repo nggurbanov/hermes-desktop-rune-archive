@@ -134,3 +134,54 @@ fn agent_font_fields_are_clean_until_explicit_selection_and_save_only_the_sparse
     assert_eq!(changed["desktop.font_family"], "IBM Plex Mono");
     assert_eq!(settings.confirmed_config()["model"]["default"], "unchanged");
 }
+
+#[test]
+fn close_flush_preserves_untouched_read_only_display_but_reports_unsaved_edits() {
+    for bytes in [
+        b"invalid display".as_slice(),
+        br#"{"version":9,"future":true}"#.as_slice(),
+    ] {
+        let root =
+            std::env::temp_dir().join(format!("hermes-display-close-{}", uuid::Uuid::new_v4()));
+        let path = root.join("display.json");
+        crate::client::private_write(&path, bytes).unwrap();
+        let mut client = ClientSettings::new();
+        client.load_at(path.clone());
+        assert!(client.error.is_some());
+        client.flush_preferences().unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        client.act(Action::Scale(150), true);
+        assert!(client.flush_preferences().is_err());
+        assert_eq!(client.prefs.chat_scale, 150);
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn close_flush_retries_pending_display_intent_immediately_after_repair() {
+    let root = std::env::temp_dir().join(format!("hermes-display-close-{}", uuid::Uuid::new_v4()));
+    let path = root.join("display.json");
+    let mut client = ClientSettings::new();
+    client.load_at(path.clone());
+    let invalid = br#"{"version":9,"keep":true}"#;
+    crate::client::private_write(&path, invalid).unwrap();
+    // Same-value selection is still an intent against a newer foreign value.
+    client.act(Action::Scale(110), true);
+    assert!(client.preferences_wake_after().is_some());
+    assert!(client.flush_preferences().is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), invalid);
+    crate::client::private_write(
+        &path,
+        br#"{"version":1,"chat_scale":175,"bubble_transparency":45,"future":true}"#,
+    )
+    .unwrap();
+    client.flush_preferences().unwrap();
+    let mut loaded = ClientSettings::new();
+    loaded.load_at(path);
+    assert_eq!(loaded.prefs.chat_scale, 110);
+    assert_eq!(loaded.prefs.bubble_transparency, 45);
+    assert_eq!(loaded.prefs.other["future"], true);
+    assert!(client.preferences_wake_after().is_none());
+    std::fs::remove_dir_all(root).unwrap();
+}

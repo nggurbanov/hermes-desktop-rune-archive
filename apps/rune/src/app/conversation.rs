@@ -11,6 +11,9 @@ impl Viewer {
             self.compose_error = Some("Wait for the prepared send to bind its conversation".into());
             return;
         }
+        if self.prepare_window_new_session() {
+            return;
+        }
         self.layout.open("workspace");
         if self.route == crate::pages::Route::Settings {
             self.settings.vault.dismiss();
@@ -398,7 +401,7 @@ impl Viewer {
             .view(&self.composer_scope())
             .is_some_and(|v| v.running)
     }
-    pub fn confirm_send_model(&mut self, scope: DraftScope, id: String) {
+    pub fn confirm_send_model(&mut self, scope: DraftScope, id: String, revision: u64) {
         if self.fixture || scope.connection != self.connection_epoch {
             return;
         }
@@ -408,17 +411,38 @@ impl Viewer {
                 scope.clone(),
                 &id,
                 self.composer.draft(&scope).map(|d| d.policy_stamp()),
+                revision,
             ) {
                 self.compose_error = Some(error);
             }
         }
     }
-    pub fn discard_send(&mut self, scope: DraftScope, id: String) {
+    pub fn ask_discard_send(&mut self, scope: DraftScope, id: String) {
+        if self.fixture || scope.connection != self.connection_epoch {
+            return;
+        }
+        if let Some(connection) = &self.connection {
+            match self.conversation.saved_revision(connection, &scope, &id) {
+                Ok(revision) => {
+                    self.discard_send_confirm = Some(SavedSendConfirmation {
+                        scope,
+                        id,
+                        revision,
+                    })
+                }
+                Err(error) => self.compose_error = Some(error),
+            }
+        }
+    }
+    pub fn discard_send(&mut self, scope: DraftScope, id: String, revision: u64) {
         if self.fixture || scope.connection != self.connection_epoch {
             return;
         }
         if let Some(connection) = self.connection.clone() {
-            if let Err(error) = self.conversation.discard(&connection, &scope, &id) {
+            if let Err(error) = self
+                .conversation
+                .discard(&connection, &scope, &id, revision)
+            {
                 self.compose_error = Some(error);
             } else {
                 self.discard_send_confirm = None;
@@ -559,7 +583,7 @@ impl Viewer {
         let changed = !events.is_empty();
         for event in events {
             match event{
-   crate::connections::Event::Ready(connection)=>self.use_connection(connection),
+   crate::connections::Event::Ready(connection)=>{self.use_connection(connection);},
    crate::connections::Event::Changed=>{},
    crate::connections::Event::Lost{id,revision,message}=>{if self.connection.as_ref().is_some_and(|connection|matches!(connection,Connection::Saved{id:current,revision:current_revision,..}if current==&id&&current_revision==&revision)){self.conversation.close_connection(self.connection_epoch);self.chat.close_connection(self.connection_epoch);self.subagents.close_connection(self.connection_epoch);self.audio.close_connection(self.connection_epoch);self.background.retire_connection(self.connection_epoch);self.preview.close_connection(self.connection_epoch);self.media_players.close_connection(self.connection_epoch);self.audio_preview=None;self.error=Some(message);self.status="Disconnected".into();self.loading=false;self.history_loading=false;}}
   }

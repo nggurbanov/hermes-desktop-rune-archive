@@ -183,3 +183,43 @@ fn writes_validate_a_newer_schema_before_replacing_it_and_demo_never_persists() 
     assert!(!demo.poll_storage());
     assert!(demo.storage_wake_after().is_none());
 }
+
+#[test]
+fn close_flush_preserves_untouched_read_only_sidebar_but_reports_local_intents() {
+    for bytes in [
+        b"invalid sidebar".as_slice(),
+        br#"{"version":9,"future":true}"#.as_slice(),
+    ] {
+        let root = Workspace::new();
+        root.write(bytes);
+        let mut state = root.state();
+        assert!(state.notice.is_some());
+        state.flush_storage().unwrap();
+        assert_eq!(std::fs::read(root.path()).unwrap(), bytes);
+        state.action(Action::Grouping(Grouping::Project));
+        assert!(state.flush_storage().is_err());
+        assert!(state.prefs.grouping == Grouping::Project);
+        assert_eq!(std::fs::read(root.path()).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn close_flush_retries_sidebar_intents_immediately_after_repair() {
+    let root = Workspace::new();
+    let mut state = root.state();
+    let invalid = br#"{"version":9,"future":true}"#;
+    root.write(invalid);
+    state.action(Action::Grouping(Grouping::Date));
+    state.action(Action::Toggle("cards"));
+    assert!(state.storage_wake_after().is_some());
+    assert!(state.flush_storage().is_err());
+    assert_eq!(std::fs::read(root.path()).unwrap(), invalid);
+    root.write(br#"{"grouping":"status","ordering":"cost","extension":{"keep":true}}"#);
+    state.flush_storage().unwrap();
+    let saved = root.saved();
+    assert_eq!(saved["grouping"], "date");
+    assert_eq!(saved["cards"], true);
+    assert_eq!(saved["ordering"], "cost");
+    assert_eq!(saved["extension"]["keep"], true);
+    assert!(state.storage_wake_after().is_none());
+}

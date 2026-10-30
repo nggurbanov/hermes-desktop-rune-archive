@@ -16,6 +16,7 @@ pub struct ProfilePreferences {
     retry_at: Option<Instant>,
     error: Option<String>,
     removals: BTreeSet<Vec<String>>,
+    read_only_fallbacks: BTreeMap<String, Value>,
 }
 impl ProfilePreferences {
     pub fn load() -> Result<Self, String> {
@@ -31,6 +32,7 @@ impl ProfilePreferences {
             retry_at: None,
             error: None,
             removals: BTreeSet::new(),
+            read_only_fallbacks: BTreeMap::new(),
         })
     }
     fn key(connection: &crate::gateway::Connection, profile: &str) -> Result<String, String> {
@@ -38,6 +40,39 @@ impl ProfilePreferences {
     }
     pub fn get(&self, c: &crate::gateway::Connection, p: &str) -> Option<&Value> {
         Self::key(c, p).ok().and_then(|k| self.entries.get(&k))
+    }
+    // Owner adoption is not an edit. Remember its inherited presentation only
+    // while the saved overlays are unavailable; explicit assigns remain pending.
+    fn adopt_fallback(
+        &mut self,
+        c: &crate::gateway::Connection,
+        p: &str,
+        value: Value,
+    ) -> Result<(), String> {
+        if !self.writable && self.get(c, p).is_none() {
+            self.read_only_fallbacks
+                .entry(Self::key(c, p)?)
+                .or_insert(value);
+        }
+        Ok(())
+    }
+    fn remember_implicit(
+        &mut self,
+        c: &crate::gateway::Connection,
+        p: &str,
+        value: Value,
+    ) -> Result<(), String> {
+        let key = Self::key(c, p)?;
+        if !self.writable
+            && !self.entries.contains_key(&key)
+            && self.read_only_fallbacks.get(&key) == Some(&value)
+        {
+            return Ok(());
+        }
+        if self.entries.get(&key) != Some(&value) {
+            self.assign(c, p, value)?;
+        }
+        Ok(())
     }
     pub fn assign(
         &mut self,
@@ -66,13 +101,13 @@ impl ProfilePreferences {
         self.save()
     }
     fn save(&mut self) -> Result<(), String> {
-        if !self.writable {
-            return Err("Profile preferences were not loaded; their file was retained".into());
-        }
         if self.entries == self.baseline && self.removals.is_empty() {
             self.retry_at = None;
             self.error = None;
             return Ok(());
+        }
+        if !self.writable {
+            return Err("Profile preferences were not loaded; their file was retained".into());
         }
         let result = self
             .path
@@ -103,6 +138,11 @@ impl ProfilePreferences {
                 Err(error)
             }
         }
+    }
+    /// Force pending overlays before close, regardless of the retry deadline.
+    /// An untouched unavailable store has no local work to lose.
+    pub fn flush_storage(&mut self) -> Result<(), String> {
+        self.save()
     }
     pub fn poll_storage(&mut self) -> Result<bool, String> {
         if self.retry_at.is_some_and(|at| at <= Instant::now()) {
@@ -165,16 +205,23 @@ impl crate::app::Viewer {
         }
     }
     pub fn restore_profile_appearance(&mut self) {
-        if let Some(value) = self
-            .current_connection()
-            .and_then(|c| self.profile_preferences.get(c, &self.profile))
-        {
+        let Some(connection) = self.current_connection().cloned() else {
+            return;
+        };
+        if let Some(value) = self.profile_preferences.get(&connection, &self.profile) {
             self.theme = match value["mode"].as_str() {
                 Some("dark") => Some(true),
                 Some("light") => Some(false),
                 Some("system") => None,
                 _ => self.theme,
             };
+        }
+        let fallback = self.profile_overlay(&self.profile);
+        if let Err(error) =
+            self.profile_preferences
+                .adopt_fallback(&connection, &self.profile, fallback)
+        {
+            self.client_error = Some(error);
         }
     }
     pub fn remember_profile_appearance(&mut self) {
@@ -185,13 +232,11 @@ impl crate::app::Viewer {
             return;
         };
         let value = self.profile_overlay(&self.profile);
-        if self.profile_preferences.get(&connection, &self.profile) != Some(&value) {
-            if let Err(error) = self
-                .profile_preferences
-                .assign(&connection, &self.profile, value)
-            {
-                self.client_error = Some(error);
-            }
+        if let Err(error) =
+            self.profile_preferences
+                .remember_implicit(&connection, &self.profile, value)
+        {
+            self.client_error = Some(error);
         }
     }
 }

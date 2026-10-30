@@ -13,6 +13,14 @@ const VOICE_KEYS: &[&str] = if cfg!(target_os = "macos") {
 };
 pub const COMMANDS: &[Command] = &[
     c!("session.new", "New conversation", "Sessions", "mod+n"),
+    c!("session.newWindow", "New window", "Sessions", "mod+shift+n"),
+    c!(
+        "session.closeWindow",
+        "Close window",
+        "Sessions",
+        "mod+shift+w"
+    ),
+    c!("app.quit", "Quit Hermes", "Application", "mod+q"),
     c!(
         "session.next",
         "Next conversation tab",
@@ -159,15 +167,19 @@ impl crate::app::Viewer {
         true
     }
     pub fn client_shortcut(&mut self, event: &KeyEvent, tx: &mut Tx) -> bool {
-        if self.composer.popup.is_some() || self.connection_form {
-            return false;
-        }
         let Some(chord) = event_chord(event, tx.physical_key()) else {
             return false;
         };
         let Some(command) = self.client_settings.command(&chord, tx.focused().is_some()) else {
             return false;
         };
+        if !matches!(
+            command,
+            "session.newWindow" | "session.closeWindow" | "app.quit"
+        ) && (self.composer.popup.is_some() || self.connection_form)
+        {
+            return false;
+        }
         if tx.key_repeat() && !matches!(command, "session.next" | "session.prev") {
             return true;
         }
@@ -184,6 +196,9 @@ impl crate::app::Viewer {
     fn client_session_command(&mut self, command: &str) -> bool {
         match command {
             "session.new" => self.new_draft(),
+            "session.newWindow" => self.request_new_window(),
+            "session.closeWindow" => self.request_window_close(),
+            "app.quit" => self.request_application_quit(),
             "session.next" | "session.prev" => {
                 let n = self.tabs.len();
                 if n > 0 {

@@ -27,6 +27,7 @@ mod status;
 pub(crate) mod subagents;
 pub(crate) mod terminal;
 mod transcript;
+mod windows;
 
 use rune::{Cx, El, ScrollSpec, col, el, icon, row, text};
 use rune_kit::{Button, ButtonVariant, Kit, TextInput};
@@ -36,6 +37,7 @@ use crate::app::{SidebarTab, Viewer};
 use palette::{Pal, pal};
 
 pub fn app(s: &Viewer, cx: &mut Cx<Viewer>) -> El {
+    s.inspect_native_window(cx);
     let system_dark = cx.system_dark();
     s.client_settings.system_dark.set(system_dark);
     let dark = s.theme.unwrap_or(system_dark);
@@ -56,6 +58,7 @@ pub fn app(s: &Viewer, cx: &mut Cx<Viewer>) -> El {
     };
     let split = shell::layout(s, cx, main, sidebar, k);
     let menu = shell::context_menu(s, k, &mut layer);
+    windows::menu(s, k, &mut layer);
     status::overlays(s, k, &mut layer);
     if let Some(picker) = directories::panel(s, k) {
         layer.push(picker);

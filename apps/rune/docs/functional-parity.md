@@ -1,6 +1,6 @@
 # Functional parity ledger
 
-Integration checkpoint, 2026-10-29. Baseline: retained Hermes Desktop at the
+Integration checkpoint, 2026-10-30. Baseline: retained Hermes Desktop at the
 repository's pinned upstream revision in `desktop-baseline.json`. This document
 records current implementation; older screenshots/inventories describe the
 complete target and earlier checkpoints. **Full parity is not achieved.**
@@ -11,7 +11,7 @@ complete target and earlier checkpoints. **Full parity is not achieved.**
 | Conversation transport | Durable prepared input, receipts/unknown outcomes, canonical/legacy attach, streaming/replay/stop, queue/steer, confirmations, approval/clarify, earlier-history merge, frozen multimodal edit/retry/restore/branch and scoped slash completion/directives; authoritative per-field policy stamps, live/snapshot/receipt adoption and retained deferred recovery | Remaining provider sidecars and slash directives, reactions/search/minimap and rich media players; see native-chat-parity.md |
 | Composer | Updated 21:12 T3 reference: attachment at left, compact model+reasoning at right, one Reasoning/Service Tier/Permissions popover, provider search/favorites, keyboard selection and native file staging; Hermes voice controls retained; independent profile approval and confirmed conversation bypass controls; actual per-tab editor controllers, original-input file chooser/text callbacks and late policy acknowledgements | Remaining transcript/composer commands and platform accessibility acceptance |
 | Subagents | Scoped live roster and separate native Rune spectator windows with lazy attachment, shared rich transcript/media, copy/download/read-aloud actions, bounded latest-only projection, reuse/focus/theme, reconnect and detach-only close | macOS/Windows window-manager acceptance; see subagent-windows-parity.md |
-| Hermes shell | Original navigation order, Sessions/Bots, canonical Bot Chat isolation, conversation tabs, independent simple/advanced layouts, both OpenCode appearances | Full simultaneous session tiles, peer windows and narrow-window/accessibility acceptance |
+| Hermes shell | Original navigation order, Sessions/Bots, canonical Bot Chat isolation, conversation tabs, independent simple/advanced layouts, both OpenCode appearances | Full simultaneous session tiles, remaining window/default/restore behavior and narrow-window/accessibility acceptance |
 | Pane tree | Native split/group model, docking, stacked tabs, divider resize, collapsed rails, persistent visibility, original Default/Basic/Focus/Terminal deck/Quad presets and named user layouts | Plugin pane geometry, simultaneous tile ownership and complete external/multiple-window acceptance |
 | Sidebar | Real independent recents/messaging/cron sources, grouping, durable pin/read/archive/rename/delete, filters and paging | Whole fleet status/order/color/startup/window interactions and cross-source activity rollups |
 | Bots | Profile CRUD, SOUL, config/model guard, assets/appearance generation/upload, duplication, setup/readiness, archive import/export and desktop overlay seam | Complete rail integration; all imported theme definitions and original skins; new-bot acceptance on newer external backend |
@@ -27,12 +27,53 @@ complete target and earlier checkpoints. **Full parity is not achieved.**
 | Voice | Actual CPAL/Rodio, dictation/chained/wake/autoread, scoped cancellation, native Linux WebRTC/Opus/AEC3, incremental GPT-Live delegation | Actual provider integration and macOS/Windows device/permission acceptance; synthetic AEC is not a hardware measurement |
 | GUI SDK | Original React/runtime/kit, retained canonical HermesGateway, authenticated brokers, events/storage/multipart/socket/native OS dialogs, verified cross-source leases and parent routing; bundled Bots groups/Petdex native acceptance; actual native SDK notification body/button callbacks, source/window leases and native focus | Remaining pane geometry/data engines/preview contributions, fleet freshness and complete parent-window/platform acceptance |
 | Connections | Typed saved Local/Remote/SSH, private keyring references, transactional metadata, strict SSH forwarding, read-only readiness, retained source lease pool and verified cross-source GUI routing | Cloud/OAuth login, complete fleet presentation/default-startup restoration and all native OS acceptance |
-| Client state | Locked per-field device/layout/display/sidebar/profile preference patches with explicit Reset/Clear intents and failed-write retry, principal-scoped v4 per-editor multimodal drafts/favorites with locked per-entry CAS/monotonic revisions/tombstones, migrated legacy input and durable owner-slot identities, named layouts/profile overlays, workspace/statusbar/timers/resource reads and custom shortcuts | Live multiple-window observation, per-window geometry, registry/admission ownership, skins/arbitrary fonts/global hotkeys and remaining fleet/client controls |
+| Native windows | Complete Viewer factory, dynamic independent native hosts, claimed WindowId/root editors, captured source/profile/session/Bot Chat targets, local Close and global Quit commands; see native-full-windows-parity.md | Device defaults/fleet startup, topology restore, complete source/feature/platform acceptance, dirty global Quit and final owned-service shutdown |
+| Client state | Locked per-field device/layout/display/sidebar/profile preference patches with explicit Reset/Clear intents and failed-write retry, principal-scoped v4 per-editor multimodal drafts/favorites with locked per-entry CAS/monotonic revisions/tombstones, migrated legacy input and durable owner-slot identities, named layouts/profile overlays, workspace/statusbar/timers/resource reads and custom shortcuts | Live multiple-window observation, full geometry/placement/restore policy, skins/arbitrary fonts/global hotkeys and remaining fleet/client controls |
 | Notifications and feedback | Real Linux D-Bus delivery, device preferences, seven live source kinds including background processes and original SDK plugins, reconnect/replay/focus guards, bounded broker, owner-bound actions, native/SDK completion cue ownership and all fourteen original sounds plus None/mute/preview | Native/SDK speech-segment ownership, HUD/haptics, pure-occlusion visibility and macOS/Windows adapters; see native-notifications-parity.md, native-plugin-notifications.md and native-completion-sounds-parity.md |
 | Background processes | Per-session authenticated process list/kill, running-to-exited completion, linger/output/confirmed stop/dismiss/rewind and one-shot read-only runtime recovery; visible-running safety polling and scope retirement | Full concurrent tile/peer integration and external-host/platform acceptance; see native-background-processes-parity.md |
 | Audio-file playback | Actual native WAV/MP3/Vorbis/FLAC/AAC and Ogg Opus playback, paused metadata, seek/volume/mute/pitch-preserving 0.25–4x, authenticated agent files and credential-free external HTTP, bounded range/sequential transport, cancellation generations and exact original saving; pinned decoder metadata/allocation patches | Inline concurrent players/remount positions, multichannel/chained/container Opus, music-quality and native OS acceptance; video/PDF/HTML remain separate; see native-audio-player-parity.md |
 
 ## Evidence at this checkpoint
+
+- The seventh frozen integration passed **481 Rust tests**, zero failed, five
+  ignored. Four private storage/ownership child helpers are exercised by their
+  passing default parents; the explicitly run private audio proof remains at
+  the fifth checkpoint. Formatting and build passed. Immutable binary SHA-256:
+  `3611c41cb30d625e95adfce43ae7e6032de6ed54b4f4f65282790b30fd8d095d`.
+- That exact binary passed the same **97 renderer/input scenarios** across
+  editors/composer/client settings/shell/pages/rich chat/full Viewer audio
+  navigation. A separate actual Linux window-manager flow verified five distinct
+  native XIDs in one PID (four coexist), independent typed/persisted owner slots,
+  settled Settings, two concurrent sends/streams and owned Stop, source/profile
+  capture, session target/reuse, profile-pinned Bot Chat/New Session, a surviving
+  interactive peer after primary close, local Close and global Quit. See
+  native-peer-window-acceptance.md for exact evidence and limits.
+- The complete-composer keyboard clipboard diagnostic returned empty text and
+  remains **unverified**. Its failure is retained explicitly, despite a separate
+  minimal Rune/Kit copy proof passing. It is not counted as accepted behavior.
+  The existing rich subagent miniwindow separately passed actual Copy, SVG/image,
+  tool disclosure, reuse/focus/theme and viewer-only detach on the final binary.
+- The recorded pinned Rune extension passed five public Runtime contracts,
+  80 actual native create/close/reuse cycles and an actual no-Vulkan surface
+  initialization failure. These use a separate example binary; they do not
+  substitute for the complete Hermes application. All 902 staged original,
+  modified and added source blobs match the manifest (888 original inputs,
+  nine declared modifications, fourteen additions). Git preserves exact source
+  and notice bytes; upstream whitespace remains unchanged.
+- OS claims, durable journal CAS/payload fencing, exclusive window identities,
+  stable primary-owned legacy migration, retained Resolver lifetime, local
+  registry observation/transactions, stale connection form revisions and forced
+  close-time preference flushes have actual file/process/socket contracts.
+  Three duplicated-descriptor contracts first failed, then passed after all
+  logical file-lock guards gained explicit unlock. The final full suite includes
+  that correction; no delay or serialization masks the former parallel failure.
+- The twelve actual native window screenshots and manifest are in
+  `/home/ubuntu/Artifacts/hermes-rune-native-windows-2026-10-30.zip`. They use only
+  synthetic private peers. Full window/default/restore behavior, concurrent
+  tiles, complete feature integration and all platform/distribution gates remain
+  active requirements. The next routing map is native-startup-route-parity.md.
+
+### Sixth checkpoint
 
 - The sixth frozen integration passed **439 Rust tests**, zero failed, three
   ignored. Two ignored storage helpers are launched by passing default parents
@@ -50,7 +91,8 @@ complete target and earlier checkpoints. **Full parity is not achieved.**
   stale unrelated edits, explicit unchanged Reset/Clear/selection, nested binding
   removal, unknown/future-schema preservation and failed-save repair/retry.
   This is safe persistence, not live peer-window synchronization. Connection
-  registry transactions, admission claims and independent window geometry remain.
+  registry transactions, admission claims and window records were later added
+  at the seventh checkpoint; complete restore/placement behavior still remains.
 - The Linux CI workflow now declares the audio/WebKit/AEC toolchain dependencies
   used by the local build and includes editor/client-settings/feature-page native
   checks. Its YAML parses; remote CI execution and other OS jobs are not claimed.

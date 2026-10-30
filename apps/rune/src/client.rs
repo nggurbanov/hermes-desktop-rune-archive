@@ -1,6 +1,9 @@
 //! Client-owned preferences and private runtime files, never an agent home.
+mod file_lock;
+pub(crate) use file_lock::FileLock;
 pub mod profiles;
 pub(crate) mod store;
+pub mod windows;
 use serde::{Deserialize, Serialize};
 use std::{
     io::Write,

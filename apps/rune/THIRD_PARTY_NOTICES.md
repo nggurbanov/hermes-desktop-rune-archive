@@ -1,7 +1,13 @@
 # Third-party notices
 
-The native Rune shell uses anomalyco/rune, rune-kit and the OpenCode theme.
-Their license and bundled font licenses are in `licenses/`.
+The native Rune shell uses anomalyco/rune, rune-kit and the OpenCode theme from
+the single pinned revision `bfb8facae2e4665e5e6d17afe85561884a7fd402`.
+The complete source snapshot is retained in [`vendor/rune/`](vendor/rune/), with
+the original MIT license, bundled font licenses, an offline source verifier and
+an explicit Hermes native-window patch. Its original/modified source hashes and
+additions are recorded in `vendor/rune/HERMES_PATCH.json`; patch scope and native
+acceptance limits are documented in [`vendor/rune/HERMES.md`](vendor/rune/HERMES.md).
+The copied distribution license texts also remain in `licenses/`.
 
 The desktop-plugin compatibility window embeds the existing Hermes Desktop
 React SDK, its runtime loader and its web components under the repository's

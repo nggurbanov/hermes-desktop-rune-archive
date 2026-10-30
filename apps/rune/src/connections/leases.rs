@@ -105,8 +105,11 @@ impl Entry {
     }
     pub fn fail(&mut self, error: &str) {
         if let Some(state) = self.state.upgrade() {
-            *state.error.lock().unwrap() = Some(error.into());
-            state.alive.store(false, Ordering::Release);
+            let mut reason = state.error.lock().unwrap();
+            if state.alive.load(Ordering::Acquire) {
+                *reason = Some(error.into());
+                state.alive.store(false, Ordering::Release);
+            }
         }
         if let Some(mut tunnel) = self.tunnel.take() {
             tunnel.close();

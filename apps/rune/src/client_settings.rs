@@ -147,13 +147,21 @@ impl ClientSettings {
         if !persist {
             return;
         }
+        let _ = self.flush_preferences();
+    }
+    /// Force this writer's pending diff before close, without granting an unreadable
+    /// initial file write access or waiting for the ordinary retry deadline.
+    pub fn flush_preferences(&mut self) -> Result<(), String> {
+        if self.touched.is_empty() && self.prefs == self.saved {
+            return Ok(());
+        }
         self.notice = None;
         if !self.writable {
-            self.error = Some(
+            let error =
                 "Display preferences are read-only because the saved file could not be loaded."
-                    .into(),
-            );
-            return;
+                    .to_owned();
+            self.error = Some(error.clone());
+            return Err(error);
         }
         let result = (|| {
             let path = self
@@ -177,10 +185,12 @@ impl ClientSettings {
                 self.retry_at = None;
                 self.error = None;
                 self.notice = Some("Saved on this device".into());
+                Ok(())
             }
             Err(e) => {
-                self.error = Some(e);
+                self.error = Some(e.clone());
                 self.retry_at = Some(std::time::Instant::now() + std::time::Duration::from_secs(1));
+                Err(e)
             }
         }
     }

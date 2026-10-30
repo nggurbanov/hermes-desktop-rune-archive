@@ -8,13 +8,13 @@ use std::{
 };
 use tungstenite::{Message, WebSocket};
 
-fn request(ws: &mut WebSocket<TcpStream>, method: &str) -> Value {
+pub(super) fn request(ws: &mut WebSocket<TcpStream>, method: &str) -> Value {
     let frame: Value = serde_json::from_str(&ws.read().unwrap().into_text().unwrap()).unwrap();
     assert_eq!(frame["method"], method);
     assert_eq!(frame["params"]["profile"], "work");
     frame
 }
-fn answer(ws: &mut WebSocket<TcpStream>, request: &Value, result: Value) {
+pub(super) fn answer(ws: &mut WebSocket<TcpStream>, request: &Value, result: Value) {
     ws.send(Message::Text(
         json!({"jsonrpc":"2.0","id":request["id"],"result":result})
             .to_string()
@@ -22,10 +22,10 @@ fn answer(ws: &mut WebSocket<TcpStream>, request: &Value, result: Value) {
     ))
     .unwrap();
 }
-fn snapshot(running: bool, seq: u64) -> Value {
+pub(super) fn snapshot(running: bool, seq: u64) -> Value {
     json!({"session_id":"live","stored_session_id":"stored","running":running,"revision":2,"execution_generation":if running{1}else{0},"authority_epoch":7,"replay_epoch":"fixture-epoch","last_sequence":seq,"messages":[],"prompts":[],"pending":[],"info":{"profile_name":"work","profile_id":"fixture-profile","desktop_protocol":"hermes-gateway-v1"}})
 }
-fn history(listener: &TcpListener, messages: Value) {
+pub(super) fn history(listener: &TcpListener, messages: Value) {
     let (mut stream, _) = listener.accept().unwrap();
     stream
         .set_read_timeout(Some(Duration::from_secs(3)))
@@ -49,7 +49,7 @@ fn history(listener: &TcpListener, messages: Value) {
 fn event(ws: &mut WebSocket<TcpStream>, seq: u64, kind: &str, payload: Value) {
     ws.send(Message::Text(json!({"jsonrpc":"2.0","method":"event","params":{"type":kind,"session_id":"live","seq":seq,"replay_epoch":"fixture-epoch","authority_epoch":7,"execution_generation":1,"admission_id":"owner-admission","payload":payload}}).to_string().into())).unwrap();
 }
-fn worker(connection: Connection, scope: DraftScope) -> (Worker, Receiver<Reply>) {
+pub(super) fn worker(connection: Connection, scope: DraftScope) -> (Worker, Receiver<Reply>) {
     let (replies, receive) = mpsc::channel();
     let mut transport = SessionTransport::connect(&connection, &scope.profile).unwrap();
     // Exercise the canonical wire on a synthetic token-authenticated socket.

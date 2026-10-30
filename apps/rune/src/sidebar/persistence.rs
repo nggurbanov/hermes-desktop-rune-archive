@@ -90,13 +90,30 @@ impl SidebarState {
         self.preferences_storage
             .touched
             .extend(fields.iter().map(|field| (*field).to_owned()));
+        let _ = self.flush_storage();
+    }
+
+    /// Force pending local intents before close; an untouched unreadable file is
+    /// preserved without preventing its window from closing.
+    pub fn flush_storage(&mut self) -> Result<(), String> {
+        if self.demo
+            || (self.preferences_storage.touched.is_empty()
+                && self.prefs == self.preferences_storage.baseline)
+        {
+            return Ok(());
+        }
         if !self.preferences_storage.writable {
-            self.notice = Some(self.preferences_storage.error.clone().unwrap_or_else(|| {
+            let error = self.preferences_storage.error.clone().unwrap_or_else(|| {
                 "Sidebar preferences were not loaded; their file was preserved".into()
-            }));
-            return;
+            });
+            self.notice = Some(error.clone());
+            return Err(error);
         }
         self.write_preferences();
+        match &self.preferences_storage.error {
+            Some(error) => Err(error.clone()),
+            None => Ok(()),
+        }
     }
 
     fn write_preferences(&mut self) -> bool {

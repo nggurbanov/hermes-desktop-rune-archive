@@ -1,5 +1,6 @@
 use super::*;
 mod leases;
+mod registry;
 use std::{fs, net::TcpListener};
 
 pub(super) trait Secrets: Send {
@@ -8,6 +9,7 @@ pub(super) trait Secrets: Send {
     fn delete(&mut self, id: &str) -> Result<(), String>;
 }
 pub(super) trait Metadata: Send {
+    fn transaction(&mut self) -> Result<Option<crate::client::FileLock>, String>;
     fn load(&mut self) -> Result<Registry, String>;
     fn save(&mut self, registry: &Registry) -> Result<(), String>;
 }
@@ -44,6 +46,9 @@ impl Secrets for SystemSecrets {
 }
 struct JsonMetadata(PathBuf);
 impl Metadata for JsonMetadata {
+    fn transaction(&mut self) -> Result<Option<crate::client::FileLock>, String> {
+        registry::transaction(&self.0).map(Some)
+    }
     fn load(&mut self) -> Result<Registry, String> {
         match fs::read(&self.0) {
             Ok(bytes) => {
@@ -115,9 +120,19 @@ impl Core {
         }
     }
     pub fn execute(&mut self, command: Command) -> Result<Outcome, String> {
+        let _transaction = if matches!(&command, Command::ConnectOnce(_)) {
+            None
+        } else {
+            self.metadata.transaction()?
+        };
+        if !matches!(
+            &command,
+            Command::ConnectOnce(_) | Command::CommitLease(_, _)
+        ) {
+            self.refresh_registry()?;
+        }
         match command {
             Command::Load => {
-                self.registry = self.metadata.load()?;
                 let warning = self.cleanup();
                 Ok(Outcome::Registry(self.registry.clone(), warning))
             }
@@ -140,6 +155,20 @@ impl Core {
             return Err(
                 "This saved connection was removed; refresh the list before editing".into(),
             );
+        }
+        if let Some(previous) = &previous {
+            match input.expected_revision.as_deref() {
+                Some(revision) if revision == previous.revision => {}
+                Some(_) => {
+                    return Err(
+                        "This saved connection changed in another window. Reopen it before saving"
+                            .into(),
+                    );
+                }
+                None => {
+                    return Err("Reopen this saved connection before saving".into());
+                }
+            }
         }
         let embedded = normalize_destination(
             &mut input.destination,

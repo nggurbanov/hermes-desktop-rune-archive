@@ -784,6 +784,16 @@ fn context_menu(s: &Viewer, k: &Kit, layer: &mut Vec<El>) -> El {
                 }),
         );
     }
+    let target = crate::app::ConversationTarget::Session {
+        profile: profile.clone(),
+        id: id.clone(),
+        title: item.title.clone().unwrap_or_else(|| "Conversation".into()),
+    };
+    menu = menu.item(
+        MenuItem::new("Open in new window")
+            .disabled(!s.can_open_window() || item.connection_id.is_some())
+            .on_select(move |s: &mut Viewer| s.request_window_target(Some(target.clone()))),
+    );
     menu.build(k, layer)
 }
 fn note(value: impl Into<String>, k: &Kit) -> El {

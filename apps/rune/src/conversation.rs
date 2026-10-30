@@ -116,6 +116,7 @@ pub struct PendingAdmission {
 pub struct ModelConfirmation {
     pub submission_id: String,
     pub message: String,
+    pub journal_revision: u64,
 }
 
 #[derive(Default)]
@@ -489,10 +490,14 @@ impl Conversation {
         let journal = Journal::new(crate::client::state_dir()?.join("submissions"))?;
         let prepared = Prepared::new(&connection, &scope, input)?;
         let id = prepared.submission_id.clone();
+        let journal = journal.claim(&id)?;
         journal.save(&prepared)?;
         let worker = self.worker(connection, key.clone())?;
         self.views.entry(key.clone()).or_default().preparing = true;
-        if worker.send(worker::Command::Send(prepared)).is_err() {
+        if worker
+            .send(worker::Command::Send(prepared, journal))
+            .is_err()
+        {
             let view = self.views.entry(key).or_default();
             view.preparing = false;
             view.uncertain = Some(id.clone());
@@ -513,6 +518,7 @@ impl Conversation {
             return Err("A send is already being prepared".into());
         }
         let journal = Journal::new(crate::client::state_dir()?.join("submissions"))?;
+        let journal = journal.claim(submission_id)?;
         let entry = journal.load(submission_id)?;
         entry.verify_owner(&connection, &scope)?;
         if entry.mutations.iter().any(|m| m.confirmation.is_some()) {
@@ -522,10 +528,16 @@ impl Conversation {
             return Err("The legacy gateway cannot prove whether this turn was sent. Read the transcript before discarding the saved send; retrying could duplicate it".into());
         }
         let worker = self.worker(connection, key.clone())?;
-        self.views.entry(key).or_default().preparing = true;
-        worker
-            .send(worker::Command::Send(entry))
-            .map_err(|_| "Conversation worker is unavailable".into())
+        self.views.entry(key.clone()).or_default().preparing = true;
+        if worker.send(worker::Command::Send(entry, journal)).is_err() {
+            let view = self.views.entry(key).or_default();
+            view.preparing = false;
+            view.uncertain = Some(submission_id.into());
+            return Err(
+                "Conversation worker is unavailable; the send is saved for explicit retry".into(),
+            );
+        }
+        Ok(())
     }
     pub fn confirm_model(
         &mut self,
@@ -533,9 +545,10 @@ impl Conversation {
         scope: DraftScope,
         id: &str,
         current_policy: Option<PolicyStamp>,
+        expected_revision: u64,
     ) -> Result<(), String> {
         let journal = Journal::new(crate::client::state_dir()?.join("submissions"))?;
-        let mut entry = journal.load(id)?;
+        let (journal, mut entry) = journal.review(id, expected_revision)?;
         entry.verify_owner(&connection, &scope)?;
         if !policy::matches_model_choice(
             entry.input.policy_stamp.as_ref(),
@@ -555,12 +568,16 @@ impl Conversation {
         journal.save(&entry)?;
         let key = self.key(&scope);
         let worker = self.worker(connection, key.clone())?;
-        let view = self.views.entry(key).or_default();
+        let view = self.views.entry(key.clone()).or_default();
         view.model_confirmation = None;
         view.preparing = true;
-        worker
-            .send(worker::Command::Send(entry))
-            .map_err(|_| "Conversation worker is unavailable".into())
+        if worker.send(worker::Command::Send(entry, journal)).is_err() {
+            let view = self.views.entry(key).or_default();
+            view.preparing = false;
+            view.uncertain = Some(id.into());
+            return Err("Conversation worker is unavailable; the confirmed send is saved for explicit retry".into());
+        }
+        Ok(())
     }
     pub fn steer_admission(
         &mut self,
@@ -613,16 +630,28 @@ impl Conversation {
             })
             .collect())
     }
+    pub fn saved_revision(
+        &self,
+        connection: &Connection,
+        scope: &DraftScope,
+        submission_id: &str,
+    ) -> Result<u64, String> {
+        let journal = Journal::new(crate::client::state_dir()?.join("submissions"))?;
+        let entry = journal.load(submission_id)?;
+        entry.verify_owner(connection, scope)?;
+        Ok(entry.revision())
+    }
     pub fn discard(
         &mut self,
         connection: &Connection,
         scope: &DraftScope,
         submission_id: &str,
+        expected_revision: u64,
     ) -> Result<(), String> {
         let journal = Journal::new(crate::client::state_dir()?.join("submissions"))?;
-        let entry = journal.load(submission_id)?;
+        let (journal, entry) = journal.review(submission_id, expected_revision)?;
         entry.verify_owner(connection, scope)?;
-        journal.retire(submission_id)?;
+        journal.retire(&entry)?;
         if let Some(view) = self.views.get_mut(&self.key(scope)) {
             if view.uncertain.as_deref() == Some(submission_id) {
                 view.uncertain = None;
@@ -1121,6 +1150,7 @@ impl Conversation {
                     origin,
                     id,
                     message,
+                    journal_revision,
                 } => {
                     let view = self.views.entry(origin.clone()).or_default();
                     view.preparing = false;
@@ -1128,6 +1158,7 @@ impl Conversation {
                     view.model_confirmation = Some(ModelConfirmation {
                         submission_id: id,
                         message,
+                        journal_revision,
                     });
                     updates.push(Update::Changed {
                         scope: DraftScope {

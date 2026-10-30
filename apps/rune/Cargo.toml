@@ -6,9 +6,11 @@ rust-version = "1.95"
 license = "MIT"
 
 [dependencies]
-rune = { git = "https://github.com/anomalyco/rune", rev = "bfb8facae2e4665e5e6d17afe85561884a7fd402", features = ["native-file-dialog"] }
-rune-kit = { git = "https://github.com/anomalyco/rune", rev = "bfb8facae2e4665e5e6d17afe85561884a7fd402", features = ["markdown", "mermaid"] }
-rune-theme-opencode = { git = "https://github.com/anomalyco/rune", rev = "bfb8facae2e4665e5e6d17afe85561884a7fd402" }
+# Exact upstream bfb8facae2e4665e5e6d17afe85561884a7fd402 plus the recorded
+# Hermes dynamic-window patch; source checksums and MIT notice: vendor/rune/HERMES_PATCH.json.
+rune = { path = "vendor/rune/crates/rune", features = ["native-file-dialog"] }
+rune-kit = { path = "vendor/rune/crates/rune-kit", features = ["markdown", "mermaid"] }
+rune-theme-opencode = { path = "vendor/rune/themes/opencode" }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 sha2 = "0.10"

@@ -3,7 +3,9 @@ use super::{AttachmentInput, SendInput};
 use crate::{composer::DraftScope, gateway::Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{fs, path::PathBuf};
+use std::{cell::Cell, fs, path::PathBuf};
+mod storage;
+pub(crate) use storage::Journal;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Input {
@@ -43,6 +45,8 @@ pub(crate) struct Input {
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Prepared {
     pub version: u32,
+    #[serde(default)]
+    revision: Cell<u64>,
     pub connection: String,
     pub profile: String,
     pub session: Option<String>,
@@ -86,6 +90,7 @@ impl Prepared {
     ) -> Result<Self, String> {
         Ok(Self {
             version: 1,
+            revision: Cell::new(0),
             connection: connection_key(connection)?,
             profile: scope.profile.clone(),
             session: scope.session.clone(),
@@ -129,6 +134,9 @@ impl Prepared {
             replay_refs: vec![],
         })
     }
+    pub fn revision(&self) -> u64 {
+        self.revision.get()
+    }
     pub fn verify_owner(&self, connection: &Connection, scope: &DraftScope) -> Result<(), String> {
         let matches_session = self.session == scope.session || self.stored == scope.session;
         if self.version != 1
@@ -145,76 +153,6 @@ impl Prepared {
 }
 pub(crate) fn connection_key(connection: &Connection) -> Result<String, String> {
     crate::client::connection_key(connection)
-}
-
-#[derive(Clone)]
-pub(crate) struct Journal {
-    root: PathBuf,
-}
-impl Journal {
-    pub fn new(root: PathBuf) -> Result<Self, String> {
-        fs::create_dir_all(&root)
-            .map_err(|_| "The prepared-send directory could not be created")?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
-                .map_err(|_| "Prepared sends could not be made private")?;
-        }
-        Ok(Self { root })
-    }
-    fn path(&self, id: &str, suffix: &str) -> Result<PathBuf, String> {
-        uuid::Uuid::parse_str(id).map_err(|_| "Invalid saved submission identity")?;
-        Ok(self.root.join(format!("{id}.{suffix}")))
-    }
-    pub fn save(&self, entry: &Prepared) -> Result<(), String> {
-        let path = self.path(&entry.submission_id, "json")?;
-        if self.path(&entry.submission_id, "settled")?.exists() {
-            return Err("This send has already been settled".into());
-        }
-        let bytes = serde_json::to_vec(entry).map_err(|_| "Prepared send could not be encoded")?;
-        crate::client::private_write(&path, &bytes)
-    }
-    pub fn load(&self, id: &str) -> Result<Prepared, String> {
-        if self.path(id, "settled")?.exists() {
-            return Err("This send has already been settled".into());
-        }
-        let bytes = fs::read(self.path(id, "json")?).map_err(|_| "Saved send could not be read")?;
-        let entry: Prepared =
-            serde_json::from_slice(&bytes).map_err(|_| "Saved send is invalid")?;
-        if entry.submission_id != id {
-            return Err("Saved send identity mismatch".into());
-        }
-        Ok(entry)
-    }
-    pub fn retire(&self, id: &str) -> Result<(), String> {
-        // Commit the tombstone first. A failed deletion cannot resurrect a sent turn.
-        crate::client::private_write(&self.path(id, "settled")?, b"settled\n")?;
-        match fs::remove_file(self.path(id, "json")?) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(_) => {
-                Err("The turn was accepted, but its saved payload could not be removed".into())
-            }
-        }
-    }
-    pub fn entries(&self) -> Result<Vec<Prepared>, String> {
-        let mut entries = vec![];
-        for entry in fs::read_dir(&self.root).map_err(|_| "Saved sends could not be listed")? {
-            let path = entry
-                .map_err(|_| "Saved send directory could not be read")?
-                .path();
-            if path.extension() != Some(std::ffi::OsStr::new("json")) {
-                continue;
-            }
-            if let Some(id) = path.file_stem().and_then(|v| v.to_str()) {
-                if let Ok(entry) = self.load(id) {
-                    entries.push(entry);
-                }
-            }
-        }
-        Ok(entries)
-    }
 }
 
 #[cfg(test)]
@@ -277,7 +215,7 @@ mod tests {
                 0o600
             );
         }
-        journal.retire(&entry.submission_id).unwrap();
+        journal.retire(&entry).unwrap();
         assert!(journal.load(&entry.submission_id).is_err());
         assert!(journal.save(&entry).is_err());
         assert!(journal.entries().unwrap().is_empty());

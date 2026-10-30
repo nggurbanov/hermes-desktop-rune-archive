@@ -14,7 +14,7 @@ pub(crate) enum Command {
     Older { stored: String, cursor: usize },
     Workspace(super::workspace::Intent),
     Attach,
-    Send(Prepared),
+    Send(Prepared, Journal),
     Control(Control),
 }
 pub(crate) enum Control {
@@ -120,6 +120,7 @@ pub(crate) enum Reply {
         origin: DraftScope,
         id: String,
         message: String,
+        journal_revision: u64,
     },
     ControlSettled {
         origin: DraftScope,
@@ -240,12 +241,14 @@ impl Worker {
         self.transport = None;
         self.reconnect_at = Instant::now() + Duration::from_secs(2);
     }
-    fn send(&mut self, entry: Prepared) -> Result<(), CallError> {
-        let journal = Journal::new(crate::client::state_dir()?.join("submissions"))?;
-        self.submit(entry, &journal)
-    }
     fn submit(&mut self, mut entry: Prepared, journal: &Journal) -> Result<(), CallError> {
+        let claim = journal.claim(&entry.submission_id)?;
+        let journal = &claim;
+        journal.check_current(&entry)?;
         entry.verify_owner(&self.connection, &self.scope)?;
+        if entry.legacy_attempted {
+            return Err("The legacy gateway cannot prove whether this turn was sent. Read the transcript before discarding the saved send; retrying could duplicate it".into());
+        }
         let canonical = self.transport()?.canonical;
         if entry.canonical.is_some_and(|saved| saved != canonical) {
             return Err(
@@ -323,7 +326,7 @@ impl Worker {
         self.prepare_replay(&mut entry, journal, &snapshot)?;
         let snapshot = self.prepare_rewind(&mut entry, journal, snapshot)?;
         if entry.input.rewind.as_ref().is_some_and(|r| r.restore_only) {
-            journal.retire(&entry.submission_id)?;
+            journal.retire(&entry)?;
             self.notify(Reply::Admitted {
                 origin: self.scope.clone(),
                 id: entry.submission_id.clone(),
@@ -395,7 +398,7 @@ impl Worker {
             Err(error) => return Err(error),
         };
         let status = admission_status(&receipt, runtime, canonical)?;
-        let cleanup = journal.retire(&entry.submission_id);
+        let cleanup = journal.retire(&entry);
         self.notify(Reply::Admitted {
             origin: self.scope.clone(),
             id: entry.submission_id.clone(),
@@ -691,6 +694,7 @@ impl Worker {
                 origin: self.scope.clone(),
                 id: entry.submission_id.clone(),
                 message: message.into(),
+                journal_revision: entry.revision(),
             });
             return Err(format!("{message}. Confirm the model selection before sending").into());
         }
@@ -1003,9 +1007,9 @@ pub(crate) fn spawn(
                         worker.failure(None, error, false);
                     }
                 }
-                Ok(Command::Send(entry)) => {
+                Ok(Command::Send(entry, journal)) => {
                     let id = entry.submission_id.clone();
-                    if let Err(error) = worker.send(entry) {
+                    if let Err(error) = worker.submit(entry, &journal) {
                         worker.failure(Some(id), error, false);
                     }
                 }
@@ -1387,5 +1391,7 @@ mod tests {
     }
 }
 
+#[cfg(test)]
+mod claim_tests;
 #[cfg(test)]
 mod contract_tests;

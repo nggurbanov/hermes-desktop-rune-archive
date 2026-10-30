@@ -21,6 +21,8 @@ jobs:
             libasound2-dev libwebkit2gtk-4.1-dev libopus-dev cmake meson ninja-build \
             libclang-dev llvm dbus-daemon xvfb
           rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component llvm-tools-preview
+      - name: Verify pinned Rune source and patch provenance
+        run: python3 apps/rune/vendor/rune/scripts/verify-hermes-source.py
       - name: Check formatting
         run: cargo +1.95.0 fmt --manifest-path apps/rune/Cargo.toml --check
       - name: Test native contracts

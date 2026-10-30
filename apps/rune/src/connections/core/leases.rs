@@ -7,8 +7,15 @@ impl Core {
         id: &str,
         expected_revision: Option<&str>,
     ) -> Result<Lease, String> {
-        self.registry = self.metadata.load()?;
-        self.poll_leases();
+        let _transaction = self.metadata.transaction()?;
+        self.resolve_lease_locked(id, expected_revision)
+    }
+    fn resolve_lease_locked(
+        &mut self,
+        id: &str,
+        expected_revision: Option<&str>,
+    ) -> Result<Lease, String> {
+        self.refresh_registry()?;
         let row = self
             .registry
             .rows
@@ -94,7 +101,8 @@ impl Core {
                 .error()
                 .unwrap_or("The saved-source lease expired".into()));
         }
-        let mut next = self.metadata.load()?;
+        self.refresh_registry()?;
+        let mut next = self.registry.clone();
         if !next
             .rows
             .iter()

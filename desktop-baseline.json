@@ -52,14 +52,14 @@
   },
   "runeCheckpoint": {
     "phase": "full-functional-parity-in-progress",
-    "verifiedAt": "2026-10-29",
+    "verifiedAt": "2026-10-30",
     "frameworkRevision": "bfb8facae2e4665e5e6d17afe85561884a7fd402",
     "opencodeReferenceRevision": "3f70cd6b675c89a8a7b64fc09b1bf2b455e0ad1a",
     "scope": "Standalone native Rune full functional transfer. Real scoped pages, conversations/admissions, native voice, original GUI SDK and saved connections implemented in development; complete acceptance still pending. No full-parity claim.",
     "verified": [
-      "Sixth frozen integration: 439 Rust tests passed, zero failed, three ignored private entry points; the two storage helpers run in actual child processes via default parent tests, and private audio explicitly passed at the fifth checkpoint",
+      "Seventh frozen integration: 481 Rust tests passed, zero failed, five ignored private/special entry points; four storage/ownership helpers run through default parent processes, and private audio explicitly passed at the fifth checkpoint",
       "Native Linux WebRTC peer loopback, Opus and WebRTC AEC3 synthetic double-talk checks",
-      "Sixth immutable binary: 5 independent-editor, 19 T3 composer, 15 client-settings, 10 shell, 24 feature-page, 13 rich-chat and 11 full Viewer audio-navigation native renderer/input scenarios (97)",
+      "Seventh immutable binary: 5 independent-editor, 19 T3 composer, 15 client-settings, 10 shell, 24 feature-page, 13 rich-chat and 11 full Viewer audio-navigation renderer/input scenarios (97)",
       "Actual separate native Rune rich subagent window: one lazy read-only attach, shared image/file/tool presentation, real clipboard copy, same PID/window reuse, focus/theme and viewer-only detach",
       "Canonical multimodal rewind contracts: immutable attachment freeze/upload before deletion, restore without prompt submission and lost-ACK UUID/payload/CAS retention; persisted replay drafts",
       "Native Files/Review/Terminal controllers; real isolated Git and PTY/remote replay contracts",
@@ -76,12 +76,15 @@
       "Actual existing-tab Composer controllers and durable per-editor slots, v4 per-entry CAS/tombstones, legacy migration and original-input callback/policy routing; 25 composer plus 5 application editor contracts, including two real storage processes",
       "Native audio preview: authenticated agent-file and credential-free external HTTP range/sequential sources; pitch-preserving Sonic, actual WAV/MP3/Vorbis/FLAC/AAC/OggOpus, paused metadata/seek/mute/volume/rate/exactsave; 16 audio/resource and 14 raw/range contracts",
       "Pinned unmodified Sonic plus four exact Symphonia crates with recorded MPL source patches; before-allocation metadata/table validation, source-operation byte/call quotas and verified source/license/fixture hashes",
-      "Locked per-field main/layout/display/sidebar/profile preference patches, explicit unchanged Reset/Clear/selection, nested binding and absent-profile removal, preserved unknown/future schemas and retained failed-write retry; actual two-process OS-lock contract"
+      "Locked per-field main/layout/display/sidebar/profile preference patches, explicit unchanged Reset/Clear/selection, nested binding and absent-profile removal, preserved unknown/future schemas and retained failed-write retry; actual two-process OS-lock contract",
+      "Actual full native Hermes peer flow: five distinct XIDs in one PID, four coexist, independent persisted inputs, settled Settings, two concurrent streams/scoped Stop, captured sources/profiles, stored session context/reuse, pinned Bot/New Session, primary-close survivor send, local Close and global Quit; clipboard diagnostic remains unverified",
+      "Single pinned Rune snapshot plus recorded native-host patch: five public Runtime contracts, actual 80-cycle native lifecycle and actual GPU-create failure; 902 staged source/patch/addition hashes verified without line-ending conversion",
+      "Exclusive submission/window OS claims, revision/payload CAS, retained source workers, registry OS transactions and stale form guards; close-time forced preference flush and explicit logical file-lock release with three deterministic RED/GREEN duplicated-descriptor contracts"
     ],
     "pending": [
       "Remaining rich chat: complete slash directives, provider sidecars, reactions/search/minimap, inline/remount audio and remaining media/container support; canonical snapshots cannot expose absent deferred slots after a fully settled restart",
-      "Concurrent session/preview/route tiles, plugin pane geometry and full peer windows; original preset catalog and named saved layouts are now implemented",
-      "Remaining client skins/arbitrary fonts/global hotkeys, live multiple-window observation, per-window geometry, registry/admission ownership, native/SDK speech ownership, HUD/haptics and macOS/Windows notification adapters",
+      "Concurrent session/preview/route tiles, plugin pane geometry, remaining compact interactive windows, device-default/fleet startup routing and complete topology restoration; full ordinary peer flow is now verified",
+      "Remaining skins/arbitrary fonts/global hotkeys, live multiple-window observation, full geometry/work-area/platform policy, dirty global Quit and final SSH process shutdown, stable saved SSH draft identity across forward recreation, full composer native clipboard, native/SDK speech ownership and macOS/Windows notification adapters",
       "Remaining GUI SDK pane geometry/data engines/preview contributions and parent-window acceptance",
       "Complete Files/Artifacts inline audio and video/PDF/HTML previews, remount positions, remaining codec/platform acceptance and OS watcher behavior",
       "Cloud/OAuth connection workflow and native macOS/Windows discovery/device/packaging acceptance"
@@ -108,7 +111,7 @@
       "Read-only Chikibryak voice status: chained selected and GPT-Live available; no microphone, call, transcription or configuration write",
       "Regression contract: synthetic scenes with a preconfigured live route cannot request voice/model reads"
     ],
-    "binarySha256": "1ccda04a1714fb312aeb4fa4f404e6f7c714bbe609517368f22248a2083896dc",
+    "binarySha256": "3611c41cb30d625e95adfce43ae7e6032de6ed54b4f4f65282790b30fd8d095d",
     "evidenceBinaries": [
       {
         "name": "third integration",
@@ -134,7 +137,13 @@
         "name": "sixth shared preference and full audio navigation integration",
         "sha256": "1ccda04a1714fb312aeb4fa4f404e6f7c714bbe609517368f22248a2083896dc",
         "evidence": "439 default Rust tests, zero failed, three ignored private helpers; 97 native renderer/input scenarios across shell/composer/editors/client settings/pages/chat/full Viewer audio navigation. Physical output and window-manager proof remain separately recorded."
+      },
+      {
+        "name": "seventh dynamic native peer and ownership integration",
+        "sha256": "3611c41cb30d625e95adfce43ae7e6032de6ed54b4f4f65282790b30fd8d095d",
+        "evidence": "481 default Rust tests, zero failed, five ignored; 97 renderer/input scenarios, actual five-window interactive peer flow and rich subagent window regression. Full composer native Ctrl+A/C diagnostic failed and remains unverified. Rune lifecycle example is separate evidence."
       }
-    ]
+    ],
+    "frameworkSource": "apps/rune/vendor/rune/HERMES_PATCH.json"
   }
 }

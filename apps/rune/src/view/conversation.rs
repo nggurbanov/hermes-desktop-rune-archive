@@ -38,6 +38,7 @@ pub fn pending(s: &Viewer, k: &Kit) -> El {
         let owner = scope.clone();
         let retry = id.clone();
         let discard = id.clone();
+        let discard_owner = scope.clone();
         let mut saved = row()
             .w_full()
             .gap(8.0)
@@ -59,16 +60,21 @@ pub fn pending(s: &Viewer, k: &Kit) -> El {
             ))
             .child(button(
                 "Discard",
-                move |s| s.discard_send_confirm = Some(discard.clone()),
+                move |s| s.ask_discard_send(discard_owner.clone(), discard.clone()),
                 k,
             ));
-        if s.discard_send_confirm.as_ref() == Some(id) {
+        if let Some(confirmation) = s
+            .discard_send_confirm
+            .as_ref()
+            .filter(|confirmation| confirmation.id == *id && confirmation.scope == scope)
+        {
             let owner = scope.clone();
             let id = id.clone();
+            let revision = confirmation.revision;
             saved = saved
                 .child(button(
                     "Confirm discard",
-                    move |s| s.discard_send(owner.clone(), id.clone()),
+                    move |s| s.discard_send(owner.clone(), id.clone(), revision),
                     k,
                 ))
                 .child(button("Keep", |s| s.discard_send_confirm = None, k));
@@ -98,6 +104,7 @@ pub fn pending(s: &Viewer, k: &Kit) -> El {
         let id = confirmation.submission_id.clone();
         let cancel_owner = scope.clone();
         let cancel_id = id.clone();
+        let revision = confirmation.journal_revision;
         box_ = box_.child(
             col()
                 .gap(6.0)
@@ -112,12 +119,14 @@ pub fn pending(s: &Viewer, k: &Kit) -> El {
                         .gap(8.0)
                         .child(button(
                             "Confirm model change",
-                            move |s| s.confirm_send_model(owner.clone(), id.clone()),
+                            move |s| s.confirm_send_model(owner.clone(), id.clone(), revision),
                             k,
                         ))
                         .child(button(
                             "Cancel send",
-                            move |s| s.discard_send(cancel_owner.clone(), cancel_id.clone()),
+                            move |s| {
+                                s.discard_send(cancel_owner.clone(), cancel_id.clone(), revision)
+                            },
                             k,
                         )),
                 ),

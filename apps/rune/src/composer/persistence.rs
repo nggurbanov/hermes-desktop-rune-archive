@@ -6,6 +6,7 @@ use model::{Entry, Favorite, Key, Observed, SavedDraft, Slot, Snapshot, State};
 pub(super) struct Persistence {
     epoch: u64,
     path: PathBuf,
+    migration_owner: EditorId,
     previous: Snapshot,
     observed: Observed,
     pending: Option<(Snapshot, f64)>,
@@ -13,8 +14,10 @@ pub(super) struct Persistence {
 }
 impl Composer {
     pub fn primary() -> Result<Self, String> {
-        let path = crate::client::state_dir()?.join("primary-editor.json");
-        Ok(Self::with_editor(store::primary(&path)?))
+        Self::primary_at(&crate::client::state_dir()?.join("primary-editor.json"))
+    }
+    pub(crate) fn primary_at(path: &std::path::Path) -> Result<Self, String> {
+        Ok(Self::with_editor(store::primary(path)?))
     }
     pub fn editor_for_slot(
         window: &EditorId,
@@ -32,6 +35,7 @@ impl Composer {
                 profile: scope.profile.clone(),
                 session: scope.session.clone(),
             },
+            &legacy_owner()?,
         )
     }
     pub fn rehome_saved_slot(
@@ -110,18 +114,25 @@ impl Composer {
             "{}.json",
             crate::client::connection_key(connection)?
         ));
-        self.bind_storage_path(path, epoch)
+        self.bind_storage_path_owned(path, epoch, legacy_owner()?)
     }
+    #[cfg(test)]
     fn bind_storage_path(&mut self, path: PathBuf, epoch: u64) -> Result<(), String> {
-        if self
-            .persisted
-            .as_ref()
-            .is_some_and(|p| p.epoch == epoch && p.path == path)
-        {
+        self.bind_storage_path_owned(path, epoch, self.editor.clone())
+    }
+    fn bind_storage_path_owned(
+        &mut self,
+        path: PathBuf,
+        epoch: u64,
+        migration_owner: EditorId,
+    ) -> Result<(), String> {
+        if self.persisted.as_ref().is_some_and(|p| {
+            p.epoch == epoch && p.path == path && p.migration_owner == migration_owner
+        }) {
             return Ok(());
         }
         self.flush_storage()?;
-        let state = store::load(&path, &self.editor)?;
+        let state = store::load(&path, &migration_owner)?;
         let (snapshot, observed) = state.for_editor(&self.editor);
         for saved in snapshot.drafts.values().cloned() {
             let scope = DraftScope {
@@ -141,6 +152,7 @@ impl Composer {
         self.persisted = Some(Persistence {
             epoch,
             path,
+            migration_owner,
             previous: snapshot,
             observed,
             pending: None,
@@ -160,7 +172,7 @@ impl Composer {
         else {
             return Ok(false);
         };
-        let state = store::load(&p.path, &self.editor)?;
+        let state = store::load(&p.path, &p.migration_owner)?;
         let latest = state
             .entries
             .iter()
@@ -197,7 +209,7 @@ impl Composer {
                 .collect(),
         }
     }
-    fn flush_storage(&mut self) -> Result<(), String> {
+    pub fn flush_storage(&mut self) -> Result<(), String> {
         let Some(p) = &self.persisted else {
             return Ok(());
         };
@@ -205,7 +217,14 @@ impl Composer {
         if snapshot == p.previous {
             return Ok(());
         }
-        let observed = store::commit(&p.path, &self.editor, &p.previous, &snapshot, &p.observed)?;
+        let observed = store::commit(
+            &p.path,
+            &self.editor,
+            &p.previous,
+            &snapshot,
+            &p.observed,
+            &p.migration_owner,
+        )?;
         let p = self.persisted.as_mut().unwrap();
         p.previous = snapshot;
         p.observed = observed;
@@ -239,7 +258,14 @@ impl Composer {
                 (*due - now).max(0.001),
             )));
         }
-        let result = store::commit(&p.path, &self.editor, &p.previous, snapshot, &p.observed);
+        let result = store::commit(
+            &p.path,
+            &self.editor,
+            &p.previous,
+            snapshot,
+            &p.observed,
+            &p.migration_owner,
+        );
         let p = self.persisted.as_mut().unwrap();
         match result {
             Ok(observed) => {
@@ -253,6 +279,9 @@ impl Composer {
             }
         }
     }
+}
+fn legacy_owner() -> Result<EditorId, String> {
+    crate::client::windows::WindowStore::system()?.legacy_editor_id()
 }
 impl Drop for Composer {
     fn drop(&mut self) {

@@ -309,6 +309,7 @@ fn write_failure_retries_the_latest_snapshot_without_another_edit() {
     c.persisted = Some(Persistence {
         epoch: 1,
         path: path.clone(),
+        migration_owner: c.editor_id().clone(),
         previous: Snapshot::default(),
         observed: Observed::default(),
         pending: None,
@@ -556,21 +557,118 @@ fn slot_identity_survives_profile_rename_rehome_and_delete_recreate() {
         profile: "old".into(),
         session: None,
     };
-    let id = store::slot(&path, &window, &fresh).unwrap();
-    assert_eq!(store::slot(&path, &window, &fresh).unwrap(), id);
+    let id = store::slot(&path, &window, &fresh, &window).unwrap();
+    assert_eq!(store::slot(&path, &window, &fresh, &window).unwrap(), id);
     let stored = Key {
         profile: "old".into(),
         session: Some("saved".into()),
     };
     store::rehome_slot(&path, &window, &fresh, &stored, &id).unwrap();
-    assert_eq!(store::slot(&path, &window, &stored).unwrap(), id);
-    assert_ne!(store::slot(&path, &window, &fresh).unwrap(), id);
+    assert_eq!(store::slot(&path, &window, &stored, &window).unwrap(), id);
+    assert_ne!(store::slot(&path, &window, &fresh, &window).unwrap(), id);
     store::rename_profile(&path, "old", "renamed").unwrap();
     let renamed = Key {
         profile: "renamed".into(),
         session: Some("saved".into()),
     };
-    assert_eq!(store::slot(&path, &window, &renamed).unwrap(), id);
+    assert_eq!(store::slot(&path, &window, &renamed, &window).unwrap(), id);
     store::delete_profile(&path, "renamed").unwrap();
-    assert_ne!(store::slot(&path, &window, &renamed).unwrap(), id);
+    assert_ne!(store::slot(&path, &window, &renamed, &window).unwrap(), id);
+}
+
+#[test]
+fn a_peer_binding_first_migrates_legacy_multimodal_input_only_to_the_durable_primary_owner() {
+    for version in [1, 2, 3] {
+        let files = Files::new();
+        let store = crate::client::windows::WindowStore::at(files.0.join("client"));
+        let primary = store.claim_primary().unwrap();
+        let peer_window = store
+            .mint_peer(
+                crate::client::windows::BootstrapKind::PeerInherited,
+                Default::default(),
+            )
+            .unwrap();
+        let migration_owner = store.legacy_editor_id().unwrap();
+        assert_eq!(&migration_owner, primary.editor_id());
+        let path = files.path();
+        let owner = scope(1, Some("saved"));
+        let mut source = Composer::new();
+        source
+            .draft_mut(owner.clone())
+            .text
+            .replace_text("legacy primary input");
+        source
+            .draft_mut(owner.clone())
+            .attachments
+            .push(DraftAttachment {
+                path: "/legacy/file.svg".into(),
+                name: "file.svg".into(),
+                preview: None,
+            });
+        let old = State {
+            version,
+            drafts: vec![SavedDraft::capture(&owner, source.draft(&owner).unwrap())],
+            ..Default::default()
+        };
+        let old_bytes = serde_json::to_vec(&old).unwrap();
+        crate::client::private_write(&path, &old_bytes).unwrap();
+        // Slot allocation runs before editor binding in the actual Viewer path.
+        let peer = store::slot(
+            &path,
+            peer_window.editor_id(),
+            &Key {
+                profile: "work".into(),
+                session: Some("saved".into()),
+            },
+            &migration_owner,
+        )
+        .unwrap();
+        let mut peer = Composer::with_editor(peer);
+        peer.bind_storage_path_owned(path.clone(), 2, migration_owner.clone())
+            .unwrap();
+        assert!(peer.draft(&scope(2, Some("saved"))).is_none());
+        peer.seed_stored_draft(&scope(2, Some("saved"))).unwrap();
+        assert!(
+            peer.draft(&scope(2, Some("saved")))
+                .unwrap()
+                .attachments
+                .is_empty()
+        );
+        let mut primary_input = Composer::with_editor(primary.editor_id().clone());
+        primary_input
+            .bind_storage_path_owned(path.clone(), 3, migration_owner.clone())
+            .unwrap();
+        let original = primary_input.draft(&scope(3, Some("saved"))).unwrap();
+        assert_eq!(original.text.text, "legacy primary input");
+        assert_eq!(
+            original.attachments[0].path,
+            PathBuf::from("/legacy/file.svg")
+        );
+        // A restored legacy backup during a later save must use the same authority.
+        crate::client::private_write(&path, &old_bytes).unwrap();
+        peer.draft_mut(scope(2, Some("saved")))
+            .text
+            .replace_text("peer's independent text");
+        peer.flush_storage().unwrap();
+        let saved = state(&path);
+        let legacy = saved
+            .entries
+            .iter()
+            .find(|entry| entry.editor == migration_owner)
+            .unwrap()
+            .draft
+            .as_ref()
+            .unwrap();
+        assert_eq!(legacy.attachments, vec![PathBuf::from("/legacy/file.svg")]);
+        let peer_entry = saved
+            .entries
+            .iter()
+            .find(|entry| &entry.editor == peer.editor_id())
+            .unwrap()
+            .draft
+            .as_ref()
+            .unwrap();
+        assert_eq!(peer_entry.text, "peer's independent text");
+        assert!(peer_entry.attachments.is_empty());
+    }
 }

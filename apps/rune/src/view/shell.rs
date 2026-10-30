@@ -31,7 +31,12 @@ pub fn layout(s: &Viewer, cx: &mut Cx<Viewer>, main: El, sidebar: El, k: &Kit) -
                 .gap(4.0)
                 .center_y()
                 .child(sidebar_toggle(k))
-                .child(text("Hermes").font(k.ty.ui_medium).color(k.c.text_muted)),
+                .child(
+                    text("Hermes")
+                        .font(k.ty.ui_medium)
+                        .color(k.c.text_muted)
+                        .on_secondary_press(|s: &mut Viewer, point, _| s.open_window_menu(point)),
+                ),
         );
     } else {
         header = header
@@ -556,6 +561,7 @@ pub fn context_menu(s: &Viewer, k: &Kit, layer: &mut Vec<El>) -> El {
         return el().size(0.0, 0.0);
     };
     let in_place = target.clone();
+    let in_window = target.clone();
     Menu::new("conversation-actions")
         .open(true)
         .at(point.x, point.y)
@@ -567,6 +573,11 @@ pub fn context_menu(s: &Viewer, k: &Kit, layer: &mut Vec<El>) -> El {
         .item(
             MenuItem::new("Open in new tab")
                 .on_select(move |s: &mut Viewer| s.open_target(target.clone(), true)),
+        )
+        .item(
+            MenuItem::new("Open in new window")
+                .disabled(!s.can_open_window())
+                .on_select(move |s: &mut Viewer| s.request_window_target(Some(in_window.clone()))),
         )
         .build(k, layer)
 }
