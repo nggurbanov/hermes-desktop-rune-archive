@@ -9,6 +9,8 @@ use std::collections::BTreeMap;
 mod chat;
 #[path = "fleet/navigation.rs"]
 mod navigation;
+#[path = "fleet/projects.rs"]
+mod projects;
 #[path = "fleet/sidebar.rs"]
 mod sidebar;
 #[path = "fleet/tabs.rs"]
@@ -18,6 +20,37 @@ mod workspaces;
 
 #[derive(Default)]
 pub(super) struct State {
+    project_drafts: BTreeMap<String, crate::projects::DraftTarget>,
+    projects: crate::projects::State,
+    projects_network: crate::pages::PageNetwork,
+    project_create_network: crate::pages::PageNetwork,
+    project_idea_network: crate::pages::PageNetwork,
+    project_create: Option<projects::create::Form>,
+    project_create_pending: Option<projects::create::Receipt>,
+    project_create_result: Option<String>,
+    project_create_refresh: Option<crate::projects::Owner>,
+    project_create_detached: rune::TextEdit,
+    project_create_serial: u64,
+    project_create_choose: Option<projects::create::PickerTarget>,
+    project_create_remote: Option<projects::create::PickerTarget>,
+    project_idea_pending: Option<projects::create::Generation>,
+    project_folders_network: crate::pages::PageNetwork,
+    project_folders: Option<projects::folders::Capture>,
+    project_folders_choose: Option<projects::folders::Capture>,
+    project_folders_pending: Option<projects::folders::Pending>,
+    project_folders_error: Option<String>,
+    project_folders_result: Option<String>,
+    project_folders_serial: u64,
+    project_active_network: crate::pages::PageNetwork,
+    project_active_pending: Option<projects::active::Receipt>,
+    project_active_result: Option<String>,
+    project_active_refresh: Option<crate::projects::Owner>,
+    project_rename_network: crate::pages::PageNetwork,
+    project_rename: Option<projects::rename::Form>,
+    project_rename_menu: Option<projects::rename::MenuTarget>,
+    project_rename_pending: Option<projects::rename::Receipt>,
+    project_rename_result: Option<String>,
+    projects_pending: Option<(crate::projects::Ticket, Binding, DraftScope)>,
     waker: Option<Waker>,
     registry: String,
     seeded: Option<(SourceStamp, Vec<String>)>,
@@ -43,6 +76,12 @@ pub(super) enum Destination {
 }
 impl Viewer {
     pub(super) fn setup_fleet(&mut self, waker: Waker) {
+        self.fleet_state.projects_network.init(waker.clone());
+        self.fleet_state.project_active_network.init(waker.clone());
+        self.fleet_state.project_rename_network.init(waker.clone());
+        self.fleet_state.project_folders_network.init(waker.clone());
+        self.fleet_state.project_create_network.init(waker.clone());
+        self.fleet_state.project_idea_network.init(waker.clone());
         self.fleet_state.waker = Some(waker.clone());
         match crate::client::fleet::Preferences::system() {
             Ok(value) => self.fleet_preferences = value,
@@ -341,6 +380,7 @@ impl Viewer {
         for partition in self.fleet_state.partitions.values_mut() {
             changed |= partition.poll(now);
         }
+        changed |= self.poll_projects();
         changed |= self.poll_fleet_destination();
         changed |= self.retire_expired_workspaces();
         if let Some(delay) = self.fleet.wake() {

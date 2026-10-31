@@ -1,5 +1,5 @@
 use super::*;
-use crate::file_dialog::{FileDialogError, FileDialogKind, FileDialogOptions, FileDialogResult, Pending, Request};
+use crate::file_dialog::{FileDialogError, FileDialogKind, FileDialogOptions, MultiFileDialogResult, Pending, Request};
 
 impl<S: 'static> Runtime<S> {
     /// The file dialog showing, or about to show, from [`Tx::open_file`], [`Tx::save_file`] or
@@ -13,7 +13,17 @@ impl<S: 'static> Runtime<S> {
     /// answer themselves.
     pub fn resolve_file_dialog(&mut self, path: Option<std::path::PathBuf>) -> Result<(), FileDialogError> {
         let id = self.file_dialog.as_ref().ok_or_else(|| FileDialogError("no file dialog is open".into()))?.id;
-        self.answer_file_dialog(id, Ok(path));
+        if path.is_some() && self.file_dialog.as_ref().is_some_and(|d| d.kind == FileDialogKind::Folders) { return Err(FileDialogError("multiple folders require resolve_file_dialogs".into())); }
+        self.answer_file_dialog(id, Ok(path.map(|p| vec![p])));
+        Ok(())
+    }
+
+    /// Answer a multi-folder dialog in headless drivers, retaining selection order.
+    pub fn resolve_file_dialogs(&mut self, paths: Option<Vec<std::path::PathBuf>>) -> Result<(), FileDialogError> {
+        let dialog = self.file_dialog.as_ref().ok_or_else(|| FileDialogError("no file dialog is open".into()))?;
+        if dialog.kind != FileDialogKind::Folders { return Err(FileDialogError("dialog does not select multiple folders".into())); }
+        let id = dialog.id;
+        self.answer_file_dialog(id, Ok(paths));
         Ok(())
     }
 
@@ -45,7 +55,7 @@ impl<S: 'static> Runtime<S> {
     }
 
     /// Queues dialog `id`'s answer for the next frame, closing it.
-    pub(crate) fn answer_file_dialog(&mut self, id: u64, result: FileDialogResult) {
+    pub(crate) fn answer_file_dialog(&mut self, id: u64, result: MultiFileDialogResult) {
         if self.file_dialog.as_ref().is_some_and(|d| d.id == id) { self.file_dialog = None; }
         self.queue.push(Action::FileDialog(id, result));
     }
@@ -57,7 +67,7 @@ impl<S: 'static> Runtime<S> {
         }
     }
 
-    pub(super) fn run_file_dialog(&mut self, id: u64, result: FileDialogResult, one: &mut Tx) -> bool {
+    pub(super) fn run_file_dialog(&mut self, id: u64, result: MultiFileDialogResult, one: &mut Tx) -> bool {
         let Some(i) = self.file_dialog_answers.iter().position(|(dialog, _)| *dialog == id) else { return false };
         let (_, f) = self.file_dialog_answers.remove(i);
         self.trace_event(format_args!(

@@ -3,7 +3,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(super) struct Key {
     pub profile: String,
+    pub profile_intent: crate::source::ProfileIntent,
     pub session: Option<String>,
+    pub draft_origin: Option<crate::composer::DraftOrigin>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct SavedDraft {
@@ -12,7 +14,14 @@ pub(super) struct SavedDraft {
     #[serde(default)]
     pub policy_revisions: PolicyRevisions,
     pub profile: String,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::source::ProfileIntent::is_backend"
+    )]
+    pub profile_intent: crate::source::ProfileIntent,
     pub session: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub draft_origin: Option<crate::composer::DraftOrigin>,
     pub text: String,
     pub model: Option<(String, String)>,
     pub reasoning: Option<String>,
@@ -34,7 +43,9 @@ impl SavedDraft {
     pub fn key(&self) -> Key {
         Key {
             profile: self.profile.clone(),
+            profile_intent: self.profile_intent,
             session: self.session.clone(),
+            draft_origin: self.draft_origin.clone(),
         }
     }
     pub fn capture(scope: &DraftScope, draft: &Draft) -> Self {
@@ -42,7 +53,9 @@ impl SavedDraft {
             policy_id: draft.policy_id.clone(),
             policy_revisions: draft.policy_revisions,
             profile: scope.profile.clone(),
+            profile_intent: scope.profile_intent,
             session: scope.session.clone(),
+            draft_origin: scope.draft_origin.clone(),
             text: draft.text.text.clone(),
             model: draft
                 .model
@@ -102,7 +115,14 @@ impl SavedDraft {
 pub(super) struct Entry {
     pub editor: EditorId,
     pub profile: String,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::source::ProfileIntent::is_backend"
+    )]
+    pub profile_intent: crate::source::ProfileIntent,
     pub session: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub draft_origin: Option<crate::composer::DraftOrigin>,
     pub revision: u64,
     pub draft: Option<SavedDraft>,
 }
@@ -110,7 +130,9 @@ impl Entry {
     pub fn key(&self) -> Key {
         Key {
             profile: self.profile.clone(),
+            profile_intent: self.profile_intent,
             session: self.session.clone(),
+            draft_origin: self.draft_origin.clone(),
         }
     }
 }
@@ -125,7 +147,14 @@ pub(super) struct Favorite {
 pub(super) struct Slot {
     pub window: EditorId,
     pub profile: String,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::source::ProfileIntent::is_backend"
+    )]
+    pub profile_intent: crate::source::ProfileIntent,
     pub session: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub draft_origin: Option<crate::composer::DraftOrigin>,
     pub editor: EditorId,
 }
 #[derive(Clone, Serialize, Deserialize, Default)]

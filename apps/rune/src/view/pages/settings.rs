@@ -80,12 +80,14 @@ pub fn page(s: &Viewer, k: &Kit, layer: &mut Vec<El>) -> El {
     );
     for (id, label) in state.sections() {
         let selected = state.section == id;
+        let section_key = format!("settings-section-{id}");
         nav = nav.child(
             button(
                 &label,
                 move |s| s.settings_action(Action::Section(id.clone())),
                 k,
             )
+            .key(section_key)
             .w_full()
             .justify_start()
             .fill(if selected {

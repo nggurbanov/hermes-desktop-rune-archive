@@ -46,18 +46,25 @@ impl VoiceStatus {
 impl Gateway {
     pub fn voice_status(&mut self, profile: &str) -> Result<Option<VoiceStatus>, String> {
         valid_scope(profile)?;
+        self.voice_status_for(&super::prepared::ProfileProvenance::Backend(profile.into()))
+    }
+    pub(crate) fn voice_status_for(
+        &mut self,
+        provenance: &super::prepared::ProfileProvenance,
+    ) -> Result<Option<VoiceStatus>, String> {
+        self.ensure_profile_scope(provenance)?;
         let deadline = std::time::Instant::now() + TIMEOUT;
         #[cfg(target_os = "linux")]
-        if matches!(&self.auth, super::Auth::Native(_)) && !self.profile_homes.contains_key(profile)
-        {
+        if matches!(&self.auth, super::Auth::Native(_)) {
             self.profiles_until(deadline)?;
         }
-        let mut url = self
-            .base
-            .join("api/audio/voice-live/status")
-            .map_err(|_| "Invalid voice status route")?;
-        url.query_pairs_mut().append_pair("profile", profile);
-        VoiceStatus::from_value(&self.get_json(profile, url, deadline, "Voice status")?)
+        let path = super::audio::scoped_path(self, provenance, "/api/audio/voice-live/status")?;
+        let url = self.api_url_for(provenance, "GET", &path)?;
+        let parts =
+            self.http_parts_for_method(provenance, url, deadline, Some(reqwest::Method::GET))?;
+        let value = self.get_json_parts(parts, deadline, "Voice status")?;
+        self.validate_response_owner(provenance, &value, "profile", true)?;
+        VoiceStatus::from_value(&value)
     }
 }
 

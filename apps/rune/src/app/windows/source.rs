@@ -4,10 +4,34 @@ use crate::connections::{Lease, Resolver};
 #[derive(Clone)]
 pub(super) struct Retained {
     pub _resolver: Resolver,
+    pub _origins: Vec<Resolver>,
     pub lease: Lease,
+}
+impl Retained {
+    pub(super) fn from_binding(binding: &crate::source::Binding) -> Result<Option<Self>, String> {
+        binding.validate()?;
+        let Some(lease) = binding.lease().cloned() else {
+            return Ok(None);
+        };
+        let mut origins = binding.origins().into_iter();
+        let resolver = origins
+            .next()
+            .ok_or("The captured source lifetime owner is unavailable")?;
+        Ok(Some(Self {
+            _resolver: resolver,
+            _origins: origins.collect(),
+            lease,
+        }))
+    }
+    pub(super) fn origins(&self) -> Vec<Resolver> {
+        std::iter::once(self._resolver.clone())
+            .chain(self._origins.iter().cloned())
+            .collect()
+    }
 }
 pub(super) struct Fresh {
     route: WindowRoute,
+    project_target: Option<crate::projects::DraftTarget>,
     owner: super::super::routing::Owner,
     intent: u64,
     loading: bool,
@@ -22,19 +46,28 @@ pub(super) struct Pinned {
 }
 pub(super) enum Source {
     Direct(Connection),
+    Bound(crate::source::Binding),
     Saved {
         expected_principal: Option<String>,
+        expected_descriptor: Option<SourceDescriptor>,
         resolver: Resolver,
         receive: Receiver<Result<Lease, String>>,
     },
 }
 impl Source {
+    pub(super) fn bound(binding: crate::source::Binding) -> Self {
+        if binding.lease().is_some() {
+            Self::Bound(binding)
+        } else {
+            Self::Direct(binding.connection().clone())
+        }
+    }
     fn restore(descriptor: &SourceDescriptor, resolver: Option<Resolver>) -> Result<Self, String> {
         match descriptor {
-            SourceDescriptor::Saved { id, revision } => {
+            SourceDescriptor::Saved { id, revision, .. } => {
                 let resolver = resolver.ok_or("The captured source resolver is unavailable")?;
                 let receive = resolver.resolve(id.clone(), Some(revision.clone()))?;
-                Ok(Self::Saved { expected_principal: None, resolver, receive })
+                Ok(Self::Saved { expected_principal: None, expected_descriptor: Some(descriptor.clone()), resolver, receive })
             }
             _ => descriptor.connection_without_secret().map(Self::Direct).ok_or_else(|| "The profile window's captured source needs credentials. Connect that source before opening a new conversation.".into()),
         }
@@ -49,11 +82,15 @@ impl Source {
         let Some(connection) = connection else {
             return Ok(None);
         };
+        if connection.route_owner().is_some() {
+            return Err("A resolved window route needs its original source binding".into());
+        }
         if let Connection::Saved { id, revision, .. } = connection {
             let resolver = resolver.ok_or("The source resolver is unavailable")?;
             let receive = resolver.resolve(id.clone(), Some(revision.clone()))?;
             Ok(Some(Self::Saved {
                 expected_principal: Some(crate::client::connection_key(connection)?),
+                expected_descriptor: None,
                 resolver,
                 receive,
             }))
@@ -67,6 +104,24 @@ impl Viewer {
         if self.fixture || self.window.started {
             return;
         }
+        if self.window.source.is_none()
+            && self.connection.is_none()
+            && self.has_namespaced_window_route()
+        {
+            let route = self
+                .window
+                .boot_target
+                .clone()
+                .expect("a namespaced selected route");
+            match self.queue_window_restoration(route) {
+                Ok(()) => {
+                    self.window.started = true;
+                    self.begin();
+                }
+                Err(error) => self.fail_window_source(error, true),
+            }
+            return;
+        }
         if self.window.source.is_none() && self.connection.is_none() {
             let source = self
                 .window
@@ -74,19 +129,12 @@ impl Viewer {
                 .as_ref()
                 .and_then(|l| l.record().route.source.clone());
             match source {
-                Some(SourceDescriptor::Saved { id, revision }) => {
+                Some(descriptor @ SourceDescriptor::Saved { .. }) => {
                     let result = self
                         .connections
                         .resolver()
                         .ok_or("The source resolver is unavailable".to_string())
-                        .and_then(|resolver| {
-                            let receive = resolver.resolve(id.clone(), Some(revision.clone()))?;
-                            Ok(Source::Saved {
-                                expected_principal: None,
-                                resolver,
-                                receive,
-                            })
-                        });
+                        .and_then(|resolver| Source::restore(&descriptor, Some(resolver)));
                     match result {
                         Ok(source) => self.window.source = Some(source),
                         Err(error) => {
@@ -184,8 +232,16 @@ impl Viewer {
         };
         let (connection, retained) = match source {
             Source::Direct(connection) => (connection, None),
+            Source::Bound(binding) => match Retained::from_binding(&binding) {
+                Ok(retained) => (binding.connection().clone(), retained),
+                Err(error) => {
+                    self.fail_window_source(error, false);
+                    return true;
+                }
+            },
             Source::Saved {
                 expected_principal,
+                expected_descriptor,
                 resolver,
                 receive,
             } => match receive.try_recv() {
@@ -193,6 +249,10 @@ impl Viewer {
                     if !lease.is_valid()
                         || expected_principal.as_deref().is_some_and(|expected| {
                             crate::client::connection_key(lease.connection()).as_deref()
+                                != Ok(expected)
+                        })
+                        || expected_descriptor.as_ref().is_some_and(|expected| {
+                            SourceDescriptor::from_connection(lease.connection()).as_ref()
                                 != Ok(expected)
                         })
                     {
@@ -207,6 +267,7 @@ impl Viewer {
                         connection,
                         Some(Retained {
                             _resolver: resolver,
+                            _origins: vec![],
                             lease,
                         }),
                     )
@@ -218,6 +279,7 @@ impl Viewer {
                 Err(mpsc::TryRecvError::Empty) => {
                     self.window.source = Some(Source::Saved {
                         expected_principal,
+                        expected_descriptor,
                         resolver,
                         receive,
                     });
@@ -231,7 +293,11 @@ impl Viewer {
         };
         if let Some(fresh) = self.window.pending_fresh.take() {
             let route = fresh.route;
-            if !self.use_connection_for_profile(connection, Some(route.profile.clone())) {
+            if !self.use_connection_for_profile_intent(
+                connection,
+                Some(route.profile.clone()),
+                route.profile_intent,
+            ) {
                 self.loading = false;
                 self.status = "Connection change blocked".into();
                 return true;
@@ -244,7 +310,7 @@ impl Viewer {
                 canonical_bot: false,
                 ..route
             });
-            self.new_draft_on_current_source();
+            self.new_draft_with_project_target(fresh.project_target);
         } else {
             self.window.retained = retained;
             self.connection = Some(connection);
@@ -277,6 +343,7 @@ impl Viewer {
     fn await_window_fresh(&mut self, route: WindowRoute) {
         self.window.pending_fresh = Some(Fresh {
             route,
+            project_target: None,
             owner: self.route_owner(),
             intent: self.intent,
             loading: self.loading,
@@ -284,6 +351,14 @@ impl Viewer {
         });
         self.loading = true;
         self.status = FRESH_CONNECTING.into();
+    }
+    pub(in crate::app) fn set_window_project_target(
+        &mut self,
+        target: Option<crate::projects::DraftTarget>,
+    ) {
+        if let Some(fresh) = self.window.pending_fresh.as_mut() {
+            fresh.project_target = target;
+        }
     }
     /// A profile-window default is immutable; an ordinary peer only inherits for boot.
     pub(in crate::app) fn prepare_window_new_session(&mut self) -> bool {
@@ -330,7 +405,7 @@ impl Viewer {
                         return true;
                     }
                     let resolver = match descriptor {
-                        SourceDescriptor::Saved { id, revision } => {
+                        SourceDescriptor::Saved { id, revision, .. } => {
                             self.window_route_resolver(id, revision)
                         }
                         _ => None,
@@ -368,7 +443,16 @@ impl Viewer {
             .as_ref()
             .map(|r| r._resolver.clone())
             .or_else(|| self.connections.resolver());
-        match Source::capture(Some(&pin.connection), resolver) {
+        let source = match &pin.retained {
+            Some(retained) => {
+                crate::source::Binding::new(pin.connection.clone(), Some(retained.lease.clone()))
+                    .map(|binding| {
+                        Some(Source::bound(binding.retaining_origins(retained.origins())))
+                    })
+            }
+            None => Source::capture(Some(&pin.connection), resolver),
+        };
+        match source {
             Ok(source) => {
                 self.window.source = source;
                 self.await_window_fresh(pin.route);
@@ -687,12 +771,37 @@ mod owner_tests {
                 "explicit {action} supersedes a pin even when its owner key is unchanged"
             );
             assert!(s.window.source.is_none());
-            assert_eq!(s.composer_scope(), scope);
-            assert_eq!(s.composer.editor_id(), &editor);
-            assert_eq!(
-                s.composer.draft(&scope).unwrap().text.text,
-                "Current owner input"
-            );
+            if action == "fresh" {
+                let fresh = s.composer_scope();
+                assert_eq!(fresh.connection, scope.connection);
+                assert_eq!(fresh.profile, scope.profile);
+                assert_eq!(fresh.profile_intent, scope.profile_intent);
+                assert!(fresh.session.is_none());
+                assert!(fresh.draft_origin.is_some());
+                assert_ne!(fresh.draft_origin, scope.draft_origin);
+                assert_ne!(s.composer.editor_id(), &editor);
+                assert!(
+                    s.composer
+                        .draft(&fresh)
+                        .is_none_or(|draft| draft.text.text.is_empty())
+                );
+                assert_eq!(
+                    s.editor_mut(&editor, &scope)
+                        .unwrap()
+                        .draft(&scope)
+                        .unwrap()
+                        .text
+                        .text,
+                    "Current owner input"
+                );
+            } else {
+                assert_eq!(s.composer_scope(), scope);
+                assert_eq!(s.composer.editor_id(), &editor);
+                assert_eq!(
+                    s.composer.draft(&scope).unwrap().text.text,
+                    "Current owner input"
+                );
+            }
             assert!(requests.try_recv().is_err());
         }
     }

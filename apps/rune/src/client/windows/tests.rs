@@ -36,6 +36,58 @@ fn route(profile: &str) -> WindowRoute {
     }
 }
 #[test]
+fn a_saved_local_window_cannot_restore_its_session_on_a_different_delegated_namespace() {
+    use crate::{gateway::prepared::WirePolicy, gateway::route::ProfilePolicy, source::RouteOwner};
+    let id = uuid::Uuid::new_v4().to_string();
+    let revision = uuid::Uuid::new_v4().to_string();
+    let transport = Connection::Local {
+        home: "/tmp/hermes-window-fixture".into(),
+    };
+    let delegated = |namespace: &str| Connection::Routed {
+        actual: Box::new(transport.clone()),
+        policy: std::sync::Arc::new(WirePolicy::native(ProfilePolicy::identity())),
+        owner: std::sync::Arc::new(RouteOwner::saved(&id, &revision, namespace).unwrap()),
+    };
+    let before = SourceDescriptor::from_connection(&delegated("before")).unwrap();
+    let after = SourceDescriptor::from_connection(&delegated("after")).unwrap();
+    assert_ne!(
+        before, after,
+        "A saved id and revision do not identify a delegated profile route"
+    );
+    let root = Workspace::new();
+    let mut captured = route("research");
+    captured.source = Some(before.clone());
+    captured.session = Some("same-id-in-both-backends".into());
+    let lease = root
+        .store()
+        .mint_peer(BootstrapKind::InteractiveSession, captured)
+        .unwrap();
+    let window = lease.id().clone();
+    drop(lease);
+    assert_eq!(
+        root.store().restore(&window).unwrap().record().route.source,
+        Some(before)
+    );
+    let native = SourceDescriptor::from_connection(&Connection::Saved {
+        id: id.clone(),
+        revision: revision.clone(),
+        inner: Box::new(transport),
+    })
+    .unwrap();
+    let old: SourceDescriptor = serde_json::from_value(json!({
+        "kind":"saved", "id": id, "revision": revision,
+    }))
+    .unwrap();
+    assert_eq!(native, old);
+    assert_ne!(native, after);
+    assert_eq!(
+        serde_json::to_value(native).unwrap(),
+        json!({
+            "kind":"saved", "id": id, "revision": revision,
+        })
+    );
+}
+#[test]
 fn primary_claim_preserves_legacy_editor_while_peers_have_distinct_durable_inputs() {
     let root = Workspace::new();
     let legacy = crate::composer::Composer::primary_at(&root.0.join("primary-editor.json"))
@@ -388,4 +440,40 @@ fn window_claim_release_ignores_duplicated_descriptors() {
     assert!(matches!(store.claim_primary(), Err(ClaimError::Busy(_))));
     drop(next);
     assert_eq!(store.claim_primary().unwrap().id(), &id);
+}
+
+#[test]
+fn selected_window_intent_requires_a_namespaced_route_and_round_trips() {
+    use crate::source::ProfileIntent;
+    let mut window = route("default");
+    let backend = serde_json::to_value(&window).unwrap();
+    assert!(backend.get("profile_intent").is_none());
+    assert_eq!(
+        serde_json::from_value::<WindowRoute>(backend).unwrap(),
+        window
+    );
+    window.profile_intent = ProfileIntent::NativeSelf;
+    assert!(window.validate().is_err());
+    window.source = Some(SourceDescriptor::Legacy { namespace: None });
+    assert!(window.validate().is_err());
+    window.source = Some(SourceDescriptor::Legacy {
+        namespace: Some("test-route".into()),
+    });
+    assert!(window.validate().is_ok());
+    let restored: WindowRoute =
+        serde_json::from_value(serde_json::to_value(&window).unwrap()).unwrap();
+    assert_eq!(restored, window);
+}
+
+#[test]
+fn fresh_window_route_restores_its_origin_and_reads_old_records() {
+    let mut route = WindowRoute::default();
+    route.draft_origin = Some(crate::composer::DraftOrigin::new());
+    let encoded = serde_json::to_value(&route).unwrap();
+    let decoded: WindowRoute = serde_json::from_value(encoded.clone()).unwrap();
+    assert_eq!(decoded.draft_origin, route.draft_origin);
+    let mut old = encoded;
+    old.as_object_mut().unwrap().remove("draft_origin");
+    let old: WindowRoute = serde_json::from_value(old).unwrap();
+    assert!(old.draft_origin.is_none());
 }

@@ -23,6 +23,7 @@ pub struct Preferences {
     pub reasoning_collapsed: bool,
     pub technical_tools: bool,
     pub bindings: BTreeMap<String, Vec<String>>,
+    pub default_project_dir: Option<String>,
     #[serde(flatten)]
     pub other: BTreeMap<String, Value>,
 }
@@ -36,6 +37,7 @@ impl Default for Preferences {
             reasoning_collapsed: false,
             technical_tools: false,
             bindings: BTreeMap::new(),
+            default_project_dir: None,
             other: BTreeMap::new(),
         }
     }
@@ -52,6 +54,7 @@ impl Preferences {
     }
 }
 pub enum Action {
+    DefaultProjectDir(Option<String>),
     Scale(u16),
     Density(String),
     Bubble(u8),
@@ -212,6 +215,10 @@ impl ClientSettings {
     }
     pub fn act(&mut self, a: Action, persist: bool) {
         match a {
+            Action::DefaultProjectDir(path) => {
+                self.touch("default_project_dir");
+                self.prefs.default_project_dir = path;
+            }
             Action::Capture(id) => {
                 if COMMANDS.iter().any(|c| c.id == id) {
                     self.capture = Some(id);

@@ -154,6 +154,16 @@ impl Preferences {
 pub fn connection_key(connection: &crate::gateway::Connection) -> Result<String, String> {
     use sha2::{Digest, Sha256};
     let identity = match connection {
+        crate::gateway::Connection::Routed {
+            actual,
+            policy,
+            owner,
+        } => format!(
+            "routed:{}:{}:{}",
+            owner.fingerprint(),
+            policy.runtime_fingerprint(),
+            connection_key(actual)?
+        ),
         crate::gateway::Connection::Saved {
             id,
             revision,
@@ -180,6 +190,21 @@ pub fn connection_key(connection: &crate::gateway::Connection) -> Result<String,
     };
     Ok(format!("{:x}", Sha256::digest(identity.as_bytes())))
 }
+/// Routed drafts keep their resolved namespace when a forward or runtime restarts.
+/// Existing Saved/Direct paths remain byte-for-byte compatible.
+pub(crate) fn connection_storage_key(
+    connection: &crate::gateway::Connection,
+) -> Result<String, String> {
+    if connection.route_owner().is_none() {
+        return connection_key(connection);
+    }
+    use sha2::{Digest, Sha256};
+    let source = crate::source::SourceStamp::from_connection(connection)?;
+    Ok(format!(
+        "{:x}",
+        Sha256::digest(format!("hermes-route-storage-v1:{}", source.storage_key()).as_bytes())
+    ))
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,6 +229,92 @@ mod tests {
         );
         assert_eq!(first.len(), 64);
         assert!(!first.contains("one"));
+    }
+    #[test]
+    fn a_fresh_runtime_authority_replaces_live_routes_without_orphaning_the_durable_namespace() {
+        use crate::{
+            gateway::{
+                BackendRootProof, Connection,
+                prepared::{BackendTarget, SelectedContext, WirePolicy},
+                route::ProfilePolicy,
+            },
+            source::{RouteOwner, SourceStamp},
+        };
+        let routed = |epoch, port| Connection::Routed {
+            actual: Box::new(Connection::Url {
+                endpoint: format!("http://127.0.0.1:{port}"),
+                token: Some("synthetic-runtime-token".into()),
+            }),
+            policy: std::sync::Arc::new(
+                WirePolicy::native(
+                    ProfilePolicy::new(
+                        "desktop",
+                        crate::gateway::route::RouteOptions {
+                            primary_profile: Some("primary".into()),
+                            profile_remote_override: true,
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap(),
+                )
+                .with_selected(
+                    SelectedContext::new(
+                        "desktop",
+                        BackendTarget::Root(BackendRootProof {
+                            profile: Some("backend".into()),
+                            profile_id: "/private/hermes-profile".into(),
+                            instance_id: format!("runtime-{epoch}"),
+                            authority_epoch: epoch,
+                        }),
+                    )
+                    .unwrap(),
+                )
+                .unwrap(),
+            ),
+            owner: std::sync::Arc::new(RouteOwner::legacy("stable-route-and-target").unwrap()),
+        };
+        let old = routed(1, 18001);
+        let fresh = routed(2, 18001);
+        assert_ne!(
+            connection_key(&old).unwrap(),
+            connection_key(&fresh).unwrap(),
+            "An explicit re-resolution must replace the old runtime context"
+        );
+        assert_eq!(
+            SourceStamp::from_connection(&old).unwrap().storage_key(),
+            SourceStamp::from_connection(&fresh).unwrap().storage_key()
+        );
+        assert_eq!(
+            SourceStamp::from_connection(&old).unwrap().storage_key(),
+            SourceStamp::from_connection(&routed(2, 18002))
+                .unwrap()
+                .storage_key()
+        );
+        assert_eq!(
+            connection_storage_key(&old).unwrap(),
+            connection_storage_key(&fresh).unwrap()
+        );
+        assert_eq!(
+            connection_storage_key(&old).unwrap(),
+            connection_storage_key(&routed(2, 18002)).unwrap()
+        );
+        let plain = crate::gateway::Connection::Url {
+            endpoint: "https://private-fixture.invalid/".into(),
+            token: Some("fixture".into()),
+        };
+        assert_eq!(
+            connection_storage_key(&plain).unwrap(),
+            connection_key(&plain).unwrap()
+        );
+        let saved = crate::gateway::Connection::Saved {
+            id: "old-id".into(),
+            revision: "old-revision".into(),
+            inner: Box::new(plain),
+        };
+        assert_eq!(
+            connection_storage_key(&saved).unwrap(),
+            connection_key(&saved).unwrap()
+        );
     }
     #[test]
     fn private_state_replacement_is_atomic_and_uses_private_permissions() {

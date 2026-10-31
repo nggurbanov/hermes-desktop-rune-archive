@@ -110,7 +110,7 @@ pub struct Audio {
     waker: Option<Waker>,
     live: HashMap<DraftScope, live::Live>,
     live_progress: HashMap<DraftScope, progress::Progress>,
-    engine_pending: HashMap<(u64, String), u64>,
+    engine_pending: HashMap<(u64, String, crate::source::ProfileIntent), u64>,
 }
 impl Default for Audio {
     fn default() -> Self {
@@ -297,7 +297,7 @@ impl Audio {
     }
     pub fn close_connection(&mut self, connection: u64) {
         self.engine_pending
-            .retain(|(epoch, _), _| *epoch != connection);
+            .retain(|(epoch, _, _), _| *epoch != connection);
         let scopes: Vec<_> = self
             .views
             .keys()
@@ -313,7 +313,10 @@ impl Audio {
     pub fn rehome(&mut self, origin: &DraftScope, target: DraftScope) {
         // Device/audio ownership stays profile-bound; only adoption of the
         // user's new draft may change its stored conversation identity.
-        if origin.connection != target.connection || origin.profile != target.profile {
+        if origin.connection != target.connection
+            || origin.profile != target.profile
+            || origin.profile_intent != target.profile_intent
+        {
             return;
         }
         if let Some(view) = self.views.remove(origin) {
@@ -346,11 +349,22 @@ impl Audio {
             .ok_or("Audio transport is not initialized")?;
         self.sequence += 1;
         let id = self.sequence;
-        self.engine_pending
-            .insert((scope.connection, scope.profile.clone()), id);
+        self.engine_pending.insert(
+            (
+                scope.connection,
+                scope.profile.clone(),
+                scope.profile_intent,
+            ),
+            id,
+        );
         let replies = self.replies.clone();
         std::thread::spawn(move || {
-            let result = AudioGateway::set_engine(&connection, &scope.profile, engine);
+            let result = AudioGateway::set_engine_scoped(
+                &connection,
+                &scope.profile,
+                scope.profile_intent,
+                engine,
+            );
             let reply = match result {
                 Ok(status) => Reply::Engine(scope, id, status),
                 Err(e) => Reply::EngineError(scope, id, e),
@@ -399,7 +413,11 @@ impl Audio {
         let replies = self.replies.clone();
         std::thread::spawn(move || {
             let result = (|| {
-                let mut gateway = AudioGateway::connect(&connection, &scope.profile)?;
+                let mut gateway = AudioGateway::connect_scoped(
+                    &connection,
+                    &scope.profile,
+                    scope.profile_intent,
+                )?;
                 let lease = format!("desktop:rune:tts:{}", uuid::Uuid::new_v4());
                 let _ = gateway.lease(false, &lease, true);
                 let result = synthesize_and_play(&mut gateway, &text, &controls);
@@ -453,7 +471,11 @@ impl Audio {
         let mut closed_live = vec![];
         for reply in self.receive.try_iter().collect::<Vec<_>>() {
             if let Reply::Engine(scope, id, status) = &reply {
-                let owner = (scope.connection, scope.profile.clone());
+                let owner = (
+                    scope.connection,
+                    scope.profile.clone(),
+                    scope.profile_intent,
+                );
                 if self.engine_pending.get(&owner) != Some(id) {
                     continue;
                 }
@@ -461,7 +483,11 @@ impl Audio {
                 let mut scopes: Vec<_> = self
                     .views
                     .keys()
-                    .filter(|s| s.connection == scope.connection && s.profile == scope.profile)
+                    .filter(|s| {
+                        s.connection == scope.connection
+                            && s.profile == scope.profile
+                            && s.profile_intent == scope.profile_intent
+                    })
                     .cloned()
                     .collect();
                 if scopes.is_empty() {
@@ -477,7 +503,11 @@ impl Audio {
                 continue;
             }
             if let Reply::EngineError(scope, id, error) = &reply {
-                let owner = (scope.connection, scope.profile.clone());
+                let owner = (
+                    scope.connection,
+                    scope.profile.clone(),
+                    scope.profile_intent,
+                );
                 if self.engine_pending.get(&owner) != Some(id) {
                     continue;
                 }
@@ -506,6 +536,7 @@ impl Audio {
                     task.id == id
                         && scope.connection == origin.connection
                         && scope.profile == origin.profile
+                        && scope.profile_intent == origin.profile_intent
                 })
                 .map(|(scope, _)| scope.clone())
             else {
@@ -668,7 +699,8 @@ fn record(
         return capture_cancelled(controls);
     }
     notify(Reply::Status(scope.clone(), id, Status::Listening));
-    let mut gateway = AudioGateway::connect(&connection, &scope.profile)?;
+    let mut gateway =
+        AudioGateway::connect_scoped(&connection, &scope.profile, scope.profile_intent)?;
     let lease = format!("desktop:rune:stt:{}", uuid::Uuid::new_v4());
     match gateway.lease(true, &lease, true) {
         Ok(Some(warning)) => notify(Reply::Warning(scope.clone(), id, warning)),
@@ -846,6 +878,8 @@ mod tests {
     use super::*;
     fn scope(session: Option<&str>) -> DraftScope {
         DraftScope {
+            draft_origin: None,
+            profile_intent: crate::source::ProfileIntent::Backend,
             connection: 7,
             profile: "voice-owner".into(),
             session: session.map(str::to_owned),
@@ -954,7 +988,14 @@ mod tests {
                 started: Instant::now(),
             },
         );
-        audio.engine_pending.insert((7, "voice-owner".into()), 6);
+        audio.engine_pending.insert(
+            (
+                7,
+                "voice-owner".into(),
+                crate::source::ProfileIntent::Backend,
+            ),
+            6,
+        );
         audio
             .replies
             .send(Reply::Engine(
@@ -982,6 +1023,45 @@ mod tests {
         assert_eq!(
             audio.view(&owner).unwrap().engine,
             Some(VoiceEngine::GptLive)
+        );
+    }
+    #[test]
+    fn opposite_intents_do_not_share_engine_replies_or_rehome() {
+        let mut audio = Audio::new();
+        let backend = scope(None);
+        let mut native = backend.clone();
+        native.profile_intent = crate::source::ProfileIntent::NativeSelf;
+        audio.views.insert(backend.clone(), AudioView::default());
+        audio.views.insert(native.clone(), AudioView::default());
+        audio
+            .engine_pending
+            .insert((7, "voice-owner".into(), backend.profile_intent), 3);
+        audio
+            .engine_pending
+            .insert((7, "voice-owner".into(), native.profile_intent), 4);
+        audio
+            .replies
+            .send(Reply::Engine(
+                backend.clone(),
+                3,
+                VoiceStatus {
+                    engine: VoiceEngine::Chained,
+                    live_available: false,
+                },
+            ))
+            .unwrap();
+        audio.poll();
+        assert_eq!(
+            audio.view(&backend).unwrap().preferred_engine,
+            Some(VoiceEngine::Chained)
+        );
+        assert_eq!(audio.view(&native).unwrap().preferred_engine, None);
+        audio.rehome(&backend, native.clone());
+        assert!(audio.view(&backend).is_some());
+        audio.cancel(&native);
+        assert_eq!(
+            audio.view(&backend).unwrap().preferred_engine,
+            Some(VoiceEngine::Chained)
         );
     }
 }

@@ -10,25 +10,37 @@ pub(crate) mod composer;
 pub(crate) mod connections;
 mod conversation;
 mod decks;
+#[cfg(not(test))]
 mod directories;
+#[cfg(test)]
+pub(crate) mod directories;
 pub(crate) mod files;
 pub(crate) mod fleet;
 pub(crate) mod layout;
+pub(crate) mod legacy_settings;
 pub(crate) mod media_player;
 pub(crate) mod notifications;
 pub(crate) mod operations;
 pub(crate) mod pages;
+#[cfg(not(test))]
 mod palette;
+#[cfg(test)]
+pub(crate) mod palette;
 pub(crate) mod preview;
 mod profile_routes;
+pub(crate) mod project_create;
+pub(crate) mod projects;
 pub(crate) mod review;
 mod shell;
+#[cfg(not(test))]
 mod sidebar;
+#[cfg(test)]
+pub(crate) mod sidebar;
 pub(crate) mod sounds;
 mod status;
 pub(crate) mod subagents;
 pub(crate) mod terminal;
-mod transcript;
+pub(crate) mod transcript;
 mod windows;
 
 use rune::{Cx, El, ScrollSpec, col, el, icon, row, text};
@@ -47,7 +59,8 @@ pub fn app(s: &Viewer, cx: &mut Cx<Viewer>) -> El {
     let k = &local_kit;
     let p = pal(dark);
     let mut layer = Vec::new();
-    let main = if s.connection_form {
+    let settings_open = s.route == crate::pages::Route::Settings;
+    let main = if s.connection_form && !settings_open {
         connection_form(s, k)
     } else if s.route != crate::pages::Route::Chat {
         pages::page(s, k, &mut layer)
@@ -233,7 +246,8 @@ fn workspace(s: &Viewer, p: &Pal, k: &Kit, layer: &mut Vec<El>) -> El {
                 .py(6.0),
         );
     }
-    body.child(history.grow(1.0).min_h(0.0))
+    body.child(transcript::search_bar(s, k))
+        .child(history.grow(1.0).min_h(0.0))
         .child(conversation::pending(s, k))
         .child(audio::panel(s, k))
         .child(transcript::slash_panel(s, k))

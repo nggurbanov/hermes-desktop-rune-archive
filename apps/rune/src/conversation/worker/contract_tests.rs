@@ -164,6 +164,8 @@ fn real_gui_create_files_permission_readback_admission_and_stream_are_one_owned_
         );
     });
     let scope = DraftScope {
+        draft_origin: Some(crate::composer::DraftOrigin::new()),
+        profile_intent: crate::source::ProfileIntent::Backend,
         connection: 1,
         profile: "work".into(),
         session: None,
@@ -189,6 +191,19 @@ fn real_gui_create_files_permission_readback_admission_and_stream_are_one_owned_
     let (mut worker, replies) = worker(connection, scope.clone());
     worker.submit(prepared, &journal).unwrap();
     assert!(journal.load(&id).is_err());
+    let mut manager = Conversation::new();
+    for reply in replies.try_iter() {
+        manager.replies.send(reply).unwrap();
+    }
+    manager.poll();
+    let bound = DraftScope {
+        session: Some("stored".into()),
+        draft_origin: None,
+        ..scope.clone()
+    };
+    let view = manager.view(&bound).unwrap();
+    assert!(view.running);
+    assert_eq!(view.messages[0].content, "Hello");
     for _ in 0..5 {
         let event = worker
             .transport
@@ -199,18 +214,14 @@ fn real_gui_create_files_permission_readback_admission_and_stream_are_one_owned_
             .unwrap();
         worker.event(event).unwrap();
     }
-    let mut manager = Conversation::new();
     for reply in replies.try_iter() {
         manager.replies.send(reply).unwrap();
     }
     let updates = manager.poll();
-    assert!(
-        updates
-            .iter()
-            .any(|u| matches!(u,Update::Bound{origin,..}if origin.session.is_none()))
-    );
+    assert!(!updates.is_empty());
     let stored = DraftScope {
         session: Some("stored".into()),
+        draft_origin: None,
         ..scope
     };
     let view = manager.view(&stored).unwrap();
@@ -220,6 +231,8 @@ fn real_gui_create_files_permission_readback_admission_and_stream_are_one_owned_
     assert!(
         manager
             .view(&DraftScope {
+                draft_origin: None,
+                profile_intent: crate::source::ProfileIntent::Backend,
                 connection: 1,
                 profile: "other".into(),
                 session: Some("stored".into())
@@ -261,6 +274,8 @@ fn failed_resume_never_falls_back_to_create_or_prompt() {
         );
     });
     let scope = DraftScope {
+        draft_origin: None,
+        profile_intent: crate::source::ProfileIntent::Backend,
         connection: 1,
         profile: "work".into(),
         session: Some("missing".into()),
@@ -328,6 +343,8 @@ fn uncertain_ack_retries_the_same_admission_without_creating_a_second_chat_or_bu
         );
     });
     let scope = DraftScope {
+        draft_origin: None,
+        profile_intent: crate::source::ProfileIntent::Backend,
         connection: 1,
         profile: "work".into(),
         session: None,
@@ -351,6 +368,7 @@ fn uncertain_ack_retries_the_same_admission_without_creating_a_second_chat_or_bu
     drop(first);
     let stored = DraftScope {
         session: Some("stored".into()),
+        draft_origin: None,
         ..scope
     };
     let (mut second, replies) = worker(connection, stored.clone());
@@ -397,6 +415,8 @@ fn bot_registry_failure_is_not_permission_to_create_a_fork() {
         );
     });
     let scope = DraftScope {
+        draft_origin: None,
+        profile_intent: crate::source::ProfileIntent::Backend,
         connection: 1,
         profile: "work".into(),
         session: None,
@@ -429,6 +449,8 @@ fn composer_model_pick_retries_only_one_typed_fence_refusal_with_new_journaled_i
         token: Some("synthetic-token".into()),
     };
     let scope = DraftScope {
+        draft_origin: None,
+        profile_intent: crate::source::ProfileIntent::Backend,
         connection: 1,
         profile: "work".into(),
         session: Some("stored".into()),
@@ -491,6 +513,8 @@ fn ambiguous_model_pick_keeps_exact_fences_and_request_identity_for_explicit_ret
         token: Some("synthetic-token".into()),
     };
     let scope = DraftScope {
+        draft_origin: None,
+        profile_intent: crate::source::ProfileIntent::Backend,
         connection: 1,
         profile: "work".into(),
         session: Some("stored".into()),
@@ -539,6 +563,8 @@ fn workspace_change_is_session_owned_cas_and_publishes_normalized_readback_witho
         token: Some("synthetic-token".into()),
     };
     let scope = DraftScope {
+        draft_origin: None,
+        profile_intent: crate::source::ProfileIntent::Backend,
         connection: 1,
         profile: "work".into(),
         session: Some("stored".into()),
@@ -645,6 +671,8 @@ fn confirmed_restore_uses_durable_rewind_and_never_submits_a_new_user_prompt() {
         );
     });
     let scope = DraftScope {
+        draft_origin: None,
+        profile_intent: crate::source::ProfileIntent::Backend,
         connection: 1,
         profile: "work".into(),
         session: Some("stored".into()),
@@ -728,6 +756,8 @@ fn lost_rewind_receipt_retries_exact_identity_and_fences_even_after_revision_adv
         history(&listener, json!([]));
     });
     let scope = DraftScope {
+        draft_origin: None,
+        profile_intent: crate::source::ProfileIntent::Backend,
         connection: 1,
         profile: "work".into(),
         session: Some("stored".into()),
@@ -854,6 +884,8 @@ fn multimodal_edit_stages_exact_files_and_images_before_rewind_then_admits_one_o
         );
     });
     let scope = DraftScope {
+        draft_origin: None,
+        profile_intent: crate::source::ProfileIntent::Backend,
         connection: 1,
         profile: "work".into(),
         session: Some("stored".into()),
@@ -918,6 +950,8 @@ fn invalid_multimodal_bytes_fail_before_any_rewind_or_admission() {
         );
     });
     let scope = DraftScope {
+        draft_origin: None,
+        profile_intent: crate::source::ProfileIntent::Backend,
         connection: 1,
         profile: "work".into(),
         session: Some("stored".into()),
@@ -987,6 +1021,8 @@ fn multimodal_restore_returns_frozen_original_input_without_upload_or_prompt() {
         assert!(ws.read().is_err());
     });
     let scope = DraftScope {
+        draft_origin: None,
+        profile_intent: crate::source::ProfileIntent::Backend,
         connection: 1,
         profile: "work".into(),
         session: Some("stored".into()),
@@ -1049,6 +1085,8 @@ fn persisted_policy_stamp_defers_reasoning_and_never_acknowledges_a_newer_a_b_a_
         token: Some("synthetic-token".into()),
     };
     let scope = DraftScope {
+        draft_origin: None,
+        profile_intent: crate::source::ProfileIntent::Backend,
         connection: 1,
         profile: "work".into(),
         session: Some("stored".into()),
@@ -1172,6 +1210,8 @@ fn live_session_info_updates_clean_fields_without_inventing_a_missing_provider()
         token: Some("synthetic-token".into()),
     };
     let scope = DraftScope {
+        draft_origin: None,
+        profile_intent: crate::source::ProfileIntent::Backend,
         connection: 1,
         profile: "work".into(),
         session: Some("stored".into()),

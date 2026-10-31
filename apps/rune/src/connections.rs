@@ -1,5 +1,10 @@
 //! Client-owned connection registry. Passwords stay in the OS credential store;
 //! connection tests and SSH forwarding attach to existing agents only.
+mod installed_ssh;
+mod shutdown;
+pub(crate) fn drain_workers(timeout: std::time::Duration) -> Result<(), String> {
+    shutdown::drain(timeout)
+}
 use crate::gateway::Connection;
 use rune::{TextEdit, Waker};
 use serde::{Deserialize, Serialize};
@@ -7,9 +12,13 @@ use std::{
     path::PathBuf,
     sync::mpsc::{self, Receiver, Sender},
 };
+pub(crate) mod cloud;
+pub(crate) mod cloud_portal;
 mod core;
 mod leases;
+pub(crate) mod legacy;
 pub(crate) mod passive;
+pub(crate) use core::legacy::oauth_login::{LoginAttempt, LoginEvent, LoginFailure};
 pub use leases::{Lease, LeaseGuard, Resolver};
 pub(crate) mod plugin;
 mod ssh;
@@ -97,6 +106,8 @@ struct Registry {
     other: std::collections::BTreeMap<String, serde_json::Value>,
     #[serde(default)]
     cleanup: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    legacy: Option<legacy::Store>,
 }
 impl Registry {
     fn empty() -> Self {
@@ -294,6 +305,26 @@ enum Outcome {
     Lost(String, String, String),
 }
 enum Work {
+    Shutdown,
+    ResolveLegacy {
+        request: legacy::ResolveRequest,
+        alive: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        reply: Sender<legacy::ResolveReceipt>,
+    },
+    CommitLegacy {
+        resolved: legacy::ResolvedLegacy,
+        expected_namespace: Option<String>,
+        intent: u64,
+        alive: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        reply: Sender<legacy::ResolveReceipt>,
+    },
+    LegacySnapshot {
+        reply: Sender<Result<legacy::Snapshot, String>>,
+    },
+    SaveLegacy {
+        edit: legacy::Edit,
+        reply: Sender<Result<legacy::SaveReceipt, String>>,
+    },
     RetainPassive {
         version: crate::source::SourceVersion,
         connection: Connection,
@@ -330,6 +361,17 @@ enum Work {
 struct Network {
     send: Sender<Work>,
     receive: Receiver<Reply>,
+    resolver: Resolver,
+}
+impl Network {
+    fn new(send: Sender<Work>, receive: Receiver<Reply>) -> Self {
+        let resolver = Resolver::new(send.clone());
+        Self {
+            send,
+            receive,
+            resolver,
+        }
+    }
 }
 pub struct Connections {
     pub rows: Vec<Saved>,
@@ -340,6 +382,7 @@ pub struct Connections {
     pub error: Option<String>,
     pub notice: Option<String>,
     network: Option<Network>,
+    registry_path: Option<PathBuf>,
     sequence: u64,
     pending: Option<u64>,
     synthetic: bool,
@@ -367,6 +410,7 @@ impl Connections {
             error: None,
             notice: None,
             network: None,
+            registry_path: None,
             sequence: 0,
             pending: None,
             synthetic: false,
@@ -385,17 +429,42 @@ impl Connections {
         }
         let (send, requests) = mpsc::channel::<Work>();
         let (replies, receive) = mpsc::channel();
+        let path = crate::client::state_dir().map(|p| p.join("connections.json"));
+        self.registry_path = path.as_ref().ok().cloned();
+        let (finished, completion) = mpsc::channel();
         std::thread::spawn(move || {
-            let path = crate::client::state_dir().map(|p| p.join("connections.json"));
             worker::run(path.map(core::Core::system), requests, replies, waker);
+            let _ = finished.send(());
         });
-        self.network = Some(Network { send, receive });
+        let network = Network::new(send, receive);
+        shutdown::track(&network.resolver, completion);
+        self.network = Some(network);
         self.load();
+    }
+    pub(crate) fn start_oauth_login(
+        &self,
+        scope: legacy::Scope,
+        expected: legacy::ScopeVersion,
+    ) -> Result<LoginAttempt, String> {
+        let path = self
+            .registry_path
+            .clone()
+            .ok_or("OAuth needs persistent client state")?;
+        Ok(LoginAttempt::start(
+            path,
+            core::legacy::oauth_login::LoginRequest {
+                scope,
+                expected,
+                provider: None,
+                generation: core::legacy::oauth_login::LoginGeneration::new(),
+                deadline: std::time::Instant::now() + std::time::Duration::from_secs(360),
+            },
+        ))
     }
     pub fn resolver(&self) -> Option<Resolver> {
         self.network
             .as_ref()
-            .map(|network| Resolver::new(network.send.clone()))
+            .map(|network| network.resolver.clone())
     }
     pub fn commit_lease(&mut self, lease: Lease) {
         if self.synthetic {
@@ -640,3 +709,23 @@ impl crate::app::Viewer {
         self.connections.action(action);
     }
 }
+
+#[cfg(test)]
+pub(crate) fn private_test_resolver(path: PathBuf) -> Resolver {
+    let (send, requests) = mpsc::channel::<Work>();
+    let (replies, _receive) = mpsc::channel();
+    std::thread::spawn(move || {
+        worker::run(
+            Ok(core::Core::system(path)),
+            requests,
+            replies,
+            std::sync::Arc::new(|| {}),
+        );
+    });
+    Resolver::new(send)
+}
+
+#[cfg(test)]
+pub(crate) use core::legacy::testing::Rig as TestLegacyRig;
+#[cfg(test)]
+pub(crate) use leases::TestRoutedLease;

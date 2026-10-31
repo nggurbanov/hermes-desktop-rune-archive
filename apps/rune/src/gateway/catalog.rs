@@ -135,35 +135,44 @@ impl Gateway {
     /// state. The REST recovery stays on this exact gateway and profile.
     pub fn model_catalog(&mut self, profile: &str) -> Result<ModelCatalog, String> {
         valid_scope(profile)?;
+        self.model_catalog_for(&super::prepared::ProfileProvenance::Backend(profile.into()))
+    }
+    pub(crate) fn model_catalog_for(
+        &mut self,
+        provenance: &super::prepared::ProfileProvenance,
+    ) -> Result<ModelCatalog, String> {
         let deadline = std::time::Instant::now() + TIMEOUT;
-        let rpc = self
-            .rpc_until(
-                "model.options",
-                json!({"profile":profile,"explicit_only":true}),
-                deadline,
-            )
-            .and_then(|value| ModelCatalog::from_value(&value));
+        let params = self.rpc_params_for(provenance, json!({"explicit_only":true}))?;
+        let rpc = match self.rpc_until("model.options", params, deadline) {
+            Ok(value) => {
+                self.validate_response_owner(provenance, &value, "profile", true)?;
+                ModelCatalog::from_value(&value)
+            }
+            Err(error) => Err(error),
+        };
         if rpc.as_ref().is_ok_and(ModelCatalog::has_models) {
             return rpc;
         }
-        // A detached composer worker owns a fresh gateway. Discover the exact
-        // served profile home before asking for its native HTTP credential;
-        // using the launch home's ticket would target a different profile.
+        let path = super::audio::scoped_path(self, provenance, "/api/model/options")?;
+        let path = format!("{path}&explicit_only=1");
+        let url = self.api_url_for(provenance, "GET", &path)?;
         #[cfg(target_os = "linux")]
-        if matches!(&self.auth, super::Auth::Native(_)) && !self.profile_homes.contains_key(profile)
+        if matches!(&self.auth, super::Auth::Native(_))
+            && self
+                .native_scope_profile(provenance, &url)?
+                .is_some_and(|name| !self.profile_homes.contains_key(&name))
         {
             self.profiles_until(deadline)?;
         }
-        let mut url = self
-            .base
-            .join("api/model/options")
-            .map_err(|_| "Invalid model catalog route")?;
-        url.query_pairs_mut()
-            .append_pair("profile", profile)
-            .append_pair("explicit_only", "1");
-        let rest = self
-            .get_json(profile, url, deadline, "Model catalog")
-            .and_then(|value| ModelCatalog::from_value(&value));
+        let parts =
+            self.http_parts_for_method(provenance, url, deadline, Some(reqwest::Method::GET))?;
+        let rest = match self.get_json_parts(parts, deadline, "Model catalog") {
+            Ok(value) => {
+                self.validate_response_owner(provenance, &value, "profile", true)?;
+                ModelCatalog::from_value(&value)
+            }
+            Err(error) => Err(error),
+        };
         if let Ok(mut catalog) = rest
             && catalog.has_models()
         {

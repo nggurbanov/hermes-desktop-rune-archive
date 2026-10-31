@@ -20,6 +20,7 @@ pub enum SidebarTab {
 #[derive(Clone)]
 pub struct ConversationTab {
     pub profile: String,
+    pub profile_intent: crate::source::ProfileIntent,
     pub session: String,
     pub title: String,
     pub bot: bool,
@@ -31,21 +32,42 @@ pub enum ConversationTarget {
         profile: String,
         id: String,
         title: String,
+        profile_intent: crate::source::ProfileIntent,
     },
-    Bot(String),
+    Bot {
+        profile: String,
+        profile_intent: crate::source::ProfileIntent,
+    },
 }
+
+type ConversationSlot = (String, crate::source::ProfileIntent, String);
 
 #[derive(Clone)]
 struct BotOpen {
     profile: String,
+    profile_intent: crate::source::ProfileIntent,
     new_tab: bool,
-    replace: Option<(String, String)>,
+    replace: Option<ConversationSlot>,
+    restore_origin: Option<crate::composer::DraftOrigin>,
 }
 
 pub struct SavedSendConfirmation {
     pub scope: DraftScope,
     pub id: String,
     pub revision: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum InlineAudioOccurrence {
+    File(usize),
+    Media {
+        part: String,
+        source: std::ops::Range<usize>,
+    },
+    Markdown {
+        part: String,
+        source: std::ops::Range<usize>,
+    },
 }
 
 pub struct Viewer {
@@ -75,6 +97,10 @@ pub struct Viewer {
     pub preview: crate::preview::Service,
     pub media_players: crate::media_player::MediaPlayers,
     pub audio_preview: Option<crate::media_player::PlayerId>,
+    pub(crate) inline_audio: HashMap<
+        (DraftScope, String, String, InlineAudioOccurrence, String),
+        crate::media_player::PlayerId,
+    >,
     preview_return: Option<crate::pages::Route>,
     pub identities: crate::identities::Identities,
     pub directories: crate::directories::Directories,
@@ -88,6 +114,8 @@ pub struct Viewer {
     pub health_open: bool,
     pub chrome: crate::client_status::ClientStatus,
     pub client_settings: crate::client_settings::ClientSettings,
+    pub legacy_settings: crate::legacy_settings::Settings,
+    pub legacy_routing_settings: bool,
     pub show_statusbar: bool,
     pub show_profile_rail: bool,
     pub hidden_status_items: std::collections::BTreeSet<String>,
@@ -129,9 +157,9 @@ pub struct Viewer {
     pub messaging: crate::pages::messaging::Messaging,
     pub artifacts: crate::pages::artifacts::Artifacts,
     page_network: crate::pages::PageNetwork,
-    page_owner: Option<(u64, String)>,
-    page_accepted_owner: Option<(u64, String)>,
-    page_loaded_owner: Option<(u64, String)>,
+    page_owner: Option<(u64, String, crate::source::ProfileIntent)>,
+    page_accepted_owner: Option<(u64, String, crate::source::ProfileIntent)>,
+    page_loaded_owner: Option<(u64, String, crate::source::ProfileIntent)>,
     page_connection: Option<Connection>,
     pub composer: Composer,
     draft_storage_available: bool,
@@ -141,7 +169,9 @@ pub struct Viewer {
     pub sessions: Vec<Session>,
     pub messages: Vec<HistoryMessage>,
     pub profile: String,
+    pub profile_intent: crate::source::ProfileIntent,
     pub selected_session: Option<String>,
+    draft_origin: Option<crate::composer::DraftOrigin>,
     pub status: String,
     pub error: Option<String>,
     pub loading: bool,
@@ -182,6 +212,7 @@ struct Network {
 }
 struct Request {
     intent: u64,
+    profile_intent: crate::source::ProfileIntent,
     command: Command,
 }
 enum Command {
@@ -244,6 +275,7 @@ impl Viewer {
             preview: crate::preview::Service::new(),
             media_players: crate::media_player::MediaPlayers::new(),
             audio_preview: None,
+            inline_audio: HashMap::new(),
             preview_return: None,
             identities: Default::default(),
             directories: Default::default(),
@@ -257,6 +289,8 @@ impl Viewer {
             health_open: false,
             chrome: Default::default(),
             client_settings: crate::client_settings::ClientSettings::new(),
+            legacy_settings: Default::default(),
+            legacy_routing_settings: false,
             show_statusbar: true,
             show_profile_rail: true,
             hidden_status_items: crate::client::default_hidden_status(),
@@ -314,7 +348,9 @@ impl Viewer {
             sessions: vec![],
             messages: vec![],
             profile: "default".into(),
+            profile_intent: Default::default(),
             selected_session: None,
+            draft_origin: None,
             status: "Not connected".into(),
             error: None,
             loading: false,
@@ -361,6 +397,7 @@ impl Viewer {
             }
             return s;
         }
+        let _ = routing::captured_environment();
         s.load_client_state();
         if let Some(endpoint) = argument("--gateway") {
             let token = std::env::var("HERMES_GATEWAY_TOKEN")
@@ -541,6 +578,18 @@ impl Viewer {
         connection: Connection,
         profile: Option<String>,
     ) -> bool {
+        self.use_connection_for_profile_intent(
+            connection,
+            profile,
+            crate::source::ProfileIntent::Backend,
+        )
+    }
+    fn use_connection_for_profile_intent(
+        &mut self,
+        connection: Connection,
+        profile: Option<String>,
+        profile_intent: crate::source::ProfileIntent,
+    ) -> bool {
         self.cancel_device_route();
         if !self.allow_owner_change("") {
             return false;
@@ -577,6 +626,7 @@ impl Viewer {
         self.page_network.invalidate();
         self.composer.close();
         self.connection = Some(connection);
+        self.profile_intent = profile_intent;
         self.connection_form = false;
         self.profiles.clear();
         self.sessions.clear();
@@ -599,6 +649,12 @@ impl Viewer {
 
     pub fn composer_scope(&self) -> DraftScope {
         DraftScope {
+            draft_origin: self
+                .selected_session
+                .is_none()
+                .then(|| self.draft_origin.clone())
+                .flatten(),
+            profile_intent: self.profile_intent,
             connection: self.connection_epoch,
             profile: self.profile.clone(),
             session: self.selected_session.clone(),
@@ -629,7 +685,9 @@ impl Viewer {
             self.composer
                 .request_catalog(connection, self.composer_scope());
         } else if !self.fixture {
-            self.composer.catalog_error = Some("Connect an agent to browse its models".into());
+            let scope = self.composer_scope();
+            self.composer
+                .set_catalog_error(&scope, "Connect an agent to browse its models".into());
         }
     }
     pub fn reload_voice_status(&mut self) {
@@ -649,14 +707,21 @@ impl Viewer {
     pub fn select_profile(&mut self, profile: String) {
         self.cancel_device_route();
         self.profile_picker = false;
-        if profile == self.profile {
+        if profile == self.profile && self.profile_intent == crate::source::ProfileIntent::Backend {
             return;
         }
-        if !self.allow_owner_change(&profile) {
+        let guard_profile = if self.profile_intent == crate::source::ProfileIntent::Backend {
+            profile.as_str()
+        } else {
+            ""
+        };
+        if !self.allow_owner_change(guard_profile) {
             return;
         }
+        self.retire_chat_search_reveals();
         self.remember_profile_appearance();
         self.profile = profile.clone();
+        self.profile_intent = crate::source::ProfileIntent::Backend;
         self.restore_profile_appearance();
         self.pending_bot = None;
         self.bot_empty = false;
@@ -698,16 +763,62 @@ impl Viewer {
             self.settings.vault.dismiss();
         }
         self.route = crate::pages::Route::Chat;
-        self.open_bot_with_intent(profile, false);
+        self.open_target(
+            ConversationTarget::Bot {
+                profile,
+                profile_intent: crate::source::ProfileIntent::Backend,
+            },
+            false,
+        );
     }
 
     pub fn open_target(&mut self, target: ConversationTarget, new_tab: bool) {
         self.row_menu = None;
-        match target {
-            ConversationTarget::Bot(profile) => self.open_bot_with_intent(profile, new_tab),
-            ConversationTarget::Session { profile, id, title } => {
-                self.open_conversation(profile, id, title, false, new_tab)
+        let (profile, profile_intent) = match &target {
+            ConversationTarget::Bot {
+                profile,
+                profile_intent,
             }
+            | ConversationTarget::Session {
+                profile,
+                profile_intent,
+                ..
+            } => (profile.clone(), *profile_intent),
+        };
+        let guard_profile = if self.profile_intent == profile_intent {
+            profile.as_str()
+        } else {
+            ""
+        };
+        if !self.allow_owner_change(guard_profile) {
+            return;
+        }
+        if profile_intent == crate::source::ProfileIntent::NativeSelf
+            && !self
+                .connection
+                .as_ref()
+                .and_then(|connection| connection.wire_policy())
+                .and_then(|policy| policy.selected())
+                .is_some_and(|selected| selected.window_alias() == profile)
+        {
+            self.client_error =
+                Some("The selected conversation route is no longer available".into());
+            return;
+        }
+        let replace = self.foreground_slot();
+        if self.profile_intent != profile_intent {
+            self.retire_chat_search_reveals();
+            self.profile_intent = profile_intent;
+            self.selected_session = None;
+            self.sessions.clear();
+        }
+        match target {
+            ConversationTarget::Bot { profile, .. } => {
+                self.open_bot_with_slot(profile, new_tab, replace)
+            }
+            ConversationTarget::Session {
+                profile, id, title, ..
+            } => self.open_conversation_with_slot(profile, id, title, false, new_tab, replace),
         }
     }
 
@@ -719,25 +830,48 @@ impl Viewer {
         &mut self,
         profile: String,
         new_tab: bool,
-        replace: Option<(String, String)>,
+        replace: Option<ConversationSlot>,
     ) {
         self.cancel_device_route();
         if !self.allow_owner_change(&profile) {
             return;
         }
-        let Some(bot) = self.profiles.iter().find(|p| p.name == profile).cloned() else {
+        let backend_profile = if self.profile_intent == crate::source::ProfileIntent::NativeSelf {
+            self.connection
+                .as_ref()
+                .and_then(|connection| connection.wire_policy())
+                .and_then(|policy| policy.selected())
+                .and_then(|selected| match selected.target() {
+                    crate::gateway::prepared::BackendTarget::Named(name) => Some(name.as_str()),
+                    crate::gateway::prepared::BackendTarget::Root(proof) => {
+                        proof.profile.as_deref()
+                    }
+                })
+        } else {
+            Some(profile.as_str())
+        };
+        let Some(bot) = backend_profile
+            .and_then(|owner| self.profiles.iter().find(|p| p.name == owner))
+            .cloned()
+        else {
+            self.client_error =
+                Some("The selected backend does not expose a uniquely owned Bot profile".into());
             return;
         };
         if !self.fixture {
+            self.retire_chat_search_reveals();
             if self.profile != profile {
                 self.sessions.clear();
                 self.search.replace_text("");
             }
             self.profile = profile.clone();
+            self.draft_origin = Some(crate::composer::DraftOrigin::new());
             self.pending_bot = Some(BotOpen {
                 profile: profile.clone(),
+                profile_intent: self.profile_intent,
                 new_tab,
                 replace,
+                restore_origin: self.draft_origin.clone(),
             });
             self.selected_session = None;
             self.bot_empty = false;
@@ -752,6 +886,7 @@ impl Viewer {
         if let Some(chat) = bot.canonical_session {
             self.open_conversation(profile, chat.id, bot.label, true, new_tab);
         } else {
+            self.retire_chat_search_reveals();
             if self.profile == profile {
                 self.intent += 1;
                 self.loading = false;
@@ -763,6 +898,8 @@ impl Viewer {
             self.history_loading = false;
             self.history_truncated = false;
             self.bot_empty = true;
+            self.draft_origin = Some(crate::composer::DraftOrigin::new());
+            self.ensure_editor();
             self.error = None;
         }
     }
@@ -785,7 +922,7 @@ impl Viewer {
         title: String,
         bot: bool,
         new_tab: bool,
-        replace: Option<(String, String)>,
+        replace: Option<ConversationSlot>,
     ) {
         self.cancel_device_route();
         if !self.allow_owner_change(&profile) {
@@ -799,6 +936,7 @@ impl Viewer {
                 return;
             }
         }
+        self.retire_chat_search_reveals();
         let changed_profile = self.profile != profile;
         if changed_profile {
             self.profile = profile.clone();
@@ -807,6 +945,7 @@ impl Viewer {
         }
         self.place_tab(
             ConversationTab {
+                profile_intent: self.profile_intent,
                 profile: profile.clone(),
                 session: id.clone(),
                 title,
@@ -837,10 +976,10 @@ impl Viewer {
         self.dispatch(Command::History(profile, id));
     }
 
-    fn foreground_slot(&self) -> Option<(String, String)> {
+    fn foreground_slot(&self) -> Option<ConversationSlot> {
         self.selected_session
             .as_ref()
-            .map(|id| (self.profile.clone(), id.clone()))
+            .map(|id| (self.profile.clone(), self.profile_intent, id.clone()))
             .or_else(|| {
                 self.pending_bot
                     .as_ref()
@@ -852,19 +991,19 @@ impl Viewer {
         &mut self,
         tab: ConversationTab,
         new_tab: bool,
-        replace: Option<(String, String)>,
+        replace: Option<ConversationSlot>,
     ) {
-        if let Some(existing) = self
-            .tabs
-            .iter_mut()
-            .find(|t| t.profile == tab.profile && (t.session == tab.session || (t.bot && tab.bot)))
-        {
+        if let Some(existing) = self.tabs.iter_mut().find(|t| {
+            t.profile == tab.profile
+                && t.profile_intent == tab.profile_intent
+                && (t.session == tab.session || (t.bot && tab.bot))
+        }) {
             *existing = tab;
         } else if !new_tab
-            && let Some(index) = replace.and_then(|(profile, id)| {
-                self.tabs
-                    .iter()
-                    .position(|t| t.profile == profile && t.session == id)
+            && let Some(index) = replace.and_then(|(profile, profile_intent, id)| {
+                self.tabs.iter().position(|t| {
+                    t.profile == profile && t.profile_intent == profile_intent && t.session == id
+                })
             })
         {
             self.tabs[index] = tab;
@@ -880,6 +1019,19 @@ impl Viewer {
         }
         self.route = crate::pages::Route::Chat;
         if let Some(tab) = self.tabs.get(index).cloned() {
+            let guard_profile = if self.profile_intent == tab.profile_intent {
+                tab.profile.as_str()
+            } else {
+                ""
+            };
+            if !self.allow_owner_change(guard_profile) {
+                return;
+            }
+            if self.profile_intent != tab.profile_intent {
+                self.retire_chat_search_reveals();
+                self.profile_intent = tab.profile_intent;
+                self.selected_session = None;
+            }
             if tab.bot {
                 self.open_bot_with_intent(tab.profile, true);
             } else {
@@ -897,10 +1049,17 @@ impl Viewer {
             .pending_bot
             .as_ref()
             .and_then(|p| p.replace.as_ref())
-            .is_some_and(|(profile, id)| profile == &tab.profile && id == &tab.session);
+            .is_some_and(|(profile, profile_intent, id)| {
+                profile == &tab.profile
+                    && profile_intent == &tab.profile_intent
+                    && id == &tab.session
+            });
         if pending_anchor
-            || (self.profile == tab.profile && self.selected_session.as_ref() == Some(&tab.session))
+            || (self.profile == tab.profile
+                && self.profile_intent == tab.profile_intent
+                && self.selected_session.as_ref() == Some(&tab.session))
         {
+            self.retire_chat_search_reveals();
             self.pending_bot = None;
             self.selected_session = None;
             self.messages.clear();
@@ -914,7 +1073,9 @@ impl Viewer {
 
     pub fn active_tab(&self) -> Option<&ConversationTab> {
         self.tabs.iter().find(|t| {
-            t.profile == self.profile && self.selected_session.as_ref() == Some(&t.session)
+            t.profile == self.profile
+                && t.profile_intent == self.profile_intent
+                && self.selected_session.as_ref() == Some(&t.session)
         })
     }
 
@@ -934,6 +1095,7 @@ impl Viewer {
             n.send
                 .send(Request {
                     intent: self.intent,
+                    profile_intent: self.profile_intent,
                     command,
                 })
                 .is_ok()
@@ -942,6 +1104,20 @@ impl Viewer {
             self.loading = false;
             self.history_loading = false;
             self.error = Some("The connection worker is unavailable. Restart the client.".into());
+        }
+    }
+    fn show_owned_history(&mut self, history: History) {
+        // A retained worker may advance while this inventory read is in flight.
+        if let Some(view) = self
+            .conversation
+            .view(&self.composer_scope())
+            .filter(|view| !view.runtime.is_empty())
+        {
+            self.messages = view.messages.clone();
+            self.history_truncated = view.truncated;
+        } else {
+            self.messages = history.messages;
+            self.history_truncated = history.has_more;
         }
     }
     fn apply(&mut self, reply: Reply) {
@@ -965,14 +1141,22 @@ impl Viewer {
                     .then(|| {
                         self.pending_bot
                             .take()
-                            .filter(|p| p.profile == profile)
+                            .filter(|p| {
+                                p.profile == profile && p.profile_intent == self.profile_intent
+                            })
                             .or_else(|| {
                                 self.active_tab()
-                                    .filter(|t| t.bot && t.profile == profile)
+                                    .filter(|t| {
+                                        t.bot
+                                            && t.profile == profile
+                                            && t.profile_intent == self.profile_intent
+                                    })
                                     .map(|t| BotOpen {
                                         profile: t.profile.clone(),
+                                        profile_intent: t.profile_intent,
                                         new_tab: true,
                                         replace: None,
+                                        restore_origin: None,
                                     })
                             })
                     })
@@ -998,7 +1182,11 @@ impl Viewer {
                 self.messages.clear();
                 self.error = None;
                 self.status = "Connected".into();
-                self.page_accepted_owner = Some((self.connection_epoch, self.profile.clone()));
+                self.page_accepted_owner = Some((
+                    self.connection_epoch,
+                    self.profile.clone(),
+                    self.profile_intent,
+                ));
                 self.exact_connection_profile = true;
                 if let Some(bot) = reopen_bot {
                     let profile = bot.profile.clone();
@@ -1009,11 +1197,15 @@ impl Viewer {
                     if let Some(tab) = self
                         .tabs
                         .iter()
-                        .find(|t| t.profile == self.profile && t.session == id)
+                        .find(|t| {
+                            t.profile == self.profile
+                                && t.profile_intent == self.profile_intent
+                                && t.session == id
+                        })
                         .cloned()
                     {
                         if tab.bot {
-                            self.open_bot(tab.profile);
+                            self.open_bot_with_intent(tab.profile, true);
                         } else {
                             self.open_conversation(
                                 tab.profile,
@@ -1032,7 +1224,11 @@ impl Viewer {
                 self.remember_connected_profile(&profile);
                 self.sessions = sessions;
                 self.status = "Connected".into();
-                self.page_accepted_owner = Some((self.connection_epoch, self.profile.clone()));
+                self.page_accepted_owner = Some((
+                    self.connection_epoch,
+                    self.profile.clone(),
+                    self.profile_intent,
+                ));
             }
             Ok(Update::Opened {
                 profile,
@@ -1042,10 +1238,13 @@ impl Viewer {
             }) if profile == self.profile && self.selected_session.as_ref() == Some(&session) => {
                 self.remember_connected_profile(&profile);
                 self.sessions = sessions;
-                self.messages = history.messages;
-                self.history_truncated = history.has_more;
+                self.show_owned_history(history);
                 self.status = "Connected".into();
-                self.page_accepted_owner = Some((self.connection_epoch, self.profile.clone()));
+                self.page_accepted_owner = Some((
+                    self.connection_epoch,
+                    self.profile.clone(),
+                    self.profile_intent,
+                ));
                 self.error = None;
             }
             Ok(Update::BotOpened {
@@ -1054,17 +1253,20 @@ impl Viewer {
                 sessions,
                 chat,
             }) if profile == self.profile
-                && self
-                    .pending_bot
-                    .as_ref()
-                    .is_some_and(|p| p.profile == profile) =>
+                && self.pending_bot.as_ref().is_some_and(|p| {
+                    p.profile == profile && p.profile_intent == self.profile_intent
+                }) =>
             {
                 let intent = self.pending_bot.take().expect("matching bot open");
                 self.remember_connected_profile(&profile);
                 self.profiles = profiles;
                 self.sessions = sessions;
                 self.status = "Connected".into();
-                self.page_accepted_owner = Some((self.connection_epoch, self.profile.clone()));
+                self.page_accepted_owner = Some((
+                    self.connection_epoch,
+                    self.profile.clone(),
+                    self.profile_intent,
+                ));
                 self.error = None;
                 if let Some((id, history)) = chat {
                     let title = self
@@ -1075,6 +1277,7 @@ impl Viewer {
                         .unwrap_or_else(|| profile.clone());
                     self.place_tab(
                         ConversationTab {
+                            profile_intent: self.profile_intent,
                             profile,
                             session: id.clone(),
                             title,
@@ -1085,13 +1288,14 @@ impl Viewer {
                     );
                     self.selected_session = Some(id);
                     self.ensure_editor();
-                    self.messages = history.messages;
-                    self.history_truncated = history.has_more;
+                    self.show_owned_history(history);
                     self.bot_empty = false;
                 } else {
                     self.selected_session = None;
                     self.messages.clear();
                     self.bot_empty = true;
+                    self.draft_origin = intent.restore_origin;
+                    self.ensure_editor();
                 }
             }
             Ok(_) => {}
@@ -1143,6 +1347,7 @@ impl Viewer {
                 role: p["role"].as_str().unwrap_or("assistant").into(),
                 content: p["content"].as_str().unwrap_or("").into(),
                 raw: p.clone(),
+                ..Default::default()
             })
             .collect();
         if let Some(id) = &self.selected_session {
@@ -1155,6 +1360,7 @@ impl Viewer {
                 .map(|s| s.title.clone())
                 .unwrap_or_else(|| "Conversation".into());
             self.tabs.push(ConversationTab {
+                profile_intent: self.profile_intent,
                 profile: self.profile.clone(),
                 session: id.clone(),
                 title,
@@ -1175,6 +1381,7 @@ impl Viewer {
                             role: m["role"].as_str().unwrap_or("assistant").into(),
                             content: m["content"].as_str().unwrap_or("").into(),
                             raw: m.clone(),
+                            ..Default::default()
                         })
                         .collect(),
                 );
@@ -1241,13 +1448,21 @@ pub fn setup(s: &mut Viewer, waker: Waker) {
             pending = coalesce(first, requests.try_iter());
             let request = pending.pop_front().expect("a queued read intent");
             let exact = matches!(&request.command, Command::ConnectExact(_, _));
+            let owner = |profile: &str| match request.profile_intent {
+                crate::source::ProfileIntent::Backend => {
+                    crate::gateway::prepared::ProfileProvenance::Backend(profile.into())
+                }
+                crate::source::ProfileIntent::NativeSelf => {
+                    crate::gateway::prepared::ProfileProvenance::NativeSelf
+                }
+            };
             let result = match request.command {
                 Command::Connect(connection, requested_profile)
                 | Command::ConnectExact(connection, requested_profile) => {
                     gateway = None;
                     Gateway::connect(&connection).and_then(|mut g| {
                         let profiles = g.profiles()?;
-                        let profile = if profiles.iter().any(|p| p.name == requested_profile) {
+                        let profile = if request.profile_intent == crate::source::ProfileIntent::NativeSelf || profiles.iter().any(|p| p.name == requested_profile) {
                             requested_profile
                         } else if exact {
                             return Err(
@@ -1259,7 +1474,7 @@ pub fn setup(s: &mut Viewer, waker: Waker) {
                                 .map(|p| p.name.clone())
                                 .unwrap_or_else(|| "default".into())
                         };
-                        let sessions = g.sessions(&profile)?;
+                        let sessions = g.sessions_for(&owner(&profile), &profile)?;
                         gateway = Some(g);
                         Ok(Update::Connected {
                             profiles,
@@ -1272,15 +1487,16 @@ pub fn setup(s: &mut Viewer, waker: Waker) {
                     .as_mut()
                     .ok_or_else(|| "Connect an agent first".into())
                     .and_then(|g| {
-                        g.sessions(&profile)
+                        g.sessions_for(&owner(&profile), &profile)
                             .map(|sessions| Update::Sessions { profile, sessions })
                     }),
                 Command::History(profile, session) => gateway
                     .as_mut()
                     .ok_or_else(|| "Connect an agent first".into())
                     .and_then(|g| {
-                        let sessions = g.sessions(&profile)?;
-                        let history = g.history(&profile, &session)?;
+                        let provenance = owner(&profile);
+                        let sessions = g.sessions_for(&provenance, &profile)?;
+                        let history = g.history_for(&provenance, &session, 0)?;
                         Ok(Update::Opened {
                             profile,
                             session,
@@ -1293,13 +1509,19 @@ pub fn setup(s: &mut Viewer, waker: Waker) {
                     .ok_or_else(|| "Connect an agent first".into())
                     .and_then(|g| {
                         let profiles = g.profiles()?;
-                        let sessions = g.sessions(&profile)?;
+                        let provenance = owner(&profile);
+                        let backend_profile = match request.profile_intent {
+                            crate::source::ProfileIntent::Backend => profile.clone(),
+                            crate::source::ProfileIntent::NativeSelf => g.selected_backend_profile()
+                                .ok_or("The selected backend does not expose a uniquely owned Bot profile")?.to_owned(),
+                        };
+                        let sessions = g.sessions_for(&provenance, &profile)?;
                         let chat = profiles
                             .iter()
-                            .find(|p| p.name == profile)
+                            .find(|p| p.name == backend_profile)
                             .and_then(|p| p.canonical_session.as_ref())
                             .map(|chat| {
-                                g.history(&profile, &chat.id)
+                                g.history_for(&provenance, &chat.id, 0)
                                     .map(|history| (chat.id.clone(), history))
                             })
                             .transpose()?;
@@ -1328,7 +1550,9 @@ pub fn setup(s: &mut Viewer, waker: Waker) {
 
 pub fn poll(s: &mut Viewer, now: f64, tx: &mut Tx) -> bool {
     s.ensure_editor();
-    let editors_changed = s.poll_editors(now, tx)
+    let search_revealed = s.poll_chat_search_reveal(tx);
+    let editors_changed = s.poll_legacy_settings(tx)
+        | s.poll_editors(now, tx)
         | s.poll_windows(tx)
         | s.poll_device_routes(tx)
         | s.poll_fleet(now, tx);
@@ -1480,7 +1704,8 @@ pub fn poll(s: &mut Viewer, now: f64, tx: &mut Tx) -> bool {
         tx.wake_after(std::time::Duration::from_millis(50));
     }
     let scope = s.composer_scope();
-    let composer_changed = pages_changed
+    let composer_changed = search_revealed
+        | pages_changed
         | s.composer.poll(&scope)
         | s.composer.dismiss_if_scope_changed(&scope)
         | s.voice.poll(&scope);
@@ -1519,6 +1744,7 @@ fn default_agent_home() -> PathBuf {
 }
 fn connection_label(connection: &Connection) -> String {
     match connection {
+        Connection::Routed { actual, .. } => connection_label(actual),
         Connection::Saved { inner, .. } => connection_label(inner),
         Connection::Local { .. } => "Local Hermes".into(),
         Connection::Url { endpoint, .. } => url::Url::parse(endpoint)
@@ -1538,7 +1764,13 @@ pub fn reader_scene(s: &mut Viewer) {
 pub fn bots_scene(s: &mut Viewer) {
     reader_scene(s);
     s.sidebar_tab = SidebarTab::Bots;
-    s.open_target(ConversationTarget::Bot("default".into()), true);
+    s.open_target(
+        ConversationTarget::Bot {
+            profile: "default".into(),
+            profile_intent: crate::source::ProfileIntent::Backend,
+        },
+        true,
+    );
 }
 pub fn layout_scene(s: &mut Viewer) {
     reader_scene(s);
@@ -1627,6 +1859,9 @@ pub fn on_key(s: &mut Viewer, event: &rune::KeyEvent, tx: &mut Tx) -> bool {
         return true;
     }
     if crate::view::terminal::on_key(s, event, tx) {
+        return true;
+    }
+    if s.chat_search_key(event, tx) {
         return true;
     }
     if s.client_shortcut(event, tx) {
@@ -1882,9 +2117,13 @@ impl Viewer {
 
 impl Viewer {
     pub fn can_remember_profile_preferences(&self) -> bool {
-        self.page_owner.as_ref().is_some_and(|(epoch, profile)| {
-            *epoch == self.connection_epoch && profile == &self.profile
-        })
+        self.page_owner
+            .as_ref()
+            .is_some_and(|(epoch, profile, intent)| {
+                *epoch == self.connection_epoch
+                    && profile == &self.profile
+                    && *intent == self.profile_intent
+            })
     }
 }
 
@@ -1930,6 +2169,7 @@ mod editors;
 #[path = "app/windows.rs"]
 pub(crate) mod windows;
 
+mod legacy;
 #[path = "app/routing.rs"]
 pub(crate) mod routing;
 

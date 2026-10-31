@@ -196,6 +196,8 @@ mod tests {
     use super::*;
     fn owner() -> DraftScope {
         DraftScope {
+            draft_origin: None,
+            profile_intent: crate::source::ProfileIntent::Backend,
             connection: 1,
             profile: "default".into(),
             session: Some("s".into()),

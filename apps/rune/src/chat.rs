@@ -2,7 +2,9 @@
 mod actions;
 mod completion;
 pub(crate) mod media;
+pub(crate) mod media_tags;
 pub mod projection;
+pub mod search;
 mod slash;
 use crate::{composer::DraftScope, gateway::Connection};
 pub use actions::{BranchIntent, SlashRow, catalog_rows, parse_slash};
@@ -128,6 +130,7 @@ pub enum Reply {
 }
 pub struct Chat {
     pub views: HashMap<DraftScope, Presentation>,
+    pub searches: search::Searches<search::Owner>,
     pub media: HashMap<(DraftScope, String), Media>,
     send: Sender<Reply>,
     receive: Receiver<Reply>,
@@ -143,6 +146,7 @@ impl Default for Chat {
         let (send, receive) = mpsc::channel();
         Self {
             views: HashMap::new(),
+            searches: search::Searches::default(),
             media: HashMap::new(),
             send,
             receive,

@@ -9,6 +9,7 @@ fn viewer() -> Viewer {
 fn next(s: &mut Viewer) {
     s.open_target(
         ConversationTarget::Session {
+            profile_intent: crate::source::ProfileIntent::Backend,
             profile: "default".into(),
             id: "sample-notes".into(),
             title: "Other chat".into(),
@@ -176,6 +177,7 @@ fn a_bound_fresh_editor_keeps_identity_and_delayed_dialog_alias() {
         .replace_text("fresh input");
     let stored = DraftScope {
         session: Some("new-stored".into()),
+        draft_origin: None,
         ..fresh.clone()
     };
     s.rehome_editors(&fresh, stored.clone());

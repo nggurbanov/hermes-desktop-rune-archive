@@ -293,6 +293,8 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("hermes-branch-recovery-{}", uuid::Uuid::new_v4()));
         let owner = DraftScope {
+            draft_origin: None,
+            profile_intent: crate::source::ProfileIntent::Backend,
             connection: 9,
             profile: "work".into(),
             session: Some("stored".into()),

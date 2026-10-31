@@ -8,9 +8,20 @@ impl Viewer {
         } else if self.connection.is_some() && !self.page_owner_ready() {
             Some("Wait for the selected agent and profile to finish connecting".into())
         } else if let Some(connection) = self.connection.clone() {
+            let request = if request.provenance.is_none()
+                && request.profile.is_none()
+                && request.connection.is_none()
+                && request.source_lease.is_none()
+                && self.profile_intent == crate::source::ProfileIntent::NativeSelf
+            {
+                request.provenance(crate::gateway::prepared::ProfileProvenance::NativeSelf)
+            } else {
+                request
+            };
             let request = if request.connection.is_none()
                 && request.source_lease.is_none()
-                && matches!(connection, crate::gateway::Connection::Saved { .. })
+                && (matches!(connection, crate::gateway::Connection::Saved { .. })
+                    || connection.route_owner().is_some())
             {
                 self.current_source_binding()
                     .and_then(|binding| binding.request(request))
@@ -44,6 +55,9 @@ impl Viewer {
         if self.connections.busy && route != Route::Chat {
             self.client_error = Some("Wait for the connection attempt to finish".into());
             return;
+        }
+        if self.route != route {
+            self.retire_chat_search_reveals();
         }
         self.ensure_page_owner();
         if self.route == Route::Settings && route != Route::Settings {
@@ -97,6 +111,7 @@ impl Viewer {
         let successful = result.is_ok();
         let effects = if operation.starts_with("client-display.") {
             self.client_settings.apply(operation, result);
+            self.refresh_chat_search();
             vec![]
         } else if operation.starts_with("chrome.") {
             self.chrome.apply(operation, result)
@@ -144,7 +159,19 @@ impl Viewer {
                 .apply_config(self.settings.confirmed_config());
         }
         self.settings_local_navigation();
-        self.page_requests(effects);
+        if operation.starts_with("directories.") {
+            match self.directories.purpose {
+                crate::directories::Purpose::Projects(..) => {
+                    self.project_directory_requests(effects)
+                }
+                crate::directories::Purpose::ProjectFolders(..) => {
+                    self.project_folders_directory_requests(effects)
+                }
+                _ => self.page_requests(effects),
+            }
+        } else {
+            self.page_requests(effects);
+        }
         if self.messaging.take_reconnect_followthrough() {
             self.reconnect();
         }
@@ -159,29 +186,48 @@ impl Viewer {
         self.connection.is_some()
             && !self.loading
             && self.page_accepted_owner.as_ref()
-                == Some(&(self.composer_scope().connection, self.profile.clone()))
+                == Some(&(
+                    self.composer_scope().connection,
+                    self.profile.clone(),
+                    self.profile_intent,
+                ))
     }
     fn page_owner_ready(&self) -> bool {
         self.fixture
             || (self.page_connection_accepted()
                 && self.page_loaded_owner.as_ref()
-                    == Some(&(self.composer_scope().connection, self.profile.clone())))
+                    == Some(&(
+                        self.composer_scope().connection,
+                        self.profile.clone(),
+                        self.profile_intent,
+                    )))
     }
     pub fn ensure_page_owner(&mut self) -> bool {
-        let owner = (self.composer_scope().connection, self.profile.clone());
+        let owner = (
+            self.composer_scope().connection,
+            self.profile.clone(),
+            self.profile_intent,
+        );
         let changed = self.page_owner.as_ref() != Some(&owner);
         if changed {
-            if let (Some((epoch, profile)), Some(connection)) =
+            if let (Some((epoch, profile, profile_intent)), Some(connection)) =
                 (self.page_owner.clone(), self.page_connection.clone())
             {
                 let scope = crate::composer::DraftScope {
+                    draft_origin: None,
+                    profile_intent,
                     connection: epoch,
                     profile: profile.clone(),
                     session: None,
                 };
                 for (op, mut request) in self.settings.cancel_owned() {
-                    if request.profile.is_none() {
-                        request = request.profile(&profile);
+                    if request.profile.is_none() && request.provenance.is_none() {
+                        request = if profile_intent == crate::source::ProfileIntent::NativeSelf {
+                            request
+                                .provenance(crate::gateway::prepared::ProfileProvenance::NativeSelf)
+                        } else {
+                            request.profile(&profile)
+                        };
                     }
                     if self
                         .page_network
@@ -320,9 +366,23 @@ impl Viewer {
         changed
     }
     pub fn open_page_session(&mut self, profile: String, id: String, title: String) {
+        self.open_page_session_owned(profile, id, title, crate::source::ProfileIntent::Backend);
+    }
+    pub(in crate::app) fn open_page_session_owned(
+        &mut self,
+        profile: String,
+        id: String,
+        title: String,
+        profile_intent: crate::source::ProfileIntent,
+    ) {
         self.route = Route::Chat;
         self.open_target(
-            super::ConversationTarget::Session { profile, id, title },
+            super::ConversationTarget::Session {
+                profile,
+                id,
+                title,
+                profile_intent,
+            },
             false,
         );
     }
@@ -558,7 +618,10 @@ mod readiness_tests {
             "Unaccepted source/profile reached page wire: {:?}",
             wire.calls()
         );
-        assert_eq!(s.page_owner, Some((42, "research".into())));
+        assert_eq!(
+            s.page_owner,
+            Some((42, "research".into(), crate::source::ProfileIntent::Backend))
+        );
         accepted(&mut s);
         let until = Instant::now() + Duration::from_secs(3);
         while Instant::now() < until {
@@ -651,5 +714,21 @@ mod readiness_tests {
             Some("The requested profile is no longer served by this agent")
         );
         assert!(s.sidebar_state.find("research", "notes").is_none());
+    }
+    #[test]
+    fn page_acceptance_does_not_cross_equal_named_profile_intents() {
+        let wire = Wire::new();
+        let mut s = wire.viewer();
+        accepted(&mut s);
+        assert!(s.page_connection_accepted());
+        s.ensure_page_owner();
+        s.profile_intent = crate::source::ProfileIntent::NativeSelf;
+        assert!(!s.page_connection_accepted());
+        assert!(s.ensure_page_owner());
+        assert!(
+            !s.can_remember_profile_preferences()
+                || s.page_owner.as_ref().unwrap().2 == s.profile_intent
+        );
+        assert!(wire.calls().is_empty());
     }
 }

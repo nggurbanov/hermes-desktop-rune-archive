@@ -22,7 +22,75 @@ pub struct NavigationTarget {
     pub connection: Connection,
     pub lease: Option<crate::connections::Lease>,
 }
+#[derive(Clone, PartialEq, Eq)]
+struct DocumentIdentity {
+    source: crate::source::SourceStamp,
+    connection_generation: u64,
+    foreground_profile: String,
+    profile_intent: crate::source::ProfileIntent,
+    target_profile: String,
+    document: String,
+    origin: String,
+}
+enum ManagedProcess {
+    Native(HostProcess),
+    #[cfg(test)]
+    Fixture(std::sync::Arc<std::sync::Mutex<FixtureProcess>>),
+}
+#[cfg(test)]
+#[derive(Default)]
+struct FixtureProcess {
+    alive: bool,
+    fail_focus: bool,
+    commands: Vec<Value>,
+    events: Vec<Result<Value, String>>,
+    state: String,
+    closes: usize,
+}
+impl ManagedProcess {
+    fn alive(&mut self) -> bool {
+        match self {
+            Self::Native(process) => process.alive(),
+            #[cfg(test)]
+            Self::Fixture(process) => process.lock().unwrap().alive,
+        }
+    }
+    fn send(&mut self, value: Value) -> Result<(), String> {
+        match self {
+            Self::Native(process) => process.send(value),
+            #[cfg(test)]
+            Self::Fixture(process) => {
+                let mut process = process.lock().unwrap();
+                if !process.alive || (value["type"] == "focus" && process.fail_focus) {
+                    return Err("fixture host closed".into());
+                }
+                process.commands.push(value);
+                Ok(())
+            }
+        }
+    }
+    fn poll(&mut self) -> Vec<Result<Value, String>> {
+        match self {
+            Self::Native(process) => process.poll(),
+            #[cfg(test)]
+            Self::Fixture(process) => std::mem::take(&mut process.lock().unwrap().events),
+        }
+    }
+    fn close(&mut self) {
+        match self {
+            Self::Native(process) => process.close(),
+            #[cfg(test)]
+            Self::Fixture(process) => {
+                let mut process = process.lock().unwrap();
+                process.alive = false;
+                process.closes += 1;
+            }
+        }
+    }
+}
 struct Running {
+    identity: DocumentIdentity,
+    owner_lease: Option<crate::connections::Lease>,
     window_facts: Option<(bool, bool)>,
     opened_at: std::time::Instant,
     token: String,
@@ -33,7 +101,7 @@ struct Running {
     scope: DraftScope,
     request_profile: String,
     key: String,
-    process: HostProcess,
+    process: ManagedProcess,
     source: String,
     origin: String,
     owner: Value,
@@ -48,6 +116,8 @@ struct Running {
 }
 #[derive(Default)]
 pub struct PluginHosts {
+    #[cfg(test)]
+    spawn_fixture: Option<Box<dyn FnMut() -> Result<ManagedProcess, String>>>,
     ambient: BTreeMap<u64, AmbientTarget>,
     running: Option<Running>,
     resolver: Option<crate::connections::Resolver>,
@@ -180,6 +250,7 @@ impl PluginHosts {
         }
         running.key = crate::client::connection_key(connection)?;
         running.source_connection = connection.clone();
+        running.owner_lease = target.lease.clone();
         running.scope = scope.clone();
         if adopt_default {
             running.request_source = target.source.clone();
@@ -204,6 +275,7 @@ impl PluginHosts {
         origin: String,
         scope: DraftScope,
         connection: &Connection,
+        owner_lease: Option<crate::connections::Lease>,
         mut owner: Value,
     ) -> Result<(), String> {
         if source.len() > 16 * 1024 * 1024 {
@@ -226,6 +298,68 @@ impl PluginHosts {
         if !allowed_profiles.contains(&request_profile) {
             return Err("The desktop plugin target profile is no longer served".into());
         }
+        let identity = DocumentIdentity {
+            source: crate::source::SourceStamp::from_connection(connection)?,
+            connection_generation: scope.connection,
+            foreground_profile: scope.profile.clone(),
+            profile_intent: scope.profile_intent.clone(),
+            target_profile: request_profile.clone(),
+            document: source.clone(),
+            origin: origin.clone(),
+        };
+        if owner_lease.as_ref().is_some_and(|lease| {
+            !lease.is_valid()
+                || crate::source::SourceStamp::from_connection(lease.connection())
+                    .ok()
+                    .as_ref()
+                    != Some(&identity.source)
+        }) {
+            return Err("The plugin source lease is no longer valid".into());
+        }
+        if let Some(running) = self.running.as_mut() {
+            running.sources.refresh()?;
+            let birth = running.sources.primary.clone();
+            let binding = running.sources.ensure(&birth);
+            let valid = match binding {
+                Ok(Some(binding)) => {
+                    binding.lease.as_ref().is_none_or(|lease| lease.is_valid())
+                        && crate::source::SourceStamp::from_connection(&binding.connection)
+                            .ok()
+                            .as_ref()
+                            == Some(&running.identity.source)
+                        && binding.profiles.contains(&running.identity.target_profile)
+                }
+                Ok(None) if running.identity == identity => {
+                    return Err("The plugin source is still being verified".into());
+                }
+                Ok(None) => true,
+                Err(_) => false,
+            };
+            let retained_valid = running
+                .owner_lease
+                .as_ref()
+                .is_none_or(|lease| lease.is_valid());
+            let expired_owner =
+                !retained_valid && running.identity == identity && owner_lease.is_none();
+            if !valid || !retained_valid || !running.process.alive() {
+                self.close();
+                if expired_owner {
+                    return Err("The plugin source lease has retired".into());
+                }
+            } else if running.identity == identity
+                && running.scope.connection == scope.connection
+                && running.scope.profile == scope.profile
+                && running.scope.profile_intent == scope.profile_intent
+                && running.request_profile == request_profile
+                && running.key == key
+                && (running.owner_lease.is_some() == owner_lease.is_some())
+            {
+                if running.process.send(json!({"type":"focus"})).is_ok() {
+                    return Ok(());
+                }
+                self.close();
+            }
+        }
         scoped_snapshot(&mut owner, &scope.profile, &request_profile);
         use sha2::{Digest, Sha256};
         let storage_key = format!(
@@ -247,13 +381,32 @@ impl PluginHosts {
         let assets = plugin_assets()?;
         let html = "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><meta http-equiv=Content-Security-Policy content=\"default-src 'self' blob: data:; script-src 'self' blob: 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https: http: wss: ws:; img-src 'self' data: https: http:; media-src 'self' blob: https: http:; frame-src 'none'; object-src 'none'; base-uri 'none'\"><link rel=stylesheet href=host.css><div id=root></div><script type=module src=host.js></script>";
         let html=html.replace("<script type=module src=host.js>",&format!("<script>for(const [k,v]of Object.entries({restore})){{if((k.startsWith('hermes.plugin.')||k==='hermes.desktop.pluginDecisions.v2'||k==='hermes.desktop.disabledPlugins.v1')&&typeof v==='string')localStorage.setItem(k,v);}}</script><script type=module src=host.js>"));
-        let sources = super::sources::Sources::new(
+        let mut sources = super::sources::Sources::new(
             connection.clone(),
             source_id.clone(),
             owner["profiles"].as_array().cloned().unwrap_or_default(),
             self.resolver.clone(),
         )?;
-        let process = spawn_document("Hermes · Desktop plugin", html, assets, false)?;
+        let birth = sources.primary.clone();
+        sources.ensure(&birth)?;
+        #[cfg(test)]
+        let process = if let Some(spawn) = &mut self.spawn_fixture {
+            spawn()?
+        } else {
+            ManagedProcess::Native(spawn_document(
+                "Hermes · Desktop plugin",
+                html,
+                assets,
+                false,
+            )?)
+        };
+        #[cfg(not(test))]
+        let process = ManagedProcess::Native(spawn_document(
+            "Hermes · Desktop plugin",
+            html,
+            assets,
+            false,
+        )?);
         self.close();
         let feed = crate::gateway::plugin::PluginFeed::start(
             connection.clone(),
@@ -261,6 +414,8 @@ impl PluginHosts {
             source_id.clone(),
         );
         self.running = Some(Running {
+            identity,
+            owner_lease,
             window_facts: None,
             opened_at: std::time::Instant::now(),
             token: uuid::Uuid::new_v4().to_string(),
@@ -621,6 +776,7 @@ impl PluginHosts {
                                     &metadata,
                                     &running.request_profile,
                                     &binding.profiles,
+                                    binding.connection.route_owner().is_some(),
                                 )
                                 .map(|request| {
                                     let request = binding.request(request);
@@ -750,7 +906,10 @@ impl PluginHosts {
         }
     }
     pub fn apply(&mut self, op: &str, result: Result<Value, String>) {
-        if op.ends_with(".event") {
+        if let Some(operation) = op.strip_suffix(".event") {
+            if !self.pending.contains_key(operation) {
+                return;
+            }
             if let Ok(event) = result {
                 if let Some(running) = &mut self.running {
                     // Per-call sockets may launch in a different profile. Only an explicit
@@ -807,18 +966,17 @@ impl PluginHosts {
             if !binding.profiles.contains(profile) {
                 return Err("The plugin stream profile is no longer served by its source".into());
             }
-            let receipt = if kind == "plugin-gateway-prepare" {
-                running.sockets.prepare_gateway(
-                    profile,
-                    matches!(binding.connection.transport(), Connection::Local { .. }),
-                )?
-            } else {
-                running.sockets.prepare(
-                    profile,
-                    payload["pluginId"].as_str().unwrap_or_default(),
-                    payload["path"].as_str().unwrap_or_default(),
-                )?
-            };
+            let receipt = prepare_plugin_socket(
+                &mut running.sockets,
+                kind,
+                &binding.connection,
+                profile,
+                payload["pluginId"].as_str().unwrap_or_default(),
+                payload["path"].as_str().unwrap_or_default(),
+            )?;
+            if receipt["url"].is_null() {
+                return Ok(receipt);
+            }
             running.sockets.authorize_profiles(
                 receipt["receipt"].as_str().unwrap_or_default(),
                 &binding.profiles,
@@ -858,7 +1016,13 @@ impl PluginHosts {
                     .sources
                     .ensure(&selected)?
                     .ok_or("The source is still connecting")?;
-                request("api", metadata, &running.request_profile, &binding.profiles)?;
+                request(
+                    "api",
+                    metadata,
+                    &running.request_profile,
+                    &binding.profiles,
+                    binding.connection.route_owner().is_some(),
+                )?;
                 running.uploads.start(payload)
             }
             "upload-chunk" => running.uploads.chunk(payload),
@@ -872,12 +1036,18 @@ impl PluginHosts {
     }
 }
 fn public_source_id(connection: &Connection, key: &str) -> String {
+    if let Some(owner) = connection.route_owner() {
+        return format!("routed:{}", owner.fingerprint());
+    }
     match connection {
         Connection::Saved { id, revision, .. } => format!("saved:{id}:{revision}"),
         _ => format!("native:{key}"),
     }
 }
 fn storage_owner_key(connection: &Connection, key: &str) -> Result<String, String> {
+    if connection.route_owner().is_some() {
+        return crate::client::connection_storage_key(connection);
+    }
     use sha2::{Digest, Sha256};
     let Connection::Saved {
         id,
@@ -956,6 +1126,7 @@ fn request(
     payload: &Value,
     default_profile: &str,
     allowed: &BTreeSet<String>,
+    routed: bool,
 ) -> Result<PageRequest, String> {
     if payload
         .get("upload")
@@ -976,11 +1147,30 @@ fn request(
             return Err("Invalid plugin RPC method".into());
         }
         let params = payload.get("params").cloned().unwrap_or_else(|| json!({}));
-        let profile = params["profile"].as_str().unwrap_or(default_profile);
+        let original = params
+            .get("profile")
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::to_owned)
+                    .ok_or("Invalid plugin RPC profile selector")
+            })
+            .transpose()?;
+        let profile = original
+            .as_deref()
+            .filter(|profile| !routed || !profile.is_empty())
+            .unwrap_or(default_profile);
         if !allowed.contains(profile) {
             return Err("The plugin request names an unserved profile".into());
         }
-        return Ok(PageRequest::plugin_rpc(method, params.clone()).profile(profile));
+        let request = PageRequest::plugin_rpc(method, params.clone()).profile(profile);
+        return Ok(if routed {
+            request.provenance(crate::gateway::prepared::ProfileProvenance::Ambient(
+                original,
+            ))
+        } else {
+            request
+        });
     }
     let path = payload["path"]
         .as_str()
@@ -1020,21 +1210,33 @@ fn request(
         })
         .or(payload["body"]["profile"].as_str())
         .unwrap_or(default_profile);
+    let profile = if routed && profile.is_empty() {
+        default_profile
+    } else {
+        profile
+    };
     if !allowed.contains(profile) {
         return Err("The plugin request names an unserved profile".into());
     }
-    if query
-        .iter()
-        .any(|(key, value)| key == "profile" && value != profile && !(selector && value == "all"))
-    {
+    if query.iter().any(|(key, value)| {
+        key == "profile"
+            && value != profile
+            && !(selector && value == "all")
+            && !(routed && value.is_empty())
+    }) {
         return Err("The plugin request disagrees about its query profile owner".into());
     }
     let mut body = payload.get("body").cloned().unwrap_or(Value::Null);
     if let Some(body_profile) = body["profile"].as_str() {
-        if body_profile != profile {
+        if body_profile != profile && !(routed && body_profile.is_empty()) {
             return Err("The plugin request disagrees about its profile owner".into());
         }
     }
+    let original = query
+        .iter()
+        .find(|(key, _)| key == "profile")
+        .map(|(_, value)| value.clone())
+        .or_else(|| payload["profile"].as_str().map(str::to_owned));
     let mut request = match payload["method"].as_str().unwrap_or("GET") {
         "GET" => PageRequest::get(url.path()),
         "POST" => PageRequest::post(url.path(), body.take()),
@@ -1045,15 +1247,244 @@ fn request(
     }
     .profile(profile);
     for (key, value) in query {
-        if key != "profile" || selector {
+        if routed || key != "profile" || selector {
             request = request.query(key, value);
         }
     }
-    Ok(request)
+    Ok(if routed {
+        request.provenance(crate::gateway::prepared::ProfileProvenance::Ambient(
+            original,
+        ))
+    } else {
+        request
+    })
 }
+fn prepare_plugin_socket(
+    sockets: &mut crate::gateway::plugin::sockets::SocketBroker,
+    kind: &str,
+    connection: &Connection,
+    profile: &str,
+    plugin: &str,
+    path: &str,
+) -> Result<Value, String> {
+    if kind == "plugin-socket-prepare" && connection.wire_policy().is_some_and(|p| p.is_cloud()) {
+        return Ok(json!({"url": null}));
+    }
+    if kind == "plugin-gateway-prepare" {
+        sockets.prepare_gateway(
+            profile,
+            matches!(connection.transport(), Connection::Local { .. }),
+        )
+    } else {
+        sockets.prepare(profile, plugin, path)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reopen_uses_owned_live_document_and_recovers_failures() {
+        use std::sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, Ordering},
+        };
+        let spawned = Arc::new(Mutex::new(Vec::<Arc<Mutex<FixtureProcess>>>::new()));
+        let fail = Arc::new(AtomicBool::new(false));
+        let mut hosts = PluginHosts::new();
+        let spawned_copy = spawned.clone();
+        let fail_copy = fail.clone();
+        hosts.spawn_fixture = Some(Box::new(move || {
+            if fail_copy.load(Ordering::Relaxed) {
+                return Err("fixture spawn failed".into());
+            }
+            let process = Arc::new(Mutex::new(FixtureProcess {
+                alive: true,
+                ..Default::default()
+            }));
+            spawned_copy.lock().unwrap().push(process.clone());
+            Ok(ManagedProcess::Fixture(process))
+        }));
+        let connection = Connection::Url {
+            endpoint: "http://127.0.0.1:1".into(),
+            token: Some("synthetic-a".into()),
+        };
+        let scope = DraftScope {
+            draft_origin: None,
+            connection: 1,
+            profile: "default".into(),
+            profile_intent: crate::source::ProfileIntent::Backend,
+            session: None,
+        };
+        let owner = json!({"profiles":[{"name":"default"}, {"name":"other"}]});
+        let open =
+            |hosts: &mut PluginHosts, scope: DraftScope, connection: &Connection, owner: Value| {
+                hosts.launch(
+                    "fixture-document".into(),
+                    "fixture-origin".into(),
+                    scope,
+                    connection,
+                    None,
+                    owner,
+                )
+            };
+        open(&mut hosts, scope.clone(), &connection, owner.clone()).unwrap();
+        let token = hosts.window_token().unwrap();
+        let first = spawned.lock().unwrap()[0].clone();
+        first.lock().unwrap().state = "sdk-state".into();
+        hosts.pending.insert("plugin-host.old".into(), "old".into());
+        open(&mut hosts, scope.clone(), &connection, owner.clone()).unwrap();
+        assert_eq!(hosts.window_token().as_deref(), Some(token.as_str()));
+        assert_eq!(spawned.lock().unwrap().len(), 1);
+        assert_eq!(first.lock().unwrap().state, "sdk-state");
+        assert_eq!(
+            first.lock().unwrap().commands.last().unwrap()["type"],
+            "focus"
+        );
+        hosts.reply_owned(&token, "old", Ok(json!({"ok":true})));
+        assert_eq!(first.lock().unwrap().commands.last().unwrap()["id"], "old");
+        assert!(hosts.pending.contains_key("plugin-host.old"));
+        let mut other = scope.clone();
+        other.profile_intent = crate::source::ProfileIntent::NativeSelf;
+        fail.store(true, Ordering::Relaxed);
+        assert!(open(&mut hosts, other.clone(), &connection, owner.clone()).is_err());
+        assert_eq!(hosts.window_token().as_deref(), Some(token.as_str()));
+        assert_eq!(first.lock().unwrap().closes, 0);
+        fail.store(false, Ordering::Relaxed);
+        open(&mut hosts, other, &connection, owner.clone()).unwrap();
+        assert_ne!(hosts.window_token().as_deref(), Some(token.as_str()));
+        assert_eq!(first.lock().unwrap().closes, 1);
+        let second = spawned.lock().unwrap()[1].clone();
+        hosts.reply_owned(&token, "late", Ok(json!({})));
+        hosts.apply(
+            "plugin-host.old.event",
+            Ok(json!({"type":"message.delta","profile":"default"})),
+        );
+        assert!(second.lock().unwrap().commands.is_empty());
+        second.lock().unwrap().fail_focus = true;
+        let current = hosts.running.as_ref().unwrap().scope.clone();
+        open(&mut hosts, current.clone(), &connection, owner.clone()).unwrap();
+        assert_eq!(second.lock().unwrap().closes, 1);
+        let third = spawned.lock().unwrap()[2].clone();
+        third.lock().unwrap().alive = false;
+        open(&mut hosts, current, &connection, owner).unwrap();
+        assert_eq!(spawned.lock().unwrap().len(), 4);
+        let fourth = spawned.lock().unwrap()[3].clone();
+        hosts
+            .running
+            .as_mut()
+            .unwrap()
+            .sources
+            .retire_primary_for_test();
+        let current = hosts.running.as_ref().unwrap().scope.clone();
+        open(
+            &mut hosts,
+            current.clone(),
+            &connection,
+            json!({"profiles":[{"name":"default"},{"name":"other"}]}),
+        )
+        .unwrap();
+        assert_eq!(fourth.lock().unwrap().closes, 1);
+        let fifth = spawned.lock().unwrap()[4].clone();
+        let rotated = Connection::Url {
+            endpoint: "http://127.0.0.1:1".into(),
+            token: Some("synthetic-b".into()),
+        };
+        open(
+            &mut hosts,
+            current.clone(),
+            &rotated,
+            json!({"profiles":[{"name":"default"},{"name":"other"}]}),
+        )
+        .unwrap();
+        assert_eq!(fifth.lock().unwrap().closes, 1);
+        let sixth = spawned.lock().unwrap()[5].clone();
+        open(
+            &mut hosts,
+            current,
+            &rotated,
+            json!({"profiles":[{"name":"default"},{"name":"other"}],"target_profile":"other"}),
+        )
+        .unwrap();
+        assert_eq!(sixth.lock().unwrap().closes, 1);
+        hosts.close();
+    }
+
+    #[test]
+    fn cloud_plugin_namespace_uses_polling_and_gateway_keeps_native_bridge() {
+        use crate::gateway::prepared::{CloudHttp, CloudRuntime, WirePolicy};
+        use std::sync::Arc;
+        struct NoMint;
+        impl CloudRuntime for NoMint {
+            fn prepare_http(
+                &self,
+                _: reqwest::Method,
+                _: &url::Url,
+                _: std::time::Instant,
+            ) -> Result<CloudHttp, String> {
+                panic!("unexpected HTTP")
+            }
+            fn retry_http_unauthorized(
+                &self,
+                _: CloudHttp,
+                _: std::time::Instant,
+            ) -> Result<CloudHttp, String> {
+                panic!("unexpected retry")
+            }
+            fn prepare_ws(
+                &self,
+                _: &url::Url,
+                _: std::time::Instant,
+            ) -> Result<tungstenite::handshake::client::Request, String> {
+                panic!("unexpected mint")
+            }
+            fn runtime_fingerprint(&self) -> String {
+                "poll-fixture".into()
+            }
+        }
+        let connection = Connection::Routed {
+            actual: Box::new(Connection::Url {
+                endpoint: "http://127.0.0.1:1/".into(),
+                token: None,
+            }),
+            owner: Arc::new(crate::source::RouteOwner::legacy("poll-fixture").unwrap()),
+            policy: Arc::new(
+                WirePolicy::cloud(
+                    crate::gateway::route::ProfilePolicy::identity(),
+                    Arc::new(NoMint),
+                )
+                .unwrap(),
+            ),
+        };
+        let mut broker = crate::gateway::plugin::sockets::SocketBroker::default();
+        let polling = prepare_plugin_socket(
+            &mut broker,
+            "plugin-socket-prepare",
+            &connection,
+            "work",
+            "board",
+            "/events",
+        )
+        .unwrap();
+        assert!(polling["url"].is_null());
+        assert!(polling.get("receipt").is_none());
+        let gateway = prepare_plugin_socket(
+            &mut broker,
+            "plugin-gateway-prepare",
+            &connection,
+            "work",
+            "",
+            "",
+        )
+        .unwrap();
+        assert!(gateway["receipt"].as_str().is_some());
+        assert!(
+            gateway["url"]
+                .as_str()
+                .unwrap()
+                .starts_with("ws://hermes-native-gateway.invalid/")
+        );
+    }
     #[test]
     fn saved_plugin_identity_and_storage_survive_forward_port_changes_but_not_auth_rotation() {
         let make = |port, token: &str| Connection::Saved {
@@ -1092,6 +1523,52 @@ mod tests {
         assert_eq!(snapshot["busy"], false);
     }
     #[test]
+    fn routed_sdk_requests_keep_ambient_absence_empty_and_declared_query_owner() {
+        use crate::gateway::prepared::ProfileProvenance;
+        let profiles = ["default".into(), "dixie".into()].into_iter().collect();
+        let absent = request(
+            "rpc",
+            &json!({"method":"config.get","params":{}}),
+            "default",
+            &profiles,
+            true,
+        )
+        .unwrap();
+        assert_eq!(absent.provenance, Some(ProfileProvenance::Ambient(None)));
+        assert!(absent.body.get("profile").is_none());
+        let empty = request(
+            "rpc",
+            &json!({"method":"config.get","params":{"profile":""}}),
+            "default",
+            &profiles,
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            empty.provenance,
+            Some(ProfileProvenance::Ambient(Some("".into())))
+        );
+        assert_eq!(empty.body["profile"], "");
+        let declared = request(
+            "api",
+            &json!({"path":"/api/config?profile=default&key=model"}),
+            "dixie",
+            &profiles,
+            true,
+        )
+        .unwrap();
+        assert!(
+            declared
+                .query
+                .contains(&("profile".into(), "default".into()))
+        );
+        assert!(declared.query.contains(&("key".into(), "model".into())));
+        assert_eq!(
+            declared.provenance,
+            Some(ProfileProvenance::Ambient(Some("default".into())))
+        );
+    }
+    #[test]
     fn native_plugin_requests_cannot_swap_authentication_or_implicit_owner() {
         let profiles = ["research".into(), "default".into()].into_iter().collect();
         assert!(
@@ -1099,7 +1576,8 @@ mod tests {
                 "api",
                 &json!({"path":"https://other.invalid/api/config"}),
                 "research",
-                &profiles
+                &profiles,
+                false
             )
             .is_err()
         );
@@ -1108,7 +1586,8 @@ mod tests {
                 "api",
                 &json!({"path":"/api/config?token=other"}),
                 "research",
-                &profiles
+                &profiles,
+                false
             )
             .is_err()
         );
@@ -1117,7 +1596,8 @@ mod tests {
                 "rpc",
                 &json!({"method":"config.set","params":{"profile":"unknown"}}),
                 "research",
-                &profiles
+                &profiles,
+                false
             )
             .is_err()
         );
@@ -1126,6 +1606,7 @@ mod tests {
             &json!({"method":"config.get","params":{}}),
             "research",
             &profiles,
+            false,
         )
         .unwrap();
         assert_eq!(req.profile.as_deref(), Some("research"));
@@ -1134,6 +1615,7 @@ mod tests {
             &json!({"path":"/api/profiles/sessions?profile=all"}),
             "research",
             &profiles,
+            false,
         )
         .unwrap();
         assert_eq!(req.profile.as_deref(), Some("research"));
@@ -1143,6 +1625,7 @@ mod tests {
             &json!({"path":"/api/profiles/sessions?profile=all","profile":"research"}),
             "default",
             &profiles,
+            false,
         )
         .unwrap();
         assert_eq!(req.profile.as_deref(), Some("research"));
@@ -1152,7 +1635,8 @@ mod tests {
                 "api",
                 &json!({"path":"/api/config?profile=default","profile":"research"}),
                 "research",
-                &profiles
+                &profiles,
+                false
             )
             .is_err()
         );

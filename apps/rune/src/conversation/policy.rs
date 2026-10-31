@@ -319,6 +319,8 @@ mod tests {
     use serde_json::json;
     fn owner() -> DraftScope {
         DraftScope {
+            draft_origin: None,
+            profile_intent: crate::source::ProfileIntent::Backend,
             connection: 1,
             profile: "work".into(),
             session: Some("stored".into()),

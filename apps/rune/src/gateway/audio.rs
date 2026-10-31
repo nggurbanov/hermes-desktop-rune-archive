@@ -37,24 +37,78 @@ pub enum AudioEvent {
     Error(String),
 }
 
+pub(crate) fn provenance(
+    connection: &Connection,
+    profile: &str,
+    intent: crate::source::ProfileIntent,
+) -> Result<prepared::ProfileProvenance, String> {
+    valid_scope(profile)?;
+    match intent {
+        crate::source::ProfileIntent::Backend => {
+            Ok(prepared::ProfileProvenance::Backend(profile.into()))
+        }
+        crate::source::ProfileIntent::NativeSelf => {
+            let selected = connection
+                .wire_policy()
+                .and_then(|p| p.selected())
+                .ok_or("NativeSelf requires a selected backend route")?;
+            if selected.window_alias() != profile {
+                return Err("The selected backend belongs to a different Desktop route".into());
+            }
+            Ok(prepared::ProfileProvenance::NativeSelf)
+        }
+    }
+}
+
+pub(crate) fn scoped_path(
+    gateway: &Gateway,
+    provenance: &prepared::ProfileProvenance,
+    path: &str,
+) -> Result<String, String> {
+    let profile = match provenance {
+        prepared::ProfileProvenance::Backend(name) => name.as_str(),
+        prepared::ProfileProvenance::NativeSelf => gateway
+            .prepared
+            .policy()
+            .and_then(|p| p.selected())
+            .ok_or("The Desktop route has no selected backend context")?
+            .window_alias(),
+        prepared::ProfileProvenance::Ambient(_) => {
+            return Err("An explicit owner is required".into());
+        }
+    };
+    let separator = if path.contains('?') { '&' } else { '?' };
+    Ok(format!(
+        "{path}{separator}profile={}",
+        url::form_urlencoded::byte_serialize(profile.as_bytes()).collect::<String>()
+    ))
+}
+
 pub struct AudioGateway {
     gateway: Gateway,
     profile: String,
+    provenance: prepared::ProfileProvenance,
 }
 impl AudioGateway {
     pub fn connect(connection: &Connection, profile: &str) -> Result<Self, String> {
-        valid_scope(profile)?;
+        Self::connect_scoped(connection, profile, crate::source::ProfileIntent::Backend)
+    }
+    pub(crate) fn connect_scoped(
+        connection: &Connection,
+        profile: &str,
+        intent: crate::source::ProfileIntent,
+    ) -> Result<Self, String> {
+        let provenance = provenance(connection, profile, intent)?;
         let mut gateway = Gateway::connect(connection)?;
+        gateway.ensure_profile_scope(&provenance)?;
         #[cfg(target_os = "linux")]
         if matches!(gateway.auth, Auth::Native(_)) {
             gateway.profiles()?;
-            if !gateway.profile_homes.contains_key(profile) {
-                return Err("The audio profile is not served by this gateway".into());
-            }
         }
         Ok(Self {
             gateway,
             profile: profile.into(),
+            provenance,
         })
     }
     fn json(
@@ -64,51 +118,51 @@ impl AudioGateway {
         timeout: Duration,
     ) -> Result<Value, String> {
         let deadline = Instant::now() + timeout;
-        let mut url = self
-            .gateway
-            .base
-            .join(path.trim_start_matches('/'))
-            .map_err(|_| "Invalid audio route")?;
-        url.query_pairs_mut().append_pair("profile", &self.profile);
-        let mut headers = reqwest::header::HeaderMap::new();
-        match &self.gateway.auth {
-            Auth::Token(Some(token)) => {
-                url.query_pairs_mut().append_pair("token", token);
-            }
-            Auth::Token(None) => {}
-            #[cfg(target_os = "linux")]
-            Auth::Native(endpoint) => {
-                let home = self
-                    .gateway
-                    .profile_homes
-                    .get(&self.profile)
-                    .ok_or("Refresh the owning audio profile")?;
-                let ticket = endpoint.ticket_until(home, "native-http", deadline)?;
-                headers.insert(
-                    "X-Hermes-Gateway-Ticket",
-                    ticket.parse().map_err(|_| "Invalid private audio ticket")?,
-                );
-            }
-        }
-        let mut request = if body.is_some() {
-            self.gateway.http.post(url)
+        let method = if body.is_some() { "POST" } else { "GET" };
+        let path = format!(
+            "{path}?profile={}",
+            url::form_urlencoded::byte_serialize(self.profile.as_bytes()).collect::<String>()
+        );
+        let url = self.gateway.api_url_for(&self.provenance, method, &path)?;
+        let method = if body.is_some() {
+            reqwest::Method::POST
         } else {
-            self.gateway.http.get(url)
+            reqwest::Method::GET
+        };
+        let prepared =
+            self.gateway
+                .http_parts_for_method(&self.provenance, url, deadline, Some(method))?;
+        let mut bytes = body
+            .map(|body| serde_json::to_vec(&body).map_err(|_| "Invalid audio request"))
+            .transpose()?;
+        if bytes
+            .as_ref()
+            .is_some_and(|bytes| bytes.len() > MAX_AUDIO_JSON)
+        {
+            return Err("The audio request exceeds the 25 MB recording limit".into());
         }
-        .headers(headers)
-        .timeout(timeout);
-        if let Some(body) = body {
-            let bytes = serde_json::to_vec(&body).map_err(|_| "Invalid audio request")?;
-            if bytes.len() > MAX_AUDIO_JSON {
-                return Err("The audio request exceeds the 25 MB recording limit".into());
-            }
-            request = request
-                .header("Content-Type", "application/json")
-                .body(bytes);
-        }
-        let response = request
-            .send()
-            .map_err(|_| "The audio request failed (network, TLS or timeout)")?;
+        let response = self
+            .gateway
+            .prepared
+            .send_http(prepared, deadline, true, |parts| {
+                let remaining = deadline
+                    .checked_duration_since(Instant::now())
+                    .ok_or("The audio request timed out")?;
+                let mut request = self
+                    .gateway
+                    .http
+                    .request(parts.method.clone(), parts.url.clone())
+                    .headers(parts.headers.clone())
+                    .timeout(remaining);
+                if let Some(bytes) = bytes.take() {
+                    request = request
+                        .header("Content-Type", "application/json")
+                        .body(bytes);
+                }
+                request
+                    .send()
+                    .map_err(|_| "The audio request failed (network, TLS or timeout)".into())
+            })?;
         let status = response.status();
         let mut bytes = vec![];
         response
@@ -138,6 +192,8 @@ impl AudioGateway {
         if value.get("ok") != Some(&Value::Bool(true)) {
             return Err("The gateway did not confirm the audio operation".into());
         }
+        self.gateway
+            .validate_response_owner(&self.provenance, &value, "profile", true)?;
         Ok(value)
     }
     pub fn lease(&mut self, stt: bool, id: &str, active: bool) -> Result<Option<String>, String> {
@@ -235,11 +291,32 @@ impl AudioGateway {
         profile: &str,
         engine: VoiceEngine,
     ) -> Result<VoiceStatus, String> {
-        let mut control = super::conversation::SessionTransport::connect(connection, profile)?;
+        Self::set_engine_scoped(
+            connection,
+            profile,
+            crate::source::ProfileIntent::Backend,
+            engine,
+        )
+    }
+    pub(crate) fn set_engine_scoped(
+        connection: &Connection,
+        profile: &str,
+        intent: crate::source::ProfileIntent,
+        engine: VoiceEngine,
+    ) -> Result<VoiceStatus, String> {
+        let provenance = provenance(connection, profile, intent)?;
+        let mut control = match intent {
+            crate::source::ProfileIntent::Backend => {
+                super::conversation::SessionTransport::connect(connection, profile)?
+            }
+            crate::source::ProfileIntent::NativeSelf => {
+                super::conversation::SessionTransport::connect_native_self(connection, profile)?
+            }
+        };
         control.call("config.set",json!({"key":"voice.voice_chat_mode","value":match engine{VoiceEngine::Chained=>"chained",VoiceEngine::GptLive=>"gpt-live"}})).map_err(|e|e.message)?;
         let mut gateway = Gateway::connect(connection)?;
         let status = gateway
-            .voice_status(profile)?
+            .voice_status_for(&provenance)?
             .ok_or("The agent does not report voice engines")?;
         if status.engine != engine {
             return Err("The agent did not confirm the selected voice engine".into());
@@ -254,54 +331,69 @@ impl AudioGateway {
             AudioStream::Transcribe => "api/audio/transcribe-stream",
             AudioStream::Speak => "api/audio/speak-stream",
         };
-        let mut url = self
-            .gateway
-            .base
-            .join(path)
-            .map_err(|_| "Invalid audio stream route")?;
+        let path = format!(
+            "/{path}?profile={}",
+            url::form_urlencoded::byte_serialize(self.profile.as_bytes()).collect::<String>()
+        );
+        let mut url = self.gateway.api_url_for(&self.provenance, "GET", &path)?;
         url.set_scheme(if self.gateway.base.scheme() == "https" {
             "wss"
         } else {
             "ws"
         })
         .map_err(|_| "Invalid audio stream scheme")?;
-        url.query_pairs_mut().append_pair("profile", &self.profile);
-        let mut ticket = None;
-        match &self.gateway.auth {
-            Auth::Token(Some(token)) => {
-                url.query_pairs_mut().append_pair("token", token);
-            }
-            Auth::Token(None) => {}
-            #[cfg(target_os = "linux")]
-            Auth::Native(endpoint) => {
-                let home = self
+        #[cfg(target_os = "linux")]
+        let home = if matches!(&self.gateway.auth, Auth::Native(_)) {
+            match &self.provenance {
+                prepared::ProfileProvenance::NativeSelf => match self
                     .gateway
-                    .profile_homes
-                    .get(&self.profile)
-                    .ok_or("The audio profile is not bound to this gateway")?;
-                ticket = Some(endpoint.ticket(home, "interactive")?);
+                    .prepared
+                    .policy()
+                    .and_then(|p| p.selected())
+                    .map(|s| s.target())
+                {
+                    Some(prepared::BackendTarget::Root(proof)) => {
+                        Some(std::path::Path::new(&proof.profile_id))
+                    }
+                    Some(prepared::BackendTarget::Named(name)) => Some(
+                        self.gateway
+                            .profile_homes
+                            .get(name)
+                            .ok_or("The selected audio profile is not bound to this gateway")?
+                            .as_path(),
+                    ),
+                    None => return Err("The Desktop route has no selected backend context".into()),
+                },
+                prepared::ProfileProvenance::Backend(name) => Some(
+                    self.gateway
+                        .profile_homes
+                        .get(name)
+                        .ok_or("The audio profile is not bound to this gateway")?
+                        .as_path(),
+                ),
+                prepared::ProfileProvenance::Ambient(_) => {
+                    return Err("Audio requires an explicit owner".into());
+                }
             }
-        }
-        let mut request = url
-            .as_str()
-            .into_client_request()
-            .map_err(|_| "Invalid audio stream request")?;
-        if let Some(ticket) = &ticket {
-            request.headers_mut().insert(
-                "Sec-WebSocket-Protocol",
-                format!("hermes-gateway-v1, hermes-gateway-ticket.{ticket}")
-                    .parse()
-                    .map_err(|_| "Invalid audio stream ticket")?,
-            );
-        }
-        let stream = connect_tcp(&url)?;
+        } else {
+            None
+        };
+        #[cfg(not(target_os = "linux"))]
+        let home = None;
+        let handshake = self.gateway.prepared.prepare_ws(
+            url,
+            home,
+            super::prepared::WsPurpose::Interactive,
+            Instant::now() + Duration::from_secs(5),
+        )?;
+        let stream = connect_tcp(&handshake.url)?;
         let config = tungstenite::protocol::WebSocketConfig::default()
             .max_message_size(Some(MAX_BODY))
             .max_frame_size(Some(MAX_BODY));
         let (socket, response) =
-            tungstenite::client_tls_with_config(request, stream, Some(config), None)
+            tungstenite::client_tls_with_config(handshake.request, stream, Some(config), None)
                 .map_err(|_| "The live audio connection failed (network, TLS or authentication)")?;
-        if ticket.is_some()
+        if handshake.private_protocol
             && response
                 .headers()
                 .get("Sec-WebSocket-Protocol")

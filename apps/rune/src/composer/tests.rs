@@ -3,6 +3,8 @@ use serde_json::json;
 
 fn scope(connection: u64, profile: &str, session: Option<&str>) -> DraftScope {
     DraftScope {
+        draft_origin: None,
+        profile_intent: crate::source::ProfileIntent::Backend,
         connection,
         profile: profile.into(),
         session: session.map(String::from),
@@ -286,4 +288,32 @@ fn observed_provider_aliases_must_resolve_uniquely_before_using_model_capabiliti
     policy.provider = Some("other".into());
     composer.reconcile_policy(&owner, &policy);
     assert_eq!(composer.selected_model(&owner).unwrap().0.id, "other");
+}
+
+#[test]
+fn catalog_reply_and_error_are_separate_for_opposite_intents() {
+    let mut composer = Composer::new();
+    let backend = scope(1, "default", None);
+    let mut native = backend.clone();
+    native.profile_intent = crate::source::ProfileIntent::NativeSelf;
+    composer
+        .fixture_catalog(backend.clone(), &catalog_value())
+        .unwrap();
+    assert!(composer.catalog_for(&native).is_none());
+    composer.set_catalog_error(&backend, "backend error".into());
+    assert_eq!(composer.catalog_error_for(&backend), Some("backend error"));
+    assert!(composer.catalog_error_for(&native).is_none());
+    composer.pending = Some(Pending {
+        id: 2,
+        scope: native.clone(),
+    });
+    assert!(!composer.apply_catalog_reply(
+        CatalogReply {
+            id: 1,
+            scope: backend,
+            result: Err("late".into())
+        },
+        &native
+    ));
+    assert!(composer.catalog_loading_for(&native));
 }

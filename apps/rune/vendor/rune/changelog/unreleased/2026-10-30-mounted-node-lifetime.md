@@ -1,0 +1,1 @@
+- Add an opt-in mounted-node lifetime callback for resources owned by virtualized views.

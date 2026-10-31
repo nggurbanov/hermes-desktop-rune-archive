@@ -46,7 +46,7 @@ pub(super) fn transaction(path: &Path) -> Result<crate::client::FileLock, String
 }
 impl Core {
     pub(in crate::connections) fn has_sources(&self) -> bool {
-        self.active_owner.is_some() || !self.leases.is_empty()
+        self.active_owner.is_some() || !self.leases.is_empty() || !self.route_leases.is_empty()
     }
     pub(in crate::connections) fn refresh_registry(&mut self) -> Result<(), String> {
         let registry = match self.metadata.load() {
@@ -77,6 +77,7 @@ impl Core {
         Ok(())
     }
     fn retire_registry_sources(&mut self, error: &str) {
+        self.retire_route_sources(error);
         let owner = self.active_owner.take();
         self.primary_lease = None;
         for entry in self.leases.values_mut() {
@@ -94,8 +95,14 @@ pub(super) fn decode(bytes: &[u8]) -> Result<Registry, String> {
         serde_json::from_slice(bytes).map_err(|_| "The saved connection registry is invalid")?;
     let mut registry: Registry = serde_json::from_value(raw.clone())
         .map_err(|_| "The saved connection registry is invalid")?;
-    if registry.version != 1 {
+    if !matches!(registry.version, 1 | 2) {
         return Err("This saved connection registry requires a newer Hermes app".into());
+    }
+    if let Some(legacy) = &registry.legacy {
+        if registry.version != 2 {
+            return Err("Legacy settings require the version 2 native registry".into());
+        }
+        legacy.validate()?;
     }
     let mut seen = std::collections::BTreeSet::new();
     for row in &registry.rows {
@@ -132,6 +139,15 @@ pub(super) fn decode(bytes: &[u8]) -> Result<Registry, String> {
     Ok(registry)
 }
 pub(super) fn encode(registry: &Registry) -> Result<Vec<u8>, String> {
+    if !matches!(registry.version, 1 | 2) {
+        return Err("This saved connection registry requires a newer Hermes app".into());
+    }
+    if let Some(legacy) = &registry.legacy {
+        if registry.version != 2 {
+            return Err("Legacy settings require the version 2 native registry".into());
+        }
+        legacy.validate()?;
+    }
     let mut value =
         serde_json::to_value(registry).map_err(|_| "Connections could not be encoded")?;
     if let Some(rows) = value["rows"].as_array_mut() {

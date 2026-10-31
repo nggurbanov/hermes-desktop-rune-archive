@@ -61,11 +61,15 @@ fn read(path: &Path) -> Result<State, String> {
         return Err("Saved favorite revisions are invalid; their file was retained".into());
     }
     let mut slots = HashSet::new();
-    if state
-        .owner_slots
-        .iter()
-        .any(|slot| !slots.insert((&slot.window, &slot.profile, &slot.session)))
-    {
+    if state.owner_slots.iter().any(|slot| {
+        !slots.insert((
+            &slot.window,
+            &slot.profile,
+            slot.profile_intent,
+            &slot.session,
+            &slot.draft_origin,
+        ))
+    }) {
         return Err("Saved editor slots are ambiguous; their file was retained".into());
     }
     Ok(state)
@@ -105,7 +109,9 @@ fn migrate(state: &mut State, editor: &EditorId) -> Result<bool, String> {
         state.entries.push(Entry {
             editor: editor.clone(),
             profile: key.profile,
+            profile_intent: key.profile_intent,
             session: key.session,
+            draft_origin: key.draft_origin,
             revision: at,
             draft: Some(draft),
         });
@@ -176,7 +182,9 @@ pub(super) fn commit(
         let entry = Entry {
             editor: editor.clone(),
             profile: key.profile.clone(),
+            profile_intent: key.profile_intent,
             session: key.session.clone(),
+            draft_origin: key.draft_origin.clone(),
             revision: at,
             draft: wanted.cloned(),
         };
@@ -258,7 +266,11 @@ pub(super) fn slot(
     let mut state = read(path)?;
     let migrated = migrate(&mut state, migration_owner)?;
     if let Some(slot) = state.owner_slots.iter().find(|slot| {
-        &slot.window == window && slot.profile == key.profile && slot.session == key.session
+        &slot.window == window
+            && slot.profile == key.profile
+            && slot.profile_intent == key.profile_intent
+            && slot.session == key.session
+            && slot.draft_origin == key.draft_origin
     }) {
         let editor = slot.editor.clone();
         if migrated {
@@ -271,7 +283,9 @@ pub(super) fn slot(
     state.owner_slots.push(Slot {
         window: window.clone(),
         profile: key.profile.clone(),
+        profile_intent: key.profile_intent,
         session: key.session.clone(),
+        draft_origin: key.draft_origin.clone(),
         editor: editor.clone(),
     });
     save(path, &mut state)?;
@@ -288,12 +302,14 @@ pub(super) fn rename_profile(path: &Path, from: &str, to: &str) -> Result<(), St
     if state.owner_slots.iter().any(|slot| {
         !keys.insert((
             &slot.window,
-            if slot.profile == from {
+            if slot.profile_intent.is_backend() && slot.profile == from {
                 to
             } else {
                 &slot.profile
             },
+            slot.profile_intent,
             &slot.session,
+            &slot.draft_origin,
         ))
     }) {
         return Err("The renamed profile already has a saved editor slot".into());
@@ -301,12 +317,17 @@ pub(super) fn rename_profile(path: &Path, from: &str, to: &str) -> Result<(), St
     let originals: Vec<_> = state
         .entries
         .iter()
-        .filter(|e| e.profile == from && e.draft.is_some())
+        .filter(|e| e.profile_intent.is_backend() && e.profile == from && e.draft.is_some())
         .cloned()
         .collect();
     if originals.iter().any(|e| {
         state.entries.iter().any(|n| {
-            n.editor == e.editor && n.profile == to && n.session == e.session && n.draft.is_some()
+            n.editor == e.editor
+                && n.profile == to
+                && n.profile_intent == e.profile_intent
+                && n.session == e.session
+                && n.draft_origin == e.draft_origin
+                && n.draft.is_some()
         })
     }) {
         return Err("The renamed profile already has saved drafts".into());
@@ -335,7 +356,7 @@ pub(super) fn rename_profile(path: &Path, from: &str, to: &str) -> Result<(), St
         }
     }
     for slot in &mut state.owner_slots {
-        if slot.profile == from {
+        if slot.profile_intent.is_backend() && slot.profile == from {
             slot.profile = to.into();
         }
     }
@@ -350,12 +371,14 @@ pub(super) fn delete_profile(path: &Path, profile: &str) -> Result<(), String> {
     }
     let at = revision(&mut state)?;
     for entry in &mut state.entries {
-        if entry.profile == profile {
+        if entry.profile_intent.is_backend() && entry.profile == profile {
             entry.draft = None;
             entry.revision = at;
         }
     }
-    state.owner_slots.retain(|slot| slot.profile != profile);
+    state
+        .owner_slots
+        .retain(|slot| !slot.profile_intent.is_backend() || slot.profile != profile);
     save(path, &mut state)
 }
 pub(super) fn rehome_slot(
@@ -373,18 +396,24 @@ pub(super) fn rehome_slot(
     state.owner_slots.retain(|slot| {
         !(&slot.window == window
             && slot.profile == origin.profile
+            && slot.profile_intent == origin.profile_intent
             && slot.session == origin.session
+            && slot.draft_origin == origin.draft_origin
             && &slot.editor == editor)
     });
     if !state.owner_slots.iter().any(|slot| {
         &slot.window == window
             && slot.profile == destination.profile
+            && slot.profile_intent == destination.profile_intent
             && slot.session == destination.session
+            && slot.draft_origin == destination.draft_origin
     }) {
         state.owner_slots.push(Slot {
             window: window.clone(),
             profile: destination.profile.clone(),
+            profile_intent: destination.profile_intent,
             session: destination.session.clone(),
+            draft_origin: destination.draft_origin.clone(),
             editor: editor.clone(),
         });
     }

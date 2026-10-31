@@ -7,6 +7,19 @@ use crate::{
 };
 use std::time::{Duration, Instant};
 
+pub(super) fn captured_environment() -> crate::connections::legacy::Environment {
+    static ENVIRONMENT: std::sync::OnceLock<crate::connections::legacy::Environment> =
+        std::sync::OnceLock::new();
+    ENVIRONMENT
+        .get_or_init(|| {
+            crate::connections::legacy::Environment::captured(
+                std::env::var("HERMES_DESKTOP_REMOTE_URL").ok(),
+                std::env::var("HERMES_DESKTOP_REMOTE_TOKEN").ok(),
+            )
+        })
+        .clone()
+}
+
 #[cfg(test)]
 #[path = "routing/tests.rs"]
 mod tests;
@@ -21,6 +34,8 @@ pub(super) struct State {
     notice: Option<String>,
     preference_error: Option<String>,
     pub menu: Option<ProfileMenu>,
+    #[cfg(test)]
+    pub(super) test_environment: Option<crate::connections::legacy::Environment>,
 }
 pub(crate) struct ProfileMenu {
     pub point: rune::PointerPress,
@@ -44,13 +59,16 @@ enum Reason {
 struct Pending {
     id: u64,
     target: Route,
+    project_target: Option<crate::projects::DraftTarget>,
     owner: Owner,
     reason: Reason,
     stage: Stage,
     destination: Option<super::fleet::Destination>,
+    restore: Option<crate::client::windows::WindowRoute>,
 }
 enum Stage {
     Registry,
+    WindowRegistry(crate::client::windows::WindowRoute),
     Resolve {
         receive: Receiver<Result<Lease, String>>,
         resolver: Resolver,
@@ -61,6 +79,12 @@ enum Stage {
         resolver: Resolver,
     },
     Direct(Receiver<Result<Connection, String>>),
+    Legacy {
+        ticket: crate::connections::legacy::ResolveTicket,
+        resolver: Resolver,
+        committing: bool,
+        expected_namespace: Option<String>,
+    },
 }
 impl Viewer {
     pub(super) fn route_owner(&self) -> Owner {
@@ -235,7 +259,10 @@ impl Viewer {
     }
     pub fn open_window_from_profile_menu(&mut self) {
         if let Some(profile) = self.profile_menu_target() {
-            self.request_window_target(Some(ConversationTarget::Bot(profile)));
+            self.request_window_target(Some(ConversationTarget::Bot {
+                profile,
+                profile_intent: crate::source::ProfileIntent::Backend,
+            }));
         }
     }
     pub fn set_default_profile(&mut self, profile: String) {
@@ -303,6 +330,7 @@ impl Viewer {
         }
         self.routing.initial_considered = true;
         if !self.is_primary_window()
+            || self.has_namespaced_window_route()
             || ["--gateway", "--local-home", "--profile"]
                 .iter()
                 .any(|arg| argument(arg).is_some())
@@ -338,26 +366,27 @@ impl Viewer {
         }
         true
     }
+    pub(super) fn set_device_project_target(
+        &mut self,
+        target: Option<crate::projects::DraftTarget>,
+    ) {
+        if let Some(pending) = self.routing.pending.as_mut() {
+            pending.project_target = target;
+        }
+    }
+    pub(super) fn connect_legacy_settings(&mut self, profile: String) -> Result<(), String> {
+        let route = Route::new(None, profile)?;
+        self.cancel_device_route();
+        self.queue_default_route(route, Reason::NewSession)
+    }
     fn queue_default_route(&mut self, target: Route, reason: Reason) -> Result<(), String> {
         if !self.allow_owner_change("") {
             return Err("Finish the pending workspace change before opening this profile".into());
         }
-        let stage = if target.connection_id.is_some() {
+        let stage = if reason == Reason::Fleet {
             self.resolve_saved_default(&target)?
         } else {
-            let source=self.legacy_window_source().ok_or("The legacy profile source is unavailable. Choose its connection before opening this default")?;
-            let profile = target.profile.clone();
-            let (send, receive) = mpsc::channel();
-            std::thread::spawn(move || {
-                let result = Gateway::connect(&source.connection).and_then(|mut gateway| {
-                    if !gateway.profiles()?.iter().any(|p| p.name == profile) {
-                        return Err("The default profile is no longer served by its source".into());
-                    }
-                    Ok(source.connection)
-                });
-                let _ = send.send(result);
-            });
-            Stage::Direct(receive)
+            self.resolve_legacy_default(&target, self.routing.sequence.wrapping_add(1))?
         };
         self.queue_route_stage(target, reason, stage, None);
         Ok(())
@@ -373,10 +402,12 @@ impl Viewer {
         let pending = Pending {
             id: self.routing.sequence,
             target,
+            project_target: None,
             owner: self.route_owner(),
             reason,
             stage,
             destination,
+            restore: None,
         };
         let notice = format!("Opening {}…", pending.target.profile);
         self.routing.notice = Some(notice.clone());
@@ -453,6 +484,156 @@ impl Viewer {
             .as_mut()
             .expect("a queued route owns its pending request")
             .destination = Some(destination);
+        Ok(())
+    }
+    fn resolve_legacy_default(&self, target: &Route, intent: u64) -> Result<Stage, String> {
+        use crate::source::RouteDoor;
+        if !self.connections.registry_loaded() {
+            if !self.connections.busy {
+                if let Some(error) = &self.connections.error {
+                    return Err(error.clone());
+                }
+            }
+            return Ok(Stage::Registry);
+        }
+        let door = match &target.connection_id {
+            None => RouteDoor::Legacy,
+            Some(id) => {
+                let row = if id == "local" {
+                    self.connections
+                        .rows
+                        .iter()
+                        .find(|row| row.kind() == crate::connections::Kind::Local)
+                } else {
+                    self.connections.rows.iter().find(|row| &row.id == id)
+                }
+                .ok_or("The default profile's saved source is unavailable")?;
+                RouteDoor::Saved {
+                    id: row.id.clone(),
+                    revision: row.revision.clone(),
+                }
+            }
+        };
+        self.resolve_legacy_door(door, &target.profile, intent, None)
+    }
+    fn resolve_legacy_door(
+        &self,
+        door: crate::source::RouteDoor,
+        profile: &str,
+        intent: u64,
+        expected_namespace: Option<String>,
+    ) -> Result<Stage, String> {
+        use crate::connections::legacy::{ResolveRequest, SelectionContext};
+        let resolver = self
+            .connections
+            .resolver()
+            .ok_or("The connection resolver is unavailable")?;
+        #[cfg(test)]
+        let environment = self
+            .routing
+            .test_environment
+            .clone()
+            .unwrap_or_else(captured_environment);
+        #[cfg(not(test))]
+        let environment = captured_environment();
+        let home = PathBuf::from(self.connection_local_home.text.trim());
+        let context = SelectionContext {
+            environment,
+            primary: None,
+            primary_profile: None,
+            primary_remote_active: false,
+            isolated_backend: false,
+            local_home: home.is_absolute().then_some(home),
+        };
+        let ticket = resolver.resolve_legacy(
+            ResolveRequest {
+                door,
+                desktop_profile: profile.into(),
+                context,
+                primary: None,
+                expected: None,
+                expected_namespace: expected_namespace.clone(),
+                intent,
+            },
+            vec![],
+        )?;
+        Ok(Stage::Legacy {
+            ticket,
+            resolver,
+            committing: false,
+            expected_namespace,
+        })
+    }
+    fn resolve_window_route(
+        &self,
+        route: &crate::client::windows::WindowRoute,
+        intent: u64,
+    ) -> Result<Stage, String> {
+        use crate::client::windows::SourceDescriptor;
+        use crate::source::RouteDoor;
+        if !self.connections.registry_loaded() {
+            if !self.connections.busy {
+                if let Some(error) = &self.connections.error {
+                    return Err(error.clone());
+                }
+            }
+            return Ok(Stage::WindowRegistry(route.clone()));
+        }
+        let (door, namespace) = match &route.source {
+            Some(SourceDescriptor::Legacy {
+                namespace: Some(namespace),
+            }) => (RouteDoor::Legacy, namespace.clone()),
+            Some(SourceDescriptor::Saved {
+                id,
+                revision,
+                namespace: Some(namespace),
+            }) => (
+                RouteDoor::Saved {
+                    id: id.clone(),
+                    revision: revision.clone(),
+                },
+                namespace.clone(),
+            ),
+            _ => return Err("The selected window has no captured route namespace".into()),
+        };
+        let route_profile = match (&route.route_profile, route.profile_intent) {
+            (Some(profile), _) => profile.as_str(),
+            (None, crate::source::ProfileIntent::NativeSelf) => route.profile.as_str(),
+            (None, crate::source::ProfileIntent::Backend) => {
+                return Err("The captured backend window has no Desktop routing profile".into());
+            }
+        };
+        self.resolve_legacy_door(door, route_profile, intent, Some(namespace))
+    }
+    pub(super) fn queue_window_restoration(
+        &mut self,
+        route: crate::client::windows::WindowRoute,
+    ) -> Result<(), String> {
+        use crate::client::windows::SourceDescriptor;
+        let source = match &route.source {
+            Some(SourceDescriptor::Legacy { namespace: Some(_) }) => None,
+            Some(SourceDescriptor::Saved {
+                id,
+                namespace: Some(_),
+                ..
+            }) => Some(id.clone()),
+            _ => return Err("The selected window has no captured route namespace".into()),
+        };
+        let route_profile = match (&route.route_profile, route.profile_intent) {
+            (Some(profile), _) => profile.clone(),
+            (None, crate::source::ProfileIntent::NativeSelf) => route.profile.clone(),
+            (None, crate::source::ProfileIntent::Backend) => {
+                return Err("The captured backend window has no Desktop routing profile".into());
+            }
+        };
+        let target = Route::new(source, route_profile)?;
+        let stage = self.resolve_window_route(&route, self.routing.sequence.wrapping_add(1))?;
+        self.queue_route_stage(target, Reason::Initial, stage, None);
+        self.routing
+            .pending
+            .as_mut()
+            .expect("a queued window restoration")
+            .restore = Some(route);
         Ok(())
     }
     fn resolve_saved_default(&self, target: &Route) -> Result<Stage, String> {
@@ -562,6 +743,14 @@ impl Viewer {
                         self.route_open_failed(error, Reason::Initial);
                     }
                 }
+                Ok(None) if self.should_resolve_legacy_startup() => {
+                    match Route::new(None, self.profile.clone())
+                        .and_then(|target| self.queue_default_route(target, Reason::Initial))
+                    {
+                        Ok(()) => {}
+                        Err(error) => self.route_open_failed(error, Reason::Initial),
+                    }
+                }
                 Ok(None) => self.start_window_source(),
                 Err(error) => self.route_open_failed(error, Reason::Initial),
             }
@@ -574,7 +763,9 @@ impl Viewer {
             self.cancel_device_route();
             return true;
         }
-        if !matches!(pending.stage, Stage::Registry) && !self.allow_owner_change("") {
+        if !matches!(pending.stage, Stage::Registry | Stage::WindowRegistry(_))
+            && !self.allow_owner_change("")
+        {
             self.route_open_failed(
                 "The workspace changed while its target was opening".into(),
                 pending.reason,
@@ -582,7 +773,14 @@ impl Viewer {
             return true;
         }
         let next = match pending.stage {
-            Stage::Registry => self.resolve_saved_default(&pending.target),
+            Stage::Registry => {
+                if pending.reason == Reason::Fleet {
+                    self.resolve_saved_default(&pending.target)
+                } else {
+                    self.resolve_legacy_default(&pending.target, pending.id)
+                }
+            }
+            Stage::WindowRegistry(route) => self.resolve_window_route(&route, pending.id),
             Stage::Resolve { receive, resolver } => match receive.try_recv() {
                 Ok(Ok(lease)) => {
                     if !lease.is_valid()
@@ -625,6 +823,7 @@ impl Viewer {
                                     pending.target.profile,
                                     pending.reason,
                                     pending.destination,
+                                    pending.project_target,
                                 );
                                 return true;
                             }
@@ -641,6 +840,86 @@ impl Viewer {
                     Err("The route activation service stopped".into())
                 }
             },
+            Stage::Legacy {
+                ticket,
+                resolver,
+                committing,
+                expected_namespace,
+            } => match ticket.receiver.try_recv() {
+                Ok(receipt) => {
+                    if receipt.intent != pending.id
+                        || receipt.desktop_profile != pending.target.profile
+                    {
+                        Err("The source returned a receipt for another workspace intent".into())
+                    } else {
+                        match receipt.result {
+                            Ok(resolved) if !committing => {
+                                let origins = ticket.origins();
+                                resolver
+                                    .commit_legacy(
+                                        resolved,
+                                        expected_namespace.clone(),
+                                        pending.id,
+                                        origins,
+                                    )
+                                    .map(|ticket| Stage::Legacy {
+                                        ticket,
+                                        resolver,
+                                        committing: true,
+                                        expected_namespace,
+                                    })
+                            }
+                            Ok(resolved) => {
+                                let intent = pending
+                                    .restore
+                                    .as_ref()
+                                    .map(|route| route.profile_intent)
+                                    .unwrap_or_else(|| {
+                                        if resolved.connection.route_owner().is_some() {
+                                            crate::source::ProfileIntent::NativeSelf
+                                        } else {
+                                            crate::source::ProfileIntent::Backend
+                                        }
+                                    });
+                                let profile = pending
+                                    .restore
+                                    .as_ref()
+                                    .map(|route| route.profile.clone())
+                                    .unwrap_or_else(|| pending.target.profile.clone());
+                                match crate::source::Binding::new(
+                                    resolved.connection.clone(),
+                                    Some(resolved.lease),
+                                ) {
+                                    Ok(binding) => {
+                                        self.accept_device_route_with_intent(
+                                            resolved.connection,
+                                            Some(binding.retaining_origins(ticket.origins())),
+                                            profile,
+                                            intent,
+                                            pending.reason,
+                                            pending.destination,
+                                            pending.restore,
+                                            pending.project_target,
+                                        );
+                                        return true;
+                                    }
+                                    Err(error) => Err(error),
+                                }
+                            }
+                            Err(error) => Err(error),
+                        }
+                    }
+                }
+                Err(mpsc::TryRecvError::Empty) => Ok(Stage::Legacy {
+                    ticket,
+                    resolver,
+                    committing,
+                    expected_namespace,
+                }),
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    Err("The route resolution service stopped".into())
+                }
+            },
             Stage::Direct(receive) => match receive.try_recv() {
                 Ok(Ok(connection)) => {
                     self.accept_device_route(
@@ -649,6 +928,7 @@ impl Viewer {
                         pending.target.profile,
                         pending.reason,
                         pending.destination,
+                        pending.project_target,
                     );
                     return true;
                 }
@@ -676,6 +956,41 @@ impl Viewer {
         profile: String,
         reason: Reason,
         destination: Option<super::fleet::Destination>,
+        project_target: Option<crate::projects::DraftTarget>,
+    ) {
+        let binding = match retained {
+            Some((resolver, lease)) => {
+                match crate::source::Binding::new(connection.clone(), Some(lease)) {
+                    Ok(binding) => Some(binding.retaining_resolver(resolver)),
+                    Err(error) => {
+                        self.route_open_failed(error, reason);
+                        return;
+                    }
+                }
+            }
+            None => None,
+        };
+        self.accept_device_route_with_intent(
+            connection,
+            binding,
+            profile,
+            crate::source::ProfileIntent::Backend,
+            reason,
+            destination,
+            None,
+            project_target,
+        );
+    }
+    fn accept_device_route_with_intent(
+        &mut self,
+        connection: Connection,
+        retained: Option<crate::source::Binding>,
+        profile: String,
+        profile_intent: crate::source::ProfileIntent,
+        reason: Reason,
+        destination: Option<super::fleet::Destination>,
+        restore: Option<crate::client::windows::WindowRoute>,
+        project_target: Option<crate::projects::DraftTarget>,
     ) {
         if !self.allow_owner_change("") {
             self.route_open_failed(
@@ -686,7 +1001,7 @@ impl Viewer {
         }
         if retained
             .as_ref()
-            .is_some_and(|(_, lease)| !lease.is_valid())
+            .is_some_and(|binding| binding.validate().is_err())
         {
             self.route_open_failed(
                 "The requested source expired before activation".into(),
@@ -711,16 +1026,14 @@ impl Viewer {
             }
         });
         self.cancel_device_route();
-        if same {
-            self.select_profile(profile.clone());
-            if self.profile != profile {
-                return;
-            }
-        } else if !self.use_connection_for_profile(connection, Some(profile)) {
+        if same && self.profile_intent == profile_intent && self.profile == profile {
+            // The exact selected controller is already foreground.
+        } else if !self.use_connection_for_profile_intent(connection, Some(profile), profile_intent)
+        {
             return;
         }
-        if let Some((resolver, lease)) = retained {
-            self.retain_window_route(resolver, lease);
+        if let Some(binding) = retained {
+            self.retain_window_binding(binding);
         }
         self.connections
             .note_active_source(self.connection.as_ref());
@@ -732,7 +1045,10 @@ impl Viewer {
         if let Some(destination) = destination {
             self.queue_fleet_destination(target_profile, destination, replace);
         } else {
-            self.new_draft_on_current_source();
+            self.new_draft_with_project_target(project_target);
+        }
+        if let Some(route) = restore {
+            self.restore_verified_window_target(route);
         }
     }
     fn route_open_failed(&mut self, error: String, reason: Reason) {

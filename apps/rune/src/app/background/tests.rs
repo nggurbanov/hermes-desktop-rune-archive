@@ -67,6 +67,7 @@ fn parked_runtime_reconnect_failure_stays_with_a_while_current_failure_uses_curr
     assert!(!s.chat.views.contains_key(&b));
     let current = DraftScope {
         session: Some("current-b".into()),
+        draft_origin: None,
         ..b
     };
     s.conversation

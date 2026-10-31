@@ -87,6 +87,8 @@ mod tests {
     #[test]
     fn remote_ignore_reads_stay_on_owner_and_apply_nested_overrides() {
         let owner = DraftScope {
+            draft_origin: None,
+            profile_intent: crate::source::ProfileIntent::Backend,
             connection: 1,
             profile: "research".into(),
             session: Some("stored".into()),

@@ -8,6 +8,8 @@ license.workspace = true
 default = ["dbus", "ogg-audio", "svg"]
 # Headless benchmark instrumentation; ordinary builds contain no phase clocks.
 frame-profile = ["dep:procwatch", "dep:libc"]
+# Controlled Presenter backend for integration tests; not enabled by production builds.
+test-presenter = []
 # Native Open, Save and folder dialogs: rfd on macOS and Windows, the XDG desktop portal over zbus on Linux.
 native-file-dialog = ["dep:rfd", "dbus"]
 hot = ["dep:subsecond", "dep:dioxus-devtools"]

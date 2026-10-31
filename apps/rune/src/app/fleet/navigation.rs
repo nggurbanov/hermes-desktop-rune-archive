@@ -5,7 +5,7 @@ pub(in crate::app) struct Waiting {
     owner: super::super::routing::Owner,
     profile: String,
     destination: Destination,
-    replace: Option<(String, String)>,
+    replace: Option<ConversationSlot>,
 }
 impl Viewer {
     pub(in crate::app) fn cancel_fleet_destination(&mut self) {
@@ -28,6 +28,7 @@ impl Viewer {
         let same_source = self.fleet_active_version().as_ref() == Some(&version);
         if same_source
             && self.profile == profile
+            && self.profile_intent == crate::source::ProfileIntent::Backend
             && matches!(destination, Destination::ProfilePick)
             && !self.sidebar_state.prefs.all_profiles
         {
@@ -52,6 +53,7 @@ impl Viewer {
                 .as_ref()
                 .and_then(|c| self.target_foreground_slot(c));
             if self.profile == profile
+                && self.profile_intent == crate::source::ProfileIntent::Backend
                 && !self.loading
                 && self.error.is_none()
                 && self.status == "Connected"
@@ -59,7 +61,9 @@ impl Viewer {
                 self.apply_fleet_destination(profile, destination, replace);
                 return;
             }
-            if self.profile != profile {
+            if self.profile != profile
+                || self.profile_intent != crate::source::ProfileIntent::Backend
+            {
                 self.select_profile(profile.clone());
             } else {
                 self.reconnect();
@@ -107,8 +111,9 @@ impl Viewer {
         &mut self,
         profile: String,
         destination: Destination,
-        replace: Option<(String, String)>,
+        replace: Option<ConversationSlot>,
     ) {
+        self.retire_chat_search_reveals();
         self.selected_session = None;
         self.pending_bot = None;
         if !self.ensure_editor() {
@@ -150,7 +155,7 @@ impl Viewer {
         &mut self,
         profile: String,
         destination: Destination,
-        replace: Option<(String, String)>,
+        replace: Option<ConversationSlot>,
     ) {
         if matches!(
             &destination,
@@ -185,6 +190,8 @@ impl Viewer {
             } => {
                 if let Some(read_only) = read_only {
                     let scope = DraftScope {
+                        draft_origin: None,
+                        profile_intent: crate::source::ProfileIntent::Backend,
                         connection: self.connection_epoch,
                         profile: profile.clone(),
                         session: Some(id.clone()),
@@ -237,6 +244,7 @@ mod tests {
         s.connection_epoch = 91;
         s.selected_session = Some("stored-current".into());
         s.tabs = vec![ConversationTab {
+            profile_intent: crate::source::ProfileIntent::Backend,
             profile: "work".into(),
             session: "stored-current".into(),
             title: "Current".into(),
@@ -435,6 +443,7 @@ mod tests {
                             role: "assistant".into(),
                             content: "Captured target history".into(),
                             raw: serde_json::Value::Null,
+                            ..Default::default()
                         }],
                         has_more: false,
                         cursor: 1,

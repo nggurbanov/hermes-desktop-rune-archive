@@ -1,5 +1,7 @@
 # Proposed native legacy routing implementation
 
+Scope update: managed Nous/Hermes Cloud portal, organization discovery and hosted-agent selection are excluded from this parity phase. Existing Cloud configuration is preserved without automatic connection. Generic remote URL OAuth and access headers remain in scope. The baseline descriptions below are retained as historical reference.
+
 Planning only; nothing in this document is an implementation or acceptance claim.
 The current native candidate is unchanged. Read alongside
 [native-legacy-routing-contract.md](native-legacy-routing-contract.md).

@@ -189,3 +189,18 @@ fn scripts_drive_wheels_pinches_other_buttons_and_key_releases() {
     assert!(matches!(last.public().event, ScriptEvent::KeyUp(_)));
     assert!(matches!(script[1].public().event, ScriptEvent::Pointer { action: PointerAction::Wheel(_), .. }));
 }
+
+#[test]
+fn script_multi_folder_answer_preserves_order_and_empty_selection() {
+    let events = parse_script(json!([
+        {"type": "file-dialogs", "paths": ["/first", "/second"]},
+        {"type": "file-dialogs", "paths": []}
+    ]));
+    let paths: Vec<_> = events.into_iter().map(|e| {
+        let ScriptEvent::FileDialogs(public) = e.public().event else { panic!("public event lost multi answer") };
+        let Kind::FileDialogs(paths) = e.kind else { panic!("wrong event") };
+        assert_eq!(public, paths);
+        paths
+    }).collect();
+    assert_eq!(paths, vec![vec![std::path::PathBuf::from("/first"), "/second".into()], vec![]]);
+}

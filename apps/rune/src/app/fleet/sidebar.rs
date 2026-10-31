@@ -344,6 +344,7 @@ impl Viewer {
             }
             self.request_window_target(Some(ConversationTarget::Session {
                 profile: target.owner.profile,
+                profile_intent: target.owner.profile_intent,
                 id: target.stored_id,
                 title,
             }));

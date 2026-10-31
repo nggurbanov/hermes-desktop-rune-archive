@@ -108,6 +108,7 @@ pub struct Preferences {
     #[serde(flatten)]
     pub other: BTreeMap<String, Value>,
     pub grouping: Grouping,
+    pub show_all_sessions: bool,
     pub ordering: Ordering,
     pub collapsed: BTreeSet<String>,
     pub all_profiles: bool,
@@ -127,6 +128,7 @@ impl Default for Preferences {
         Self {
             other: BTreeMap::new(),
             grouping: Grouping::Date,
+            show_all_sessions: false,
             ordering: Ordering::Updated,
             collapsed: BTreeSet::new(),
             all_profiles: false,
@@ -838,6 +840,9 @@ impl SidebarState {
                 match key {
                     "all-profiles" => self.prefs.all_profiles = !self.prefs.all_profiles,
                     "archived" => self.prefs.archived = !self.prefs.archived,
+                    "show_all_sessions" => {
+                        self.prefs.show_all_sessions = !self.prefs.show_all_sessions
+                    }
                     "cards" => self.prefs.cards = !self.prefs.cards,
                     "preview" => self.prefs.preview = !self.prefs.preview,
                     "tokens" => self.prefs.tokens = !self.prefs.tokens,
@@ -1891,8 +1896,12 @@ impl crate::app::Viewer {
             self.cron_action(crate::pages::cron::Action::Select(id));
             return;
         }
+        let show_all_before = self.sidebar_state.prefs.show_all_sessions;
         let effects = self.sidebar_state.action(action);
         self.page_requests(effects);
         self.mirror_sidebar_preferences();
+        if show_all_before != self.sidebar_state.prefs.show_all_sessions {
+            self.refresh_project_tree();
+        }
     }
 }

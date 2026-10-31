@@ -8,6 +8,7 @@ use std::{
 
 pub(super) const KNOWN_FIELDS: &[&str] = &[
     "grouping",
+    "show_all_sessions",
     "ordering",
     "collapsed",
     "all_profiles",

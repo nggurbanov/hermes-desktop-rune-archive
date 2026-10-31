@@ -12,6 +12,39 @@ Cargo's global checkout or downloads a replacement framework source.
 
 ## Public additions
 
+The off-by-default `test-presenter` feature exposes the actual per-window file-dialog Presenter to integration tests with a controlled future. Production native dialog backends are unchanged.
+
+`Tx::open_folders` requests ordered multiple-directory selections; scripted
+headless dialogs accept `file-dialogs` paths and `file-dialog-cancel`.
+
+
+`markdown::link_occurrences_cached` exposes authored parser link source byte
+ranges, destinations and rendered inline label ranges from the same cached
+parse used by Markdown. Bare URLs linkified separately are not parser events.
+
+`Markdown::embed_links` optionally replaces authored link labels with freshly built
+`El` children in paragraphs and headings (table cells retain text rendering).
+Each replacement occupies its own row between styled text
+fragments within the keyed paragraph; this is not inline typography equivalence.
+Unreplaced links retain their handlers. Source offsets key the embedded children.
+Empty labels can be replaced; source-copy falls back to drawn text for selected
+blocks containing embedded elements so it cannot copy their hidden source.
+The library test fixtures initialize the embedded-block accumulator empty, matching
+the production renderer constructor.
+
+`El::on_mount_change` runs after a committed node enters or leaves the mounted
+model tree, including virtual-list culling. It does not treat an offscreen node
+in overscan as removed. Returning true schedules a subsequent view commit;
+handlers should only schedule work and never block the UI thread. Hermes uses
+this to own independent transcript audio players.
+
+`Tx::scroll_highlight_into_view_all_in` reveals a mounted, scoped text highlight
+through its vertical ancestor viewports. Existing nearest-viewport reveal is unchanged.
+
+`El::on_input_display_change` is opt-in and reports visible input text changes,
+including transient IME composition. The existing committed-text callback keeps
+its original semantics. Hermes uses it for search over the mounted editor.
+
 `Tx::spawn_window(WindowSpec<S>) -> Result<SpawnedWindow<S>, WindowSpawnError>`
 queues an event-thread local specification. The returned object exposes `app`,
 `window` and `creation`; `creation.status()` reports Queued, Registered, Created

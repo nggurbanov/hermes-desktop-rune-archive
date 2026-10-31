@@ -12,16 +12,45 @@ use rune::{Image, ImageCache, TextEdit, Waker};
 
 use crate::gateway::{CatalogModel, Connection, Gateway, ModelCatalog, ModelProvider};
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct DraftOrigin(String);
+impl DraftOrigin {
+    pub fn new() -> Self {
+        Self(uuid::Uuid::new_v4().to_string())
+    }
+}
+impl Default for DraftOrigin {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+impl TryFrom<String> for DraftOrigin {
+    type Error = String;
+    fn try_from(value: String) -> Result<Self, String> {
+        uuid::Uuid::parse_str(&value)
+            .map(|id| Self(id.to_string()))
+            .map_err(|_| "Invalid draft origin".into())
+    }
+}
+impl From<DraftOrigin> for String {
+    fn from(value: DraftOrigin) -> Self {
+        value.0
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct DraftScope {
+    pub draft_origin: Option<DraftOrigin>,
     pub connection: u64,
     pub profile: String,
+    pub profile_intent: crate::source::ProfileIntent,
     pub session: Option<String>,
 }
 
 impl DraftScope {
-    fn catalog_owner(&self) -> (u64, String) {
-        (self.connection, self.profile.clone())
+    fn catalog_owner(&self) -> (u64, String, crate::source::ProfileIntent) {
+        (self.connection, self.profile.clone(), self.profile_intent)
     }
 }
 
@@ -104,9 +133,10 @@ pub struct Composer {
     pub favorites_only: bool,
     pub highlighted: usize,
     pub catalog: Option<ModelCatalog>,
-    pub catalog_owner: Option<(u64, String)>,
+    pub catalog_owner: Option<(u64, String, crate::source::ProfileIntent)>,
     pub catalog_loading: bool,
     pub catalog_error: Option<String>,
+    catalog_error_owner: Option<(u64, String, crate::source::ProfileIntent)>,
     pub voice_expanded: bool,
     pub attachment_error: Option<String>,
     drafts: HashMap<DraftScope, Draft>,
@@ -155,6 +185,7 @@ impl Default for Composer {
             catalog_owner: None,
             catalog_loading: false,
             catalog_error: None,
+            catalog_error_owner: None,
             voice_expanded: false,
             attachment_error: None,
             drafts: HashMap::new(),
@@ -185,6 +216,16 @@ impl Composer {
         (self.catalog_owner.as_ref() == Some(&scope.catalog_owner()))
             .then_some(self.catalog.as_ref())
             .flatten()
+    }
+
+    pub fn catalog_error_for(&self, scope: &DraftScope) -> Option<&str> {
+        (self.catalog_error_owner.as_ref() == Some(&scope.catalog_owner()))
+            .then_some(self.catalog_error.as_deref())
+            .flatten()
+    }
+    pub fn set_catalog_error(&mut self, scope: &DraftScope, error: String) {
+        self.catalog_error_owner = Some(scope.catalog_owner());
+        self.catalog_error = Some(error);
     }
 
     pub fn catalog_loading_for(&self, scope: &DraftScope) -> bool {
@@ -378,8 +419,14 @@ impl Composer {
                 for incoming in requests.try_iter() {
                     request = incoming;
                 }
-                let result = Gateway::connect(&request.connection)
-                    .and_then(|mut gateway| gateway.model_catalog(&request.scope.profile));
+                let result = Gateway::connect(&request.connection).and_then(|mut gateway| {
+                    let provenance = crate::gateway::audio::provenance(
+                        &request.connection,
+                        &request.scope.profile,
+                        request.scope.profile_intent,
+                    )?;
+                    gateway.model_catalog_for(&provenance)
+                });
                 if replies
                     .send(CatalogReply {
                         id: request.id,
@@ -407,7 +454,7 @@ impl Composer {
         let request = CatalogRequest {
             id: self.request_id,
             connection,
-            scope,
+            scope: scope.clone(),
         };
         if !self
             .network
@@ -416,7 +463,7 @@ impl Composer {
         {
             self.pending = None;
             self.catalog_loading = false;
-            self.catalog_error = Some("The model catalog worker is unavailable".into());
+            self.set_catalog_error(&scope, "The model catalog worker is unavailable".into());
         }
     }
 
@@ -480,7 +527,7 @@ impl Composer {
                     self.initialize_default_model(current_scope);
                 }
             }
-            Err(error) => self.catalog_error = Some(error),
+            Err(error) => self.set_catalog_error(&reply.scope, error),
         }
         true
     }
@@ -550,7 +597,11 @@ impl Composer {
         let keys: Vec<_> = self
             .drafts
             .keys()
-            .filter(|scope| scope.connection == connection && scope.profile == from)
+            .filter(|scope| {
+                scope.connection == connection
+                    && scope.profile_intent.is_backend()
+                    && scope.profile == from
+            })
             .cloned()
             .collect();
         for key in keys {
@@ -568,8 +619,11 @@ impl Composer {
     }
     pub fn delete_profile(&mut self, connection: u64, name: &str) {
         self.storage_revision = self.storage_revision.wrapping_add(1);
-        self.drafts
-            .retain(|scope, _| scope.connection != connection || scope.profile != name);
+        self.drafts.retain(|scope, _| {
+            scope.connection != connection
+                || !scope.profile_intent.is_backend()
+                || scope.profile != name
+        });
         self.close();
     }
 }

@@ -1,0 +1,1 @@
+- Expose authored Markdown link source ranges alongside cached rendered label ranges.

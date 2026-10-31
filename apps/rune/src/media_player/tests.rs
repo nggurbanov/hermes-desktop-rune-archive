@@ -1,7 +1,7 @@
 #[path = "external_tests.rs"]
 mod external_tests;
 #[path = "virtual_peer.rs"]
-mod virtual_peer;
+pub(crate) mod virtual_peer;
 use super::*;
 use std::{
     io::Cursor,
@@ -18,7 +18,7 @@ fn tone(rate: u32, channels: u16, seconds: f64) -> Vec<f32> {
         })
         .collect()
 }
-fn wav(channels: u16, seconds: f64) -> Vec<u8> {
+pub(crate) fn wav(channels: u16, seconds: f64) -> Vec<u8> {
     let mut out = Cursor::new(Vec::new());
     {
         let mut writer = hound::WavWriter::new(
@@ -200,9 +200,11 @@ fn actual_ogg_opus_demux_preskip_endtrim_gain_and_seek_are_verified() {
     malformed[28 + 18] = 1;
     assert!(decode::AudioDecoder::open(Box::new(Cursor::new(malformed)), "bad.opus").is_err());
 }
-fn target(bytes: Vec<u8>) -> Target {
+pub(super) fn target(bytes: Vec<u8>) -> Target {
     Target {
         owner: DraftScope {
+            draft_origin: None,
+            profile_intent: crate::source::ProfileIntent::Backend,
             connection: 4,
             profile: "sample".into(),
             session: Some("owned".into()),
@@ -439,4 +441,33 @@ fn paused_volume_and_mute_commands_are_applied_without_another_playback_command(
         wait(&mut players, id, |s| s.volume == volume && s.muted == muted);
         assert_eq!(players.get(id).unwrap().position, 0.);
     }
+}
+
+#[test]
+fn independent_decoded_playback_controls_without_device() {
+    let mut players = MediaPlayers::new();
+    players.use_null_output();
+    players.init(Arc::new(|| {}));
+    let first = players.open(connection(), target(wav(1, 3.))).unwrap();
+    let second = players.open(connection(), target(wav(1, 3.))).unwrap();
+    wait(&mut players, first, |s| s.state == State::Paused);
+    wait(&mut players, second, |s| s.state == State::Paused);
+    players.act(first, Action::Seek(1.));
+    wait(&mut players, first, |s| {
+        s.state == State::Paused && s.position >= 1.
+    });
+    players.act(first, Action::Rate(2.));
+    players.act(first, Action::Volume(0.4));
+    wait(&mut players, first, |s| {
+        s.state == State::Paused && s.rate == 2. && s.volume == 0.4
+    });
+    assert_eq!(players.get(second).unwrap().position, 0.);
+    assert_eq!(players.get(second).unwrap().rate, 1.);
+    players.act(first, Action::Play);
+    wait(&mut players, first, |s| s.state == State::Ended);
+    assert_eq!(players.get(second).unwrap().state, State::Paused);
+    players.close(first);
+    assert!(players.get(first).is_none());
+    assert!(players.get(second).is_some());
+    players.close(second);
 }

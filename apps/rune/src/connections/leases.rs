@@ -10,6 +10,7 @@ struct State {
     connection: Connection,
     profiles: Vec<crate::gateway::Profile>,
     passive_only: bool,
+    actual_parent: Option<Lease>,
     alive: AtomicBool,
     error: Mutex<Option<String>>,
 }
@@ -17,11 +18,15 @@ struct State {
 pub struct Lease(Arc<State>);
 #[derive(Clone)]
 pub struct LeaseGuard(Weak<State>);
+impl State {
+    fn valid(&self) -> bool {
+        self.alive.load(Ordering::Acquire)
+            && self.actual_parent.as_ref().is_none_or(Lease::is_valid)
+    }
+}
 impl LeaseGuard {
     pub fn is_valid(&self) -> bool {
-        self.0
-            .upgrade()
-            .is_some_and(|state| state.alive.load(Ordering::Acquire))
+        self.0.upgrade().is_some_and(|state| state.valid())
     }
 }
 impl std::fmt::Debug for LeaseGuard {
@@ -52,10 +57,39 @@ impl Lease {
         &self.0.revision
     }
     pub fn is_valid(&self) -> bool {
-        self.0.alive.load(Ordering::Acquire)
+        self.0.valid()
+    }
+    pub(crate) fn route_owner(&self) -> Option<&crate::source::RouteOwner> {
+        self.0.connection.route_owner()
+    }
+    pub(crate) fn registry_identity(&self) -> Option<(&str, &str)> {
+        match self.route_owner() {
+            Some(owner) => owner.registry_identity(),
+            None => Some((&self.0.id, &self.0.revision)),
+        }
+    }
+    /// Actual Saved provenance follows retained transport ancestry, never the
+    /// requested logical door or a matching destination/backend installation.
+    pub(in crate::connections) fn actual_saved_identity(&self) -> Option<(&str, &str)> {
+        if self.route_owner().is_some() {
+            self.0
+                .actual_parent
+                .as_ref()
+                .and_then(Lease::actual_saved_identity)
+        } else {
+            match &self.0.connection {
+                Connection::Saved { id, revision, .. } => Some((id, revision)),
+                _ => None,
+            }
+        }
     }
     pub fn error(&self) -> Option<String> {
-        self.0.error.lock().unwrap().clone()
+        self.0
+            .error
+            .lock()
+            .unwrap()
+            .clone()
+            .or_else(|| self.0.actual_parent.as_ref().and_then(Lease::error))
     }
 }
 impl std::fmt::Debug for Lease {
@@ -95,6 +129,7 @@ impl Entry {
             connection,
             profiles,
             passive_only,
+            actual_parent: None,
             alive: AtomicBool::new(true),
             error: Mutex::new(None),
         });
@@ -106,13 +141,52 @@ impl Entry {
             Lease(state),
         )
     }
+    pub(in crate::connections) fn routed(
+        connection: Connection,
+        profiles: Vec<crate::gateway::Profile>,
+        actual_parent: Option<Lease>,
+        tunnel: Option<Box<dyn core::Tunnel>>,
+    ) -> Result<(Self, Lease), String> {
+        let owner = connection
+            .route_owner()
+            .ok_or("A resolved route needs its requested authority")?;
+        if actual_parent
+            .as_ref()
+            .is_some_and(|parent| !parent.is_valid())
+        {
+            return Err("The captured primary source expired before route publication".into());
+        }
+        let (id, revision) = match owner.registry_identity() {
+            Some((id, revision)) => (id.to_owned(), revision.to_owned()),
+            None => ("legacy".into(), owner.namespace().to_owned()),
+        };
+        // The parent is an older immutable lease, never a sender or this new
+        // allocation; construction can only form an acyclic ownership chain.
+        let state = Arc::new(State {
+            id,
+            revision,
+            connection,
+            profiles,
+            passive_only: false,
+            actual_parent,
+            alive: AtomicBool::new(true),
+            error: Mutex::new(None),
+        });
+        Ok((
+            Self {
+                state: Arc::downgrade(&state),
+                tunnel,
+            },
+            Lease(state),
+        ))
+    }
     pub fn passive(id: String, revision: String, connection: Connection) -> (Self, Lease) {
         Self::create(id, revision, connection, vec![], None, true)
     }
     pub fn acquire(&self) -> Option<Lease> {
         self.state
             .upgrade()
-            .filter(|state| state.alive.load(Ordering::Acquire))
+            .filter(|state| state.valid())
             .map(Lease)
     }
     pub fn referenced(&self) -> bool {
@@ -142,10 +216,17 @@ impl Drop for Entry {
 #[derive(Clone)]
 pub struct Resolver {
     pub(super) send: Sender<Work>,
+    pub(super) identity: Arc<super::shutdown::Owner>,
 }
 impl Resolver {
     pub(super) fn new(send: Sender<Work>) -> Self {
-        Self { send }
+        Self {
+            identity: Arc::new(super::shutdown::Owner { send: send.clone() }),
+            send,
+        }
+    }
+    pub(crate) fn same_actor(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.identity, &other.identity)
     }
     pub fn resolve(
         &self,
@@ -193,5 +274,22 @@ mod guard_tests {
         let guard = new_lease.guard();
         drop(new_lease);
         assert!(!guard.is_valid());
+    }
+}
+
+/// Owns the same registry entry that keeps a routed lease alive in production.
+#[cfg(test)]
+pub(crate) struct TestRoutedLease {
+    _entry: Entry,
+    pub(crate) lease: Lease,
+}
+#[cfg(test)]
+impl TestRoutedLease {
+    pub(crate) fn new(connection: Connection) -> Self {
+        let (entry, lease) = Entry::routed(connection, vec![], None, None).unwrap();
+        Self {
+            _entry: entry,
+            lease,
+        }
     }
 }

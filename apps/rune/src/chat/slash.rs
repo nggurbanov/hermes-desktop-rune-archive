@@ -10,6 +10,8 @@ pub struct SlashIntent {
     pub principal: String,
     pub profile: String,
     pub stored: Option<String>,
+    #[serde(default)]
+    pub draft_origin: Option<crate::composer::DraftOrigin>,
     pub input: String,
     pub runtime: Option<String>,
     pub revision: Option<u64>,
@@ -51,6 +53,7 @@ impl SlashIntent {
         if self.principal != crate::client::connection_key(connection)?
             || self.profile != owner.profile
             || self.stored != owner.session
+            || (owner.session.is_none() && self.draft_origin != owner.draft_origin)
         {
             return Err("This command belongs to another source or conversation".into());
         }
@@ -78,6 +81,7 @@ impl Chat {
             principal: crate::client::connection_key(&connection)?,
             profile: owner.profile.clone(),
             stored: owner.session.clone(),
+            draft_origin: owner.draft_origin.clone(),
             input,
             runtime,
             revision,
@@ -512,6 +516,7 @@ mod tests {
     }
     fn intent(input: &str) -> SlashIntent {
         SlashIntent {
+            draft_origin: None,
             id: uuid::Uuid::new_v4().to_string(),
             principal: "fixture".into(),
             profile: "work".into(),

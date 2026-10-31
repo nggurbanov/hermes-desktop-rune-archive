@@ -26,14 +26,16 @@ impl Composer {
     ) -> Result<EditorId, String> {
         let path = crate::client::state_dir()?.join("drafts").join(format!(
             "{}.json",
-            crate::client::connection_key(connection)?
+            crate::client::connection_storage_key(connection)?
         ));
         store::slot(
             &path,
             window,
             &Key {
                 profile: scope.profile.clone(),
+                profile_intent: scope.profile_intent,
                 session: scope.session.clone(),
+                draft_origin: scope.draft_origin.clone(),
             },
             &legacy_owner()?,
         )
@@ -47,18 +49,22 @@ impl Composer {
     ) -> Result<(), String> {
         let path = crate::client::state_dir()?.join("drafts").join(format!(
             "{}.json",
-            crate::client::connection_key(connection)?
+            crate::client::connection_storage_key(connection)?
         ));
         store::rehome_slot(
             &path,
             window,
             &Key {
                 profile: origin.profile.clone(),
+                profile_intent: origin.profile_intent,
                 session: origin.session.clone(),
+                draft_origin: origin.draft_origin.clone(),
             },
             &Key {
                 profile: destination.profile.clone(),
+                profile_intent: destination.profile_intent,
                 session: destination.session.clone(),
+                draft_origin: destination.draft_origin.clone(),
             },
             editor,
         )
@@ -70,14 +76,14 @@ impl Composer {
     ) -> Result<(), String> {
         let path = crate::client::state_dir()?.join("drafts").join(format!(
             "{}.json",
-            crate::client::connection_key(connection)?
+            crate::client::connection_storage_key(connection)?
         ));
         store::rename_profile(&path, from, to)
     }
     pub fn delete_saved_profile(connection: &Connection, profile: &str) -> Result<(), String> {
         let path = crate::client::state_dir()?.join("drafts").join(format!(
             "{}.json",
-            crate::client::connection_key(connection)?
+            crate::client::connection_storage_key(connection)?
         ));
         store::delete_profile(&path, profile)
     }
@@ -112,7 +118,7 @@ impl Composer {
     pub fn bind_storage(&mut self, connection: &Connection, epoch: u64) -> Result<(), String> {
         let path = crate::client::state_dir()?.join("drafts").join(format!(
             "{}.json",
-            crate::client::connection_key(connection)?
+            crate::client::connection_storage_key(connection)?
         ));
         self.bind_storage_path_owned(path, epoch, legacy_owner()?)
     }
@@ -136,8 +142,10 @@ impl Composer {
         let (snapshot, observed) = state.for_editor(&self.editor);
         for saved in snapshot.drafts.values().cloned() {
             let scope = DraftScope {
+                draft_origin: saved.draft_origin.clone(),
                 connection: epoch,
                 profile: saved.profile.clone(),
+                profile_intent: saved.profile_intent,
                 session: saved.session.clone(),
             };
             self.drafts.entry(scope).or_insert_with(|| saved.restore());
@@ -176,7 +184,11 @@ impl Composer {
         let latest = state
             .entries
             .iter()
-            .filter(|entry| entry.profile == scope.profile && entry.session == scope.session)
+            .filter(|entry| {
+                entry.profile == scope.profile
+                    && entry.profile_intent == scope.profile_intent
+                    && entry.session == scope.session
+            })
             .max_by_key(|entry| entry.revision);
         let Some(text) = latest
             .and_then(|entry| entry.draft.as_ref())

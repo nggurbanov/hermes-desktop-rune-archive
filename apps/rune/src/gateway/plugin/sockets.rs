@@ -215,6 +215,19 @@ impl SocketBroker {
                     return;
                 }
             };
+            if stopped.load(Ordering::Acquire)
+                || prepared
+                    .lease
+                    .as_ref()
+                    .is_some_and(|lease| !lease.is_valid())
+            {
+                let _ = socket.close(None);
+                emit(
+                    "close",
+                    json!({"code":1006,"reason":"The plugin stream source changed","clean":false}),
+                );
+                return;
+            }
             emit(
                 "open",
                 json!({"protocol":if prepared.canonical {"hermes-gateway-v1"} else {""}}),
@@ -423,32 +436,31 @@ fn dial(
         return Err("Plugin stream paths cannot override credentials or profile".into());
     }
     url.query_pairs_mut().append_pair("profile", profile);
-    if let Auth::Token(Some(token)) = &gateway.auth {
-        url.query_pairs_mut().append_pair("token", token);
-    }
-    let mut request = url
-        .as_str()
-        .into_client_request()
-        .map_err(|_| "The plugin stream handshake is invalid")?;
     #[cfg(target_os = "linux")]
-    if let Auth::Native(endpoint) = &gateway.auth {
-        let home = gateway
-            .profile_homes
-            .get(profile)
-            .ok_or("The plugin stream profile is not served")?;
-        let ticket = endpoint.ticket_until(home, "native-http", deadline)?;
-        request.headers_mut().insert(
-            "X-Hermes-Gateway-Ticket",
-            ticket
-                .parse()
-                .map_err(|_| "The plugin stream grant is invalid")?,
-        );
-    }
-    let stream = connect_tcp(&url)?;
+    let home = if matches!(&gateway.auth, Auth::Native(_)) {
+        Some(
+            gateway
+                .profile_homes
+                .get(profile)
+                .ok_or("The plugin stream profile is not served")?
+                .as_path(),
+        )
+    } else {
+        None
+    };
+    #[cfg(not(target_os = "linux"))]
+    let home = None;
+    let handshake = gateway.prepared.prepare_ws(
+        url,
+        home,
+        super::super::prepared::WsPurpose::Plugin,
+        deadline,
+    )?;
+    let stream = connect_tcp(&handshake.url)?;
     let config = tungstenite::protocol::WebSocketConfig::default()
         .max_message_size(Some(MAX_BODY))
         .max_frame_size(Some(MAX_BODY));
-    tungstenite::client_tls_with_config(request, stream, Some(config), None)
+    tungstenite::client_tls_with_config(handshake.request, stream, Some(config), None)
         .map(|(socket, _)| socket)
         .map_err(|_| "The plugin stream handshake failed (network, TLS or permission)".into())
 }

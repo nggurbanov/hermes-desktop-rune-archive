@@ -48,9 +48,15 @@ impl From<WindowId> for String {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SourceDescriptor {
+    Legacy {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        namespace: Option<String>,
+    },
     Saved {
         id: String,
         revision: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        namespace: Option<String>,
     },
     Local {
         home: PathBuf,
@@ -62,10 +68,30 @@ pub enum SourceDescriptor {
 }
 impl SourceDescriptor {
     pub fn from_connection(connection: &Connection) -> Result<Self, String> {
+        if let (Connection::Saved { id, revision, .. }, Some(owner)) =
+            (connection, connection.route_owner())
+        {
+            if owner.registry_identity() != Some((id.as_str(), revision.as_str())) {
+                return Err("The saved window source conflicts with its resolved route".into());
+            }
+        }
         let result = match connection {
+            Connection::Routed { owner, .. } => match owner.door() {
+                crate::source::RouteDoor::Legacy => Self::Legacy {
+                    namespace: Some(owner.namespace().to_owned()),
+                },
+                crate::source::RouteDoor::Saved { id, revision } => Self::Saved {
+                    id: id.clone(),
+                    revision: revision.clone(),
+                    namespace: Some(owner.namespace().to_owned()),
+                },
+            },
             Connection::Saved { id, revision, .. } => Self::Saved {
                 id: id.clone(),
                 revision: revision.clone(),
+                namespace: connection
+                    .route_owner()
+                    .map(|owner| owner.namespace().to_owned()),
             },
             Connection::Local { home } => Self::Local { home: home.clone() },
             Connection::Url { endpoint, token } => {
@@ -95,10 +121,27 @@ impl SourceDescriptor {
     }
     fn validate(&self) -> Result<(), String> {
         match self {
-            Self::Saved { id, revision } => {
+            Self::Legacy {
+                namespace: Some(namespace),
+            } if namespace.is_empty()
+                || namespace.len() > 1024
+                || namespace.chars().any(char::is_control) =>
+            {
+                return Err("Invalid captured Legacy route namespace".into());
+            }
+            Self::Saved {
+                id,
+                revision,
+                namespace,
+            } => {
                 uuid::Uuid::parse_str(id).map_err(|_| "Invalid saved window source identity")?;
                 uuid::Uuid::parse_str(revision)
                     .map_err(|_| "Invalid saved window source revision")?;
+                if namespace.as_ref().is_some_and(|value| {
+                    value.is_empty() || value.len() > 1024 || value.chars().any(char::is_control)
+                }) {
+                    return Err("Invalid captured saved route namespace".into());
+                }
             }
             Self::Local { home } if !home.is_absolute() => {
                 return Err("Saved local window sources need an absolute home".into());
@@ -131,7 +174,16 @@ pub enum BootstrapKind {
 pub struct WindowRoute {
     pub source: Option<SourceDescriptor>,
     pub profile: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route_profile: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::source::ProfileIntent::is_backend"
+    )]
+    pub profile_intent: crate::source::ProfileIntent,
     pub session: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub draft_origin: Option<crate::composer::DraftOrigin>,
     pub title: Option<String>,
     pub canonical_bot: bool,
 }
@@ -140,7 +192,10 @@ impl Default for WindowRoute {
         Self {
             source: None,
             profile: "default".into(),
+            route_profile: None,
+            profile_intent: crate::source::ProfileIntent::Backend,
             session: None,
+            draft_origin: None,
             title: None,
             canonical_bot: false,
         }
@@ -148,8 +203,27 @@ impl Default for WindowRoute {
 }
 impl WindowRoute {
     fn validate(&self) -> Result<(), String> {
+        if self.profile_intent == crate::source::ProfileIntent::NativeSelf
+            && !matches!(
+                &self.source,
+                Some(
+                    SourceDescriptor::Legacy { namespace: Some(_) }
+                        | SourceDescriptor::Saved {
+                            namespace: Some(_),
+                            ..
+                        }
+                )
+            )
+        {
+            return Err("A selected profile window needs a captured route namespace".into());
+        }
         if let Some(source) = &self.source {
             source.validate()?;
+        }
+        if self.route_profile.as_ref().is_some_and(|profile| {
+            crate::client::startup::Route::new(None, profile.clone()).is_err()
+        }) {
+            return Err("Invalid captured Desktop routing profile".into());
         }
         if self.profile.is_empty() || self.session.as_ref().is_some_and(String::is_empty) {
             return Err(

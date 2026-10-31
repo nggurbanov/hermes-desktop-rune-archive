@@ -2,6 +2,11 @@ use super::*;
 #[derive(Serialize, Deserialize)]
 pub(crate) struct SavedWorkspace {
     pub key: String,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::source::ProfileIntent::is_backend"
+    )]
+    pub profile_intent: crate::source::ProfileIntent,
     pub profile: String,
     pub tabs: Vec<SavedTab>,
     pub active: Option<String>,
@@ -71,6 +76,7 @@ impl Terminal {
             .map(|(key, w)| SavedWorkspace {
                 key: key.clone(),
                 profile: w.profile.clone(),
+                profile_intent: w.profile_intent,
                 active: w.active.clone(),
                 tabs: w
                     .tabs
@@ -114,6 +120,7 @@ impl Terminal {
                     error: None,
                     epoch: 0,
                     profile: saved.profile,
+                    profile_intent: saved.profile_intent,
                     closed_processes: Default::default(),
                     process_snapshots: Default::default(),
                 });

@@ -13,7 +13,7 @@ impl Viewer {
         match action {
             Action::RetryMedia(source) => {
                 if let Some(connection) = self.connection.clone() {
-                    self.chat.retry_media(connection, owner, source);
+                    self.update_chat_media(|chat| chat.retry_media(connection, owner, source));
                 }
             }
             Action::Image(source) => {
@@ -33,6 +33,7 @@ impl Viewer {
                     v.expanded.remove(&key);
                     v.collapsed.insert(key);
                 }
+                self.refresh_chat_search();
             }
             Action::Expand(key) => {
                 let v = self.chat.presentation(owner);
@@ -75,6 +76,7 @@ impl Viewer {
                     let mut edit = TextEdit::default();
                     edit.replace_text(message.content.clone());
                     self.chat.presentation(owner).edit = Some((row, edit));
+                    self.refresh_chat_search();
                 }
             }
             Action::Retry(row) => self.prepare_chat_rewrite(owner, row, RewriteKind::Retry, None),
@@ -91,11 +93,13 @@ impl Viewer {
                         Some(edit.text.clone()),
                     );
                 }
+                self.refresh_chat_search();
             }
             Action::Cancel => {
                 let v = self.chat.presentation(owner);
                 v.edit = None;
                 v.confirmation = None;
+                self.refresh_chat_search();
             }
             Action::Confirm => self.confirm_chat_rewrite(owner),
             Action::Branch(row) => self.branch_chat_at(owner, row),
@@ -119,7 +123,14 @@ impl Viewer {
                     .get(&owner)
                     .and_then(|v| v.branch_result.clone())
                 {
-                    self.open_page_session(owner.profile, id, title);
+                    if owner.connection == self.connection_epoch {
+                        self.open_page_session_owned(
+                            owner.profile,
+                            id,
+                            title,
+                            owner.profile_intent,
+                        );
+                    }
                 }
             }
             Action::Earlier => {
@@ -355,6 +366,7 @@ impl Viewer {
                 v.confirmation = None;
                 v.edit = None;
                 v.error = None;
+                self.refresh_chat_search();
             }
             Err(e) => self.chat.presentation(owner).error = Some(e),
         }
@@ -446,12 +458,16 @@ impl Viewer {
                     intent,
                     result,
                 } => {
-                    if owner.connection != self.connection_epoch
-                        || !self.chat.views.contains_key(&owner)
+                    if self.binding_for_source_epoch(owner.connection).is_none()
                         || self
                             .retired_profiles
                             .contains(&(owner.connection, owner.profile.clone()))
                     {
+                        self.client_error =
+                            Some("The command source was retired before completion".into());
+                        continue;
+                    }
+                    if !self.chat.views.contains_key(&owner) {
                         continue;
                     }
                     self.chat.presentation(owner.clone()).slash_running = false;
@@ -518,8 +534,9 @@ impl Viewer {
                         }
                     })
                     .collect();
-                self.chat
-                    .prepare_media(connection.clone(), scope.clone(), sources);
+                self.update_chat_media(|chat| {
+                    chat.prepare_media(connection.clone(), scope.clone(), sources)
+                });
                 let slash = self
                     .composer
                     .draft(&scope)
@@ -621,15 +638,18 @@ impl Viewer {
             .view(&owner)
             .map(|v| (v.runtime.clone(), v.revision, v.generation));
         let draft = self.composer.draft(&owner).cloned().unwrap_or_default();
+        let (cwd, cwd_explicit) =
+            self.project_send_cwd(&draft, self.bot_empty && owner == self.composer_scope());
         let policy = SendInput {
             text: input.clone(),
+            canonical_bot: self.bot_empty && owner == self.composer_scope(),
             policy_stamp: Some(draft.policy_stamp()),
             model: draft.model.clone(),
             reasoning: draft.reasoning.clone(),
             service_tier: draft.service_tier.clone(),
             approval_mode: draft.approval_mode.clone(),
-            cwd: draft.cwd.clone(),
-            cwd_explicit: draft.cwd_explicit,
+            cwd,
+            cwd_explicit,
             model_changed: draft.model_changed,
             reasoning_changed: draft.reasoning_changed,
             service_tier_changed: draft.service_tier_changed,
@@ -711,7 +731,12 @@ impl Viewer {
                         Some("This command returned no prompt expansion".into());
                     return;
                 };
-                let Some(connection) = self.connection.clone() else {
+                let Some(connection) = self
+                    .binding_for_source_epoch(owner.connection)
+                    .map(|binding| binding.connection().clone())
+                else {
+                    self.client_error =
+                        Some("The command source was retired before sending".into());
                     return;
                 };
                 let mut sent = self

@@ -10,12 +10,14 @@ use crate::{
     chat::{
         Action, RewriteKind,
         projection::{self, Message, Part},
+        search,
     },
     composer::DraftScope,
 };
 use rune::{El, GrowthSpec, ScrollSpec, TextStyle, auto_grow, col, el, row, text, text_input};
 use rune_kit::{
-    Button, ButtonVariant, ControlSize, IconButton, IconButtonVariant, Kit, Markdown, MarkdownStyle,
+    Button, ButtonVariant, ControlSize, IconButton, IconButtonVariant, Kit, Markdown,
+    MarkdownStyle, TextInput,
 };
 use rune_theme_opencode::icons as ic;
 
@@ -48,6 +50,56 @@ pub fn avatar(p: &Pal, name: &str) -> El {
         .border(0.5, border)
         .center()
         .child(text(letter).font(AVATAR).color(p.avatar_fg))
+}
+
+pub(crate) fn live_turn_key(view: &crate::conversation::ConversationView) -> String {
+    format!(
+        "live-turn-{}-{}",
+        view.generation,
+        view.active_admission
+            .as_deref()
+            .or(view.completed_admission.as_deref())
+            .unwrap_or("unidentified")
+    )
+}
+pub(crate) fn live_tool_key(
+    view: &crate::conversation::ConversationView,
+    tool: &serde_json::Value,
+) -> String {
+    format!(
+        "{}-tool-{}",
+        live_turn_key(view),
+        tool["id"].as_str().unwrap_or("unidentified")
+    )
+}
+pub(crate) fn live_tool_title(tool: &serde_json::Value) -> String {
+    format!(
+        "{} {}",
+        if tool["state"] == "complete" {
+            "Completed"
+        } else {
+            "Running"
+        },
+        tool["name"].as_str().unwrap_or("Tool")
+    )
+}
+pub(crate) fn live_tool_args(tool: &serde_json::Value) -> String {
+    tool.get("arguments")
+        .or(tool.get("args"))
+        .map(|v| {
+            v.as_str()
+                .map(str::to_owned)
+                .unwrap_or_else(|| serde_json::to_string_pretty(v).unwrap_or_default())
+        })
+        .unwrap_or_default()
+}
+pub(crate) fn live_tool_output(tool: &serde_json::Value) -> &str {
+    tool["result"]
+        .as_str()
+        .or(tool["output"].as_str())
+        .or(tool["text"].as_str())
+        .or(tool["error"].as_str())
+        .unwrap_or("")
 }
 
 pub fn timeline(s: &Viewer, p: &Pal) -> El {
@@ -110,13 +162,15 @@ pub fn timeline(s: &Viewer, p: &Pal) -> El {
         if let Some((_, edit)) = edit {
             let scope = owner.clone();
             let editor = text_input(edit, s.client_settings.prose(BUBBLE))
-                .key("chat-edit-input")
+                .key(s.chat_edit_key())
                 .w_full()
                 .color(p.text)
                 .caret(p.text, k.selection())
+                .text_highlights(literal_marks(s, k, &message.key, "edit"))
                 .on_edit(move |s: &mut Viewer| {
                     &mut s.chat.presentation(scope.clone()).edit.as_mut().unwrap().1
-                });
+                })
+                .on_input_display_change(|s: &mut Viewer, _| s.refresh_chat_search());
             body = body.child(auto_grow(editor, 2, 10));
             body = body.child(
                 row()
@@ -148,18 +202,25 @@ pub fn timeline(s: &Viewer, p: &Pal) -> El {
     }
     if let Some(view) = s.conversation.view(&owner) {
         if !view.reasoning.trim().is_empty() {
+            let message = live_turn_key(view);
+            let key = format!("{message}-reasoning");
             stack = stack.child(
-                disclosure(
-                    s,
-                    k,
-                    &owner,
-                    "live-reasoning",
-                    "Thought",
-                    markdown_view(s, p, &view.reasoning),
-                )
-                .max_w(CONTENT_W)
-                .w_full()
-                .pb(10.),
+                col()
+                    .key(format!("message-{message}"))
+                    .w_full()
+                    .max_w(CONTENT_W)
+                    .child(
+                        disclosure(
+                            s,
+                            k,
+                            &owner,
+                            &key,
+                            "Thought",
+                            markdown_search_view(s, p, &view.reasoning, &message, "reasoning"),
+                        )
+                        .w_full()
+                        .pb(10.),
+                    ),
             );
         }
         if view.activities.is_empty() && !view.tools.is_empty() {
@@ -180,60 +241,53 @@ pub fn timeline(s: &Viewer, p: &Pal) -> El {
                     .pb(8.),
             );
         }
-        for (index, tool) in view.activities.iter().enumerate() {
-            let key = format!("live-tool-{index}");
-            let title = format!(
-                "{} {}",
-                if tool["state"] == "complete" {
-                    "Completed"
-                } else {
-                    "Running"
-                },
-                tool["name"].as_str().unwrap_or("Tool")
-            );
+        for tool in &view.activities {
+            let key = live_tool_key(view, tool);
+            let title = live_tool_title(tool);
             let details = col()
                 .w_full()
                 .gap(8.)
                 .child(
-                    text(
-                        tool.get("arguments")
-                            .or(tool.get("args"))
-                            .map(|v| {
-                                v.as_str().map(str::to_owned).unwrap_or_else(|| {
-                                    serde_json::to_string_pretty(v).unwrap_or_default()
-                                })
-                            })
-                            .unwrap_or_default(),
-                    )
-                    .font(CODE)
-                    .color(p.muted)
-                    .wrap()
-                    .selectable(true),
+                    text(live_tool_args(tool))
+                        .font(CODE)
+                        .color(p.muted)
+                        .wrap()
+                        .selectable(true)
+                        .text_highlights(literal_marks(s, k, &key, "args")),
                 )
-                .child(markdown_view(
+                .child(markdown_search_view(
                     s,
                     p,
-                    tool["result"]
-                        .as_str()
-                        .or(tool["output"].as_str())
-                        .or(tool["text"].as_str())
-                        .unwrap_or(""),
+                    live_tool_output(tool),
+                    &key,
+                    "output",
                 ));
             stack = stack.child(
-                disclosure(s, k, &owner, &key, &title, details)
-                    .max_w(CONTENT_W)
+                col()
+                    .key(format!("message-{key}"))
                     .w_full()
-                    .pb(8.),
+                    .max_w(CONTENT_W)
+                    .child(
+                        disclosure_search(
+                            s,
+                            k,
+                            &owner,
+                            &key,
+                            &title,
+                            details,
+                            Some((&key, "title")),
+                        )
+                        .w_full()
+                        .pb(8.),
+                    ),
             );
         }
     }
     stack = stack.child(chat_status(s, k, &owner).max_w(CONTENT_W).w_full());
     col()
-        .key(format!(
-            "history-{}-{}",
-            s.profile,
-            s.selected_session.as_deref().unwrap_or("draft")
-        ))
+        .key(s.chat_history_key())
+        .focusable(true)
+        .on_key(|s: &mut Viewer, event, tx| s.chat_search_key(event, tx))
         .role("log")
         .label("Conversation history")
         .grow(1.0)
@@ -252,16 +306,78 @@ fn action(label: &str, owner: DraftScope, value: Action, k: &Kit) -> El {
         .on_press(move |s: &mut Viewer| s.chat_action(owner.clone(), value.clone()))
         .build(k)
 }
-fn disclosure(s: &Viewer, k: &Kit, owner: &DraftScope, key: &str, title: &str, content: El) -> El {
-    let reasoning = title == "Thought";
-    if reasoning && !s.client_settings.show_reasoning() {
-        return el().h(0.);
-    }
-    let open = s
+fn literal_marks(s: &Viewer, k: &Kit, message: &str, part: &str) -> Vec<rune::TextHighlight> {
+    let Some(view) = s
         .chat
+        .searches
+        .views
+        .get(&s.chat_search_owner())
+        .filter(|v| v.open)
+    else {
+        return vec![];
+    };
+    let mut marks = Vec::new();
+    for hit in view
+        .search
+        .matches
+        .iter()
+        .filter(|h| h.message == message && h.part == part)
+    {
+        let current = view.search.current() == Some(hit);
+        for range in &hit.bytes {
+            let bg = if k.dark {
+                k.alpha(k.c.warning.icon, if current { 0.40 } else { 0.24 })
+            } else if current {
+                rune::oklcha(0.82, 0.17, 75.0, 0.58)
+            } else {
+                rune::oklcha(0.86, 0.15, 85.0, 0.42)
+            };
+            let mut mark = rune::TextHighlight::new(range.clone(), bg).key(format!(
+                "search-{}-{}-{}-{}",
+                message, part, range.start, range.end
+            ));
+            if current {
+                mark = mark.ring(
+                    if k.dark {
+                        k.c.warning.icon
+                    } else {
+                        rune::oklch(0.66, 0.16, 70.0)
+                    },
+                    1.0,
+                );
+            }
+            marks.push(mark);
+        }
+    }
+    marks
+}
+fn search_action(
+    s: &Viewer,
+    label: &str,
+    owner: DraftScope,
+    value: Action,
+    k: &Kit,
+    message: &str,
+    part: &str,
+) -> El {
+    let label = label.to_owned();
+    let shown = label.clone();
+    let marks = literal_marks(s, k, message, part);
+    Button::new(label)
+        .variant(ButtonVariant::GhostMuted)
+        .control_size(ControlSize::Small)
+        .label_with(move |font, ink| text(shown).font(font).color(ink).text_highlights(marks))
+        .on_press(move |s: &mut Viewer| s.chat_action(owner.clone(), value.clone()))
+        .build(k)
+}
+pub(crate) fn disclosure_open(s: &Viewer, owner: &DraftScope, key: &str, reasoning: bool) -> bool {
+    if reasoning && !s.client_settings.show_reasoning() {
+        return false;
+    }
+    s.chat
         .views
         .get(owner)
-        .map(|v| {
+        .and_then(|v| {
             if v.collapsed.contains(key) {
                 Some(false)
             } else if v.expanded.contains(key) {
@@ -270,19 +386,46 @@ fn disclosure(s: &Viewer, k: &Kit, owner: &DraftScope, key: &str, title: &str, c
                 None
             }
         })
-        .flatten()
-        .unwrap_or_else(|| s.client_settings.default_open(reasoning, s.simple_mode));
+        .unwrap_or_else(|| s.client_settings.default_open(reasoning, s.simple_mode))
+}
+fn disclosure(s: &Viewer, k: &Kit, owner: &DraftScope, key: &str, title: &str, content: El) -> El {
+    disclosure_search(s, k, owner, key, title, content, None)
+}
+fn disclosure_search(
+    s: &Viewer,
+    k: &Kit,
+    owner: &DraftScope,
+    key: &str,
+    title: &str,
+    content: El,
+    identity: Option<(&str, &str)>,
+) -> El {
+    let reasoning = title == "Thought";
+    if reasoning && !s.client_settings.show_reasoning() {
+        return el().h(0.);
+    }
+    let open = disclosure_open(s, owner, key, reasoning);
     let mut view = col().key(format!("detail-{key}")).w_full().gap(8.);
-    view = view.child(
+    let label = search::disclosure_label(title, open);
+    let toggle = if let Some((message, part)) = identity {
+        search_action(
+            s,
+            &label,
+            owner.clone(),
+            Action::SetDisclosure(key.into(), !open),
+            k,
+            message,
+            part,
+        )
+    } else {
         action(
-            &format!("{} {title}", if open { "⌄" } else { "›" }),
+            &label,
             owner.clone(),
             Action::SetDisclosure(key.into(), !open),
             k,
         )
-        .key(format!("toggle-{key}"))
-        .justify_start(),
-    );
+    };
+    view = view.child(toggle.key(format!("toggle-{key}")).justify_start());
     if open {
         view = view.child(content.px(12.).py(8.).max_h(360.).scroll(ScrollSpec {
             stick_bottom: false,
@@ -301,10 +444,22 @@ fn render_part(
 ) -> El {
     let key = format!("{}-part-{index}", message.key);
     match part {
-        Part::Text(body) => markdown_view(s, p, body).key(key),
-        Part::Reasoning(body) => {
-            disclosure(s, k, owner, &key, "Thought", markdown_view(s, p, body))
-        }
+        Part::Text(body) => markdown_audio_view(
+            s,
+            p,
+            &crate::chat::media_tags::display_text(&message.role, body),
+            &message.key,
+            &format!("part-{index}"),
+        )
+        .key(key),
+        Part::Reasoning(body) => disclosure(
+            s,
+            k,
+            owner,
+            &key,
+            "Thought",
+            markdown_search_view(s, p, body, &message.key, &format!("part-{index}")),
+        ),
         Part::Tool {
             name,
             args,
@@ -312,12 +467,27 @@ fn render_part(
             process,
             ..
         } => {
-            let mut details = col()
-                .w_full()
-                .gap(8.)
-                .child(text(args).font(CODE).color(p.muted).wrap().selectable(true));
+            let mut details = col().w_full().gap(8.).child(
+                text(args)
+                    .font(CODE)
+                    .color(p.muted)
+                    .wrap()
+                    .selectable(true)
+                    .text_highlights(literal_marks(
+                        s,
+                        k,
+                        &message.key,
+                        &format!("part-{index}-args"),
+                    )),
+            );
             if let Some(output) = output {
-                details = details.child(markdown_view(s, p, output));
+                details = details.child(markdown_search_view(
+                    s,
+                    p,
+                    output,
+                    &message.key,
+                    &format!("part-{index}"),
+                ));
             }
             if let Some(process) = process {
                 details = details.child(action(
@@ -327,20 +497,14 @@ fn render_part(
                     k,
                 ));
             }
-            disclosure(
+            disclosure_search(
                 s,
                 k,
                 owner,
                 &key,
-                &format!(
-                    "{} {name}",
-                    if output.is_some() {
-                        "Completed"
-                    } else {
-                        "Called"
-                    }
-                ),
+                &search::tool_caption(name, output.is_some()),
                 details,
+                Some((&message.key, &format!("part-{index}-title"))),
             )
         }
         Part::Image { source, label } => {
@@ -392,25 +556,56 @@ fn render_part(
                     k,
                 ));
             }
-            image.child(action(
-                &if media.is_none() {
-                    format!("Load {label}")
-                } else {
-                    label.clone()
-                },
+            image.child(search_action(
+                s,
+                &search::image_label(label, media.is_some()),
                 owner.clone(),
                 Action::Image(source.clone()),
                 k,
+                &message.key,
+                &format!("part-{index}-label"),
             ))
         }
-        Part::File { path, label } => action(
-            &format!("↗ {label}"),
-            owner.clone(),
-            Action::File(path.clone()),
-            k,
-        )
-        .key(key)
-        .justify_start(),
+        Part::File { path, label } => {
+            let open = search_action(
+                s,
+                &search::file_label(label),
+                owner.clone(),
+                Action::File(path.clone()),
+                k,
+                &message.key,
+                &format!("part-{index}-label"),
+            )
+            .justify_start();
+            if !baseline_audio_extension(path) {
+                return open.key(key);
+            }
+            let identity = (
+                owner.clone(),
+                s.composer.editor_id().as_str().to_owned(),
+                message.key.clone(),
+                crate::app::InlineAudioOccurrence::File(index),
+                path.clone(),
+            );
+            let mounted_identity = identity.clone();
+            let mounted_label = label.clone();
+            let mut body = col()
+                .key(format!("{key}-audio-{identity:?}"))
+                .w_full()
+                .child(open)
+                .on_mount_change(move |s: &mut Viewer, mounted| {
+                    s.inline_audio_mount(mounted_identity.clone(), mounted_label.clone(), mounted)
+                });
+            if let Some(id) = s.inline_audio.get(&identity) {
+                body = body.child(super::media_player::inline(
+                    &s.media_players,
+                    *id,
+                    k,
+                    |s: &mut Viewer| &mut s.media_players,
+                ));
+            }
+            body
+        }
     }
 }
 fn message_actions(s: &Viewer, k: &Kit, owner: &DraftScope, message: &Message) -> El {
@@ -682,7 +877,175 @@ pub fn slash_panel(s: &Viewer, k: &Kit) -> El {
     panel
 }
 
-fn markdown_view(s: &Viewer, p: &Pal, src: &str) -> El {
+fn baseline_audio_extension(path: &str) -> bool {
+    let extension = path
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(path)
+        .rsplit('.')
+        .next()
+        .unwrap_or("");
+    matches!(
+        extension.to_ascii_lowercase().as_str(),
+        "flac" | "m4a" | "mp3" | "ogg" | "opus" | "wav"
+    )
+}
+
+pub(crate) fn markdown_audio_path(target: &str) -> Option<String> {
+    let path = match url::Url::parse(target) {
+        Ok(url) if url.scheme() == "file" => {
+            let encoded_path = url.path().to_ascii_lowercase();
+            if encoded_path.contains("%2f") || encoded_path.contains("%5c") {
+                return None;
+            }
+            url.to_file_path().ok()?.to_string_lossy().into_owned()
+        }
+        Err(url::ParseError::RelativeUrlWithoutBase)
+            if std::path::Path::new(target).is_absolute() =>
+        {
+            target.to_owned()
+        }
+        _ => return None,
+    };
+    baseline_audio_extension(target).then_some(path)
+}
+
+// Only generated #media links opt into external playback; ordinary HTTP links stay links.
+fn decoded_media_target(destination: &str) -> Option<String> {
+    let encoded = destination.strip_prefix("#media:")?;
+    let mut bytes = Vec::with_capacity(encoded.len());
+    let mut iter = encoded.bytes();
+    while let Some(b) = iter.next() {
+        if b == b'%' {
+            let hi = (iter.next()? as char).to_digit(16)?;
+            let lo = (iter.next()? as char).to_digit(16)?;
+            bytes.push((hi * 16 + lo) as u8);
+        } else {
+            bytes.push(b);
+        }
+    }
+    String::from_utf8(bytes).ok()
+}
+
+fn audio_target(destination: &str) -> Option<(String, bool)> {
+    if destination.starts_with("#media:") {
+        let target = decoded_media_target(destination)?;
+        if !baseline_audio_extension(&target) {
+            return None;
+        }
+        if let Ok(url) = url::Url::parse(&target) {
+            if matches!(url.scheme(), "http" | "https")
+                && url.username().is_empty()
+                && url.password().is_none()
+                && url.host_str().is_some()
+            {
+                return Some((target, true));
+            }
+        }
+        return markdown_audio_path(&target).map(|path| (path, true));
+    }
+    markdown_audio_path(destination).map(|path| (path, false))
+}
+
+fn audio_label(path: &str) -> String {
+    let pathname = path.split(['?', '#']).next().unwrap_or(path);
+    pathname.rsplit('/').next().unwrap_or(pathname).to_owned()
+}
+
+pub(crate) fn markdown_audio_ranges(src: &str) -> Vec<std::ops::Range<usize>> {
+    let ranges = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let captured = ranges.clone();
+    let _ = Markdown::new(src)
+        .embed_links(move |occurrence, _| {
+            audio_target(&occurrence.destination)?;
+            captured.borrow_mut().push(occurrence.source.clone());
+            Some(col())
+        })
+        .build(&Kit::neutral(false));
+    let result = ranges.borrow().clone();
+    result
+}
+
+pub(crate) fn markdown_audio_labels(src: &str) -> Vec<(usize, String)> {
+    let ranges = markdown_audio_ranges(src);
+    rune_kit::markdown::link_occurrences_cached(src)
+        .into_iter()
+        .filter_map(|occurrence| {
+            if !ranges.contains(&occurrence.source) {
+                return None;
+            }
+            let (path, _) = audio_target(&occurrence.destination)?;
+            Some((occurrence.source.start, audio_label(&path)))
+        })
+        .collect()
+}
+
+fn markdown_audio_view(s: &Viewer, p: &Pal, src: &str, message: &str, part: &str) -> El {
+    let kit = Kit::neutral(p.dark);
+    let mut embeds = std::collections::HashMap::new();
+    for occurrence in rune_kit::markdown::link_occurrences_cached(src) {
+        let Some((path, media)) = audio_target(&occurrence.destination) else {
+            continue;
+        };
+        let label = audio_label(&path);
+        let identity = (
+            s.composer_scope(),
+            s.composer.editor_id().as_str().to_owned(),
+            message.to_owned(),
+            if media {
+                crate::app::InlineAudioOccurrence::Media {
+                    part: part.to_owned(),
+                    source: occurrence.source.clone(),
+                }
+            } else {
+                crate::app::InlineAudioOccurrence::Markdown {
+                    part: part.to_owned(),
+                    source: occurrence.source.clone(),
+                }
+            },
+            path,
+        );
+        let mounted_identity = identity.clone();
+        let mounted_label = label.clone();
+        let marks = literal_marks(
+            s,
+            &kit,
+            message,
+            &format!("{part}-audio-{}-label", occurrence.source.start),
+        );
+        let mut body = col()
+            .key(format!("markdown-audio-{identity:?}"))
+            .w_full()
+            .max_w(448.)
+            .child(text(label).text_highlights(marks))
+            .on_mount_change(move |s: &mut Viewer, mounted| {
+                s.inline_audio_mount(mounted_identity.clone(), mounted_label.clone(), mounted)
+            });
+        if let Some(id) = s.inline_audio.get(&identity) {
+            body = body.child(super::media_player::inline(
+                &s.media_players,
+                *id,
+                &kit,
+                |s: &mut Viewer| &mut s.media_players,
+            ));
+        }
+        embeds.insert(occurrence.source, body);
+    }
+    markdown_search_view_impl(s, p, src, message, part, embeds)
+}
+
+fn markdown_search_view(s: &Viewer, p: &Pal, src: &str, message: &str, part: &str) -> El {
+    markdown_search_view_impl(s, p, src, message, part, std::collections::HashMap::new())
+}
+
+fn markdown_search_view_impl(
+    s: &Viewer,
+    p: &Pal,
+    src: &str,
+    message: &str,
+    part: &str,
+    embeds: std::collections::HashMap<std::ops::Range<usize>, El>,
+) -> El {
     let kit = Kit::neutral(p.dark);
     let style = MarkdownStyle::from_kit(&kit)
         .text(p.text)
@@ -698,12 +1061,44 @@ fn markdown_view(s: &Viewer, p: &Pal, src: &str) -> El {
         .heading_font(3, s.client_settings.prose(H3))
         .code_block_font(s.client_settings.prose(CODE));
     let owner = s.composer_scope();
+    let marks = s
+        .chat
+        .searches
+        .views
+        .get(&s.chat_search_owner())
+        .filter(|v| v.open)
+        .map(|v| {
+            v.search
+                .matches
+                .iter()
+                .filter(|hit| hit.message == message && hit.part == part)
+                .map(|hit| {
+                    (
+                        hit.bytes.clone(),
+                        rune_kit::markdown::Highlight::new()
+                            .current_match(v.search.current() == Some(hit))
+                            .key(format!(
+                                "search-{}-{}-{}-{}",
+                                message,
+                                part,
+                                hit.bytes.first().map_or(0, |r| r.start),
+                                hit.bytes.last().map_or(0, |r| r.end)
+                            )),
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     Markdown::new(src)
+        .embed_links(move |occurrence, _| embeds.get(&occurrence.source).cloned())
         .style(style)
+        .highlights(marks)
         .on_link_tx(move |s: &mut Viewer, target, tx| {
             if s.composer_scope() != owner {
                 return;
             }
+            let decoded = decoded_media_target(target);
+            let target = decoded.as_deref().unwrap_or(target);
             match url::Url::parse(target) {
                 Ok(url)
                     if matches!(url.scheme(), "http" | "https")
@@ -739,4 +1134,77 @@ fn markdown_view(s: &Viewer, p: &Pal, src: &str) -> El {
         })
         .build(&kit)
         .selectable(true)
+}
+
+pub fn search_bar(s: &Viewer, k: &Kit) -> El {
+    let owner = s.chat_search_owner();
+    let Some(view) = s.chat.searches.views.get(&owner).filter(|v| v.open) else {
+        return el().h(0.);
+    };
+    let edit_owner = owner.clone();
+    let input = TextInput::new(&view.input)
+        .placeholder("Find in conversation")
+        .on_edit(move |s: &mut Viewer| &mut s.chat.searches.view(edit_owner.clone()).input)
+        .on_change(|s: &mut Viewer, tx| s.reveal_chat_search(None, tx))
+        .on_key(|s: &mut Viewer, event, tx| s.chat_search_input_key(event, tx))
+        .build(k)
+        .key("chat-search-input")
+        .w(220.);
+    let count = if view.input.text.is_empty() {
+        String::new()
+    } else {
+        format!("{} / {}", view.search.ordinal(), view.search.matches.len())
+    };
+    row()
+        .key("chat-search-bar")
+        .w_full()
+        .justify_end()
+        .center_y()
+        .gap(4.)
+        .px(24.)
+        .py(6.)
+        .child(input)
+        .child(text(count).font(k.ty.small).color(k.c.text_muted))
+        .child(
+            Button::new("↑")
+                .variant(ButtonVariant::GhostMuted)
+                .control_size(ControlSize::Small)
+                .disabled(view.search.matches.is_empty())
+                .on_press_tx(|s: &mut Viewer, tx| s.reveal_chat_search(Some(false), tx))
+                .build(k)
+                .label("Previous match"),
+        )
+        .child(
+            Button::new("↓")
+                .variant(ButtonVariant::GhostMuted)
+                .control_size(ControlSize::Small)
+                .disabled(view.search.matches.is_empty())
+                .on_press_tx(|s: &mut Viewer, tx| s.reveal_chat_search(Some(true), tx))
+                .build(k)
+                .label("Next match"),
+        )
+        .child(
+            Button::new("×")
+                .variant(ButtonVariant::GhostMuted)
+                .control_size(ControlSize::Small)
+                .on_press_tx(move |s: &mut Viewer, tx| {
+                    let v = s.chat.searches.view(owner.clone());
+                    v.open = false;
+                    v.input.focused = false;
+                    tx.blur();
+                    tx.instant();
+                })
+                .build(k)
+                .label("Close search"),
+        )
+}
+
+#[cfg(test)]
+pub(crate) fn search_test_timeline(s: &Viewer, _: &mut rune::Cx<Viewer>) -> El {
+    timeline(s, super::palette::pal(true)).size(800., 600.)
+}
+
+#[cfg(test)]
+pub(crate) fn short_search_test_timeline(s: &Viewer, _: &mut rune::Cx<Viewer>) -> El {
+    timeline(s, super::palette::pal(true)).size(800., 180.)
 }

@@ -229,12 +229,16 @@ fn workspace_tabs(s: &Viewer, k: &Kit) -> El {
     }
     for (index, tab) in s.tabs.iter().enumerate() {
         let activate_owner = crate::composer::DraftScope {
+            draft_origin: None,
+            profile_intent: tab.profile_intent,
             connection: s.composer_scope().connection,
             profile: tab.profile.clone(),
             session: Some(tab.session.clone()),
         };
         let close_owner = activate_owner.clone();
-        let active = tab.profile == s.profile && s.selected_session.as_ref() == Some(&tab.session);
+        let active = tab.profile == s.profile
+            && tab.profile_intent == s.composer_scope().profile_intent
+            && s.selected_session.as_ref() == Some(&tab.session);
         let owner = s
             .profiles
             .iter()
@@ -369,7 +373,10 @@ pub fn bots_sidebar(s: &Viewer, p: &Pal, k: &Kit) -> El {
     for bot in &s.profiles {
         let name = bot.name.clone();
         let active = s.bot_is_active(&bot.name);
-        let menu_target = ConversationTarget::Bot(name.clone());
+        let menu_target = ConversationTarget::Bot {
+            profile: name.clone(),
+            profile_intent: crate::source::ProfileIntent::Backend,
+        };
         let preview = bot
             .canonical_session
             .as_ref()

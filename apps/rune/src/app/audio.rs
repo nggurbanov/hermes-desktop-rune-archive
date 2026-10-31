@@ -268,7 +268,12 @@ impl Viewer {
         }
         changed
     }
-    fn send_voice_text(&mut self, scope: DraftScope, text: String, context: Option<String>) {
+    pub(in crate::app) fn send_voice_text(
+        &mut self,
+        scope: DraftScope,
+        text: String,
+        context: Option<String>,
+    ) {
         if self.fixture || scope != self.composer_scope() {
             return;
         }
@@ -283,6 +288,7 @@ impl Viewer {
             .map(|v| v.completion)
             .unwrap_or(0);
         self.spoken_completion.insert(scope.clone(), baseline);
+        let (cwd, cwd_explicit) = self.project_send_cwd(&draft, self.bot_empty);
         let input = crate::conversation::SendInput {
             canonical_bot: self.bot_empty,
             voice_turn: true,
@@ -294,8 +300,8 @@ impl Viewer {
             reasoning: draft.reasoning.clone(),
             service_tier: draft.service_tier.clone(),
             approval_mode: draft.approval_mode.clone(),
-            cwd: draft.cwd.clone(),
-            cwd_explicit: draft.cwd_explicit,
+            cwd,
+            cwd_explicit,
             model_changed: draft.model_changed,
             reasoning_changed: draft.reasoning_changed,
             service_tier_changed: draft.service_tier_changed,

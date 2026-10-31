@@ -1,5 +1,7 @@
 # Legacy routing contract
 
+Scope update: managed Nous/Hermes Cloud portal, organization discovery and hosted-agent selection are excluded from this parity phase. Existing Cloud configuration is preserved without automatic connection. Generic remote URL OAuth and access headers remain in scope. The baseline descriptions below are retained as historical reference.
+
 This is the retained Electron behavior that the next native resolver must
 implement. Saved-source fleet UI does not close this dependency. Authority:
 `electron/desktop-remote-route.ts`, `connection-config.ts`,

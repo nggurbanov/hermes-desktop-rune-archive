@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(target_os = "linux")]
+use gtk::prelude::*;
 use std::{
     io::Read,
     net::{TcpListener, TcpStream},
@@ -94,7 +96,7 @@ pub(super) fn run() -> Result<(), String> {
         .build(&window)
         .map_err(|_| "The native host browser could not be created")?;
     #[cfg(target_os = "linux")]
-    if let Some(settings) = webview.webview().settings() {
+    if let Some(settings) = WebViewExt::settings(&webview.webview()) {
         settings.set_enable_media_stream(media);
         settings.set_enable_webrtc(media);
     }
@@ -122,7 +124,10 @@ pub(super) fn run() -> Result<(), String> {
                 emit(json!({"type":"host-window-state","focused":window.is_focused(),"visible":window.is_visible()}));
             }
             Event::UserEvent(value) if value["type"] == "focus" && closing.is_none() => {
-                window.set_visible(true); window.set_focus();
+                #[cfg(target_os = "linux")]
+                { let gtk_window = window.gtk_window(); gtk_window.show_all(); gtk_window.deiconify(); gtk_window.present(); }
+                #[cfg(not(target_os = "linux"))]
+                { window.set_minimized(false); window.set_visible(true); window.set_focus(); }
                 emit(json!({"type":"host-window-state","focused":window.is_focused(),"visible":window.is_visible()}));
             }
             Event::UserEvent(value) if value["type"] == "close" => {

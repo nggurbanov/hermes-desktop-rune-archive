@@ -177,7 +177,7 @@ pub fn activity(value: &Value) -> Part {
 }
 pub fn project(rows: &[HistoryMessage]) -> Vec<Message> {
     let mut messages: Vec<Message> = vec![];
-    for (index, row) in rows.iter().enumerate() {
+    for row in rows {
         let raw = &row.raw;
         if raw["display_kind"] == "hidden" {
             continue;
@@ -250,10 +250,7 @@ pub fn project(rows: &[HistoryMessage]) -> Vec<Message> {
             content_parts(&Value::Array(attachments.clone()), &mut parts);
         }
         messages.push(Message {
-            key: row
-                .row_id()
-                .map(|id| format!("row-{id}"))
-                .unwrap_or_else(|| format!("live-{index}-{}", row.role)),
+            key: row.display_key(),
             row: row.row_id(),
             through: row.row_id(),
             timestamp: raw["timestamp"].as_f64(),
@@ -313,5 +310,17 @@ mod tests {
             [Part::Text(_), Part::Image { .. }, Part::File { .. }]
         ));
         assert!(matches!(&p[1].parts[0],Part::Reasoning(s)if s=="Checked."));
+    }
+    #[test]
+    fn search_identity_is_retained_for_duplicate_rowless_messages() {
+        let first = HistoryMessage::text("assistant", "same");
+        let second = HistoryMessage::text("assistant", "same");
+        let before = project(&[first.clone(), second.clone()]);
+        assert_ne!(before[0].key, before[1].key);
+        let mut streamed = second.clone();
+        streamed.content.push_str(" extended");
+        let after = project(&[HistoryMessage::text("user", "earlier"), first, streamed]);
+        assert_eq!(before[0].key, after[1].key);
+        assert_eq!(before[1].key, after[2].key);
     }
 }

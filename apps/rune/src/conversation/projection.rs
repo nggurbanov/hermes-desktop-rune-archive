@@ -5,11 +5,63 @@ pub(crate) struct Delta {
     turn: String,
     segment: u64,
     units: usize,
-    row: usize,
+    pub(super) row: usize,
 }
 impl ConversationView {
+    pub(crate) fn prepend_history(&mut self, page: Vec<HistoryMessage>) {
+        let identity = self
+            .delta
+            .as_ref()
+            .and_then(|delta| self.messages.get(delta.row))
+            .map(HistoryMessage::display_key);
+        self.messages = super::history::older(std::mem::take(&mut self.messages), page);
+        if let (Some(identity), Some(delta)) = (identity, self.delta.as_mut()) {
+            if let Some(index) = self
+                .messages
+                .iter()
+                .position(|row| row.display_key() == identity)
+            {
+                delta.row = index;
+            }
+        }
+    }
     pub(crate) fn install(&mut self, snapshot: Snapshot, history: crate::gateway::History) {
         let same_authority = self.authority == snapshot.authority && self.stored == snapshot.stored;
+        let bridge = self
+            .search_receipt
+            .take()
+            .filter(|(_, generation, _, authority, runtime, stored)| {
+                *authority == snapshot.authority
+                    && *generation == snapshot.generation
+                    && runtime == &snapshot.runtime
+                    && stored == &snapshot.stored
+                    && same_authority
+            })
+            .and_then(|(admission, generation, row, _, _, _)| {
+                (history
+                    .messages
+                    .iter()
+                    .filter(|message| message.row_id() == Some(row))
+                    .count()
+                    == 1)
+                    .then(|| (format!("live-turn-{generation}-{admission}"), row))
+            });
+        self.search_tool_bridge = bridge
+            .as_ref()
+            .filter(|(turn, _)| *turn == crate::view::transcript::live_turn_key(self))
+            .map(|(turn, _)| {
+                self.activities
+                    .iter()
+                    .filter_map(|tool| {
+                        tool["id"]
+                            .as_str()
+                            .filter(|id| !id.is_empty())
+                            .map(|id| (format!("{turn}-tool-{id}"), id.to_owned()))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.search_reasoning_bridge = bridge;
         self.canonical = snapshot.canonical;
         self.metadata = snapshot.metadata.clone();
         let deferred = (self.stored == snapshot.stored)
@@ -96,6 +148,7 @@ impl ConversationView {
                 if !row.raw.is_object() {
                     row.raw = serde_json::json!({});
                 }
+                row.keep_live_key |= row.row_id().is_none();
                 row.raw["row_id"] = Value::from(id);
             }
         }
@@ -112,6 +165,7 @@ impl ConversationView {
                 if !row.raw.is_object() {
                     row.raw = serde_json::json!({});
                 }
+                row.keep_live_key |= row.row_id().is_none();
                 row.raw["row_id"] = Value::from(id);
                 row.raw["persisted_turn"] = receipt.clone();
             }
@@ -215,6 +269,9 @@ impl ConversationView {
                 }
             }
             "message.start" => {
+                self.search_receipt = None;
+                self.search_reasoning_bridge = None;
+                self.search_tool_bridge.clear();
                 self.policy.turn_started();
                 self.activities.clear();
                 self.reasoning.clear();
@@ -240,6 +297,7 @@ impl ConversationView {
                             role: "user".into(),
                             content: text.into(),
                             raw: p.clone(),
+                            ..Default::default()
                         });
                     }
                 }
@@ -270,6 +328,7 @@ impl ConversationView {
                         role: "assistant".into(),
                         content: String::new(),
                         raw: p.clone(),
+                        ..Default::default()
                     });
                     self.delta = Some(Delta {
                         turn: turn.into(),
@@ -312,12 +371,38 @@ impl ConversationView {
                             role: "assistant".into(),
                             content: text.into(),
                             raw: p.clone(),
+                            ..Default::default()
                         });
                         self.active_text.push_str(text);
                     }
                 }
             }
             "message.complete" => {
+                self.search_receipt = event
+                    .admission
+                    .as_ref()
+                    .filter(|id| self.active_admission.as_ref() == Some(*id))
+                    .zip(
+                        event
+                            .generation
+                            .filter(|generation| Some(*generation) == self.active_generation),
+                    )
+                    .zip(
+                        p.get("persisted_turn")
+                            .filter(|receipt| receipt["complete"] == true)
+                            .and_then(|receipt| receipt["final_assistant_row_id"].as_u64())
+                            .filter(|row| *row > 0),
+                    )
+                    .map(|((admission, generation), row)| {
+                        (
+                            admission.clone(),
+                            generation,
+                            row,
+                            self.authority,
+                            self.runtime.clone(),
+                            self.stored.clone(),
+                        )
+                    });
                 self.completion = self.completion.saturating_add(1);
                 self.completed_admission = event.admission.clone();
                 self.completed_input = event
@@ -360,6 +445,7 @@ impl ConversationView {
                             role: "assistant".into(),
                             content: text.into(),
                             raw: p.clone(),
+                            ..Default::default()
                         });
                     }
                 }
@@ -577,6 +663,65 @@ mod tests {
         }
     }
     #[test]
+    fn reasoning_bridge_requires_matching_completion_receipt_and_history_owner() {
+        fn snapshot(authority: u64) -> Snapshot {
+            Snapshot {
+                metadata: json!({}),
+                runtime: "live".into(),
+                stored: "stored".into(),
+                canonical: true,
+                revision: 1,
+                generation: 2,
+                authority,
+                running: false,
+                epoch: "epoch".into(),
+                sequence: 3,
+                prompts: vec![],
+                pending: vec![],
+                info: json!({}),
+                messages: vec![],
+            }
+        }
+        fn completed() -> ConversationView {
+            let mut view = ConversationView {
+                runtime: "live".into(),
+                stored: "stored".into(),
+                authority: 7,
+                generation: 2,
+                replay_epoch: "epoch".into(),
+                active_admission: Some("admission".into()),
+                active_generation: Some(2),
+                ..Default::default()
+            };
+            let mut done = event(
+                1,
+                json!({"persisted_turn":{"complete":true,"final_assistant_row_id":44}}),
+            );
+            done.kind = "message.complete".into();
+            done.admission = Some("admission".into());
+            assert!(view.apply_event(&done));
+            view
+        }
+        let history = || crate::gateway::History {
+            messages: vec![HistoryMessage::from_row(
+                &json!({"row_id":44,"role":"assistant","reasoning":"thought"}),
+            )],
+            ..Default::default()
+        };
+        let mut same = completed();
+        same.install(snapshot(7), history());
+        assert_eq!(
+            same.search_reasoning_bridge,
+            Some(("live-turn-2-admission".into(), 44))
+        );
+        let mut other = completed();
+        other.install(snapshot(8), history());
+        assert!(other.search_reasoning_bridge.is_none());
+        let mut missing = completed();
+        missing.install(snapshot(7), crate::gateway::History::default());
+        assert!(missing.search_reasoning_bridge.is_none());
+    }
+    #[test]
     fn active_progress_binds_only_the_actual_admission_and_drops_interrupted_generation() {
         let mut view = ConversationView {
             runtime: "live".into(),
@@ -709,5 +854,31 @@ mod tests {
         ));
         assert_eq!(view.messages[0].content, "😀 ok");
         assert!(view.error.as_ref().unwrap().contains("gap"));
+    }
+    #[test]
+    fn backfill_preserves_stream_row_and_search_anchor() {
+        let mut view = ConversationView {
+            runtime: "live".into(),
+            replay_epoch: "epoch".into(),
+            ..Default::default()
+        };
+        assert!(view.apply_event(&event(
+            1,
+            json!({"text":"needle", "turn_id":"t", "segment":0, "offset":0})
+        )));
+        let original = crate::chat::projection::project(&view.messages)[0]
+            .key
+            .clone();
+        view.prepend_history(vec![HistoryMessage::from_row(
+            &json!({"row_id":1,"role":"user","text":"earlier"}),
+        )]);
+        assert!(view.apply_event(&event(
+            2,
+            json!({"text":" more", "turn_id":"t", "segment":0, "offset":6})
+        )));
+        let projected = crate::chat::projection::project(&view.messages);
+        assert_eq!(projected[1].key, original);
+        assert_eq!(projected[0].text, "earlier");
+        assert_eq!(projected[1].text, "needle more");
     }
 }

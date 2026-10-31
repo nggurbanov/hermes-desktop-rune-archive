@@ -6,9 +6,13 @@ use crate::{
 use rune::Waker;
 use std::sync::mpsc::{self, Receiver, Sender};
 
-type Owner = (u64, String);
+type Owner = (u64, String, crate::source::ProfileIntent);
 fn owner(scope: &DraftScope) -> Owner {
-    (scope.connection, scope.profile.clone())
+    (
+        scope.connection,
+        scope.profile.clone(),
+        scope.profile_intent,
+    )
 }
 
 #[derive(Default)]
@@ -66,8 +70,14 @@ impl Voice {
                 for newer in requests.try_iter() {
                     req = newer;
                 }
-                let result = Gateway::connect(&req.connection)
-                    .and_then(|mut g| g.voice_status(&req.owner.1));
+                let result = Gateway::connect(&req.connection).and_then(|mut g| {
+                    let provenance = crate::gateway::audio::provenance(
+                        &req.connection,
+                        &req.owner.1,
+                        req.owner.2,
+                    )?;
+                    g.voice_status_for(&provenance)
+                });
                 if replies
                     .send(Reply {
                         id: req.id,
@@ -144,6 +154,8 @@ mod tests {
     use crate::gateway::VoiceEngine;
     fn scope(connection: u64, profile: &str) -> DraftScope {
         DraftScope {
+            draft_origin: None,
+            profile_intent: crate::source::ProfileIntent::Backend,
             connection,
             profile: profile.into(),
             session: Some("stored".into()),
@@ -177,6 +189,7 @@ mod tests {
         );
         let other_session = DraftScope {
             session: Some("other".into()),
+            draft_origin: None,
             ..a.clone()
         };
         assert_eq!(
@@ -210,5 +223,43 @@ mod tests {
         ));
         assert!(voice.status(&a).is_none());
         assert!(voice.error(&a).is_some());
+    }
+    #[test]
+    fn matching_profile_names_with_opposite_intents_do_not_share_status_or_errors() {
+        let backend = scope(1, "default");
+        let mut native = backend.clone();
+        native.profile_intent = crate::source::ProfileIntent::NativeSelf;
+        let mut voice = Voice::default();
+        voice.pending = Some((1, owner(&backend)));
+        assert!(voice.apply(
+            Reply {
+                id: 1,
+                owner: owner(&backend),
+                result: Err("backend error".into())
+            },
+            &backend
+        ));
+        assert_eq!(voice.error(&backend), Some("backend error"));
+        assert!(voice.error(&native).is_none());
+        voice.pending = Some((2, owner(&native)));
+        assert!(!voice.apply(
+            Reply {
+                id: 1,
+                owner: owner(&backend),
+                result: Ok(Some(status()))
+            },
+            &native
+        ));
+        assert!(voice.loading(&native));
+        assert!(voice.apply(
+            Reply {
+                id: 2,
+                owner: owner(&native),
+                result: Ok(Some(status()))
+            },
+            &native
+        ));
+        assert!(voice.status(&native).is_some());
+        assert!(voice.status(&backend).is_none());
     }
 }

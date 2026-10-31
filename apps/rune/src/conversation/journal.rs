@@ -49,7 +49,14 @@ pub(crate) struct Prepared {
     revision: Cell<u64>,
     pub connection: String,
     pub profile: String,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::source::ProfileIntent::is_backend"
+    )]
+    pub profile_intent: crate::source::ProfileIntent,
     pub session: Option<String>,
+    #[serde(default)]
+    pub draft_origin: Option<crate::composer::DraftOrigin>,
     pub submission_id: String,
     pub create_id: String,
     pub input: Input,
@@ -93,7 +100,9 @@ impl Prepared {
             revision: Cell::new(0),
             connection: connection_key(connection)?,
             profile: scope.profile.clone(),
+            profile_intent: scope.profile_intent,
             session: scope.session.clone(),
+            draft_origin: scope.draft_origin.clone(),
             submission_id: uuid::Uuid::new_v4().to_string(),
             create_id: uuid::Uuid::new_v4().to_string(),
             input: Input {
@@ -138,10 +147,13 @@ impl Prepared {
         self.revision.get()
     }
     pub fn verify_owner(&self, connection: &Connection, scope: &DraftScope) -> Result<(), String> {
-        let matches_session = self.session == scope.session || self.stored == scope.session;
+        let matches_session = (self.session == scope.session
+            && (scope.session.is_some() || self.draft_origin == scope.draft_origin))
+            || (self.stored.is_some() && self.stored == scope.session);
         if self.version != 1
             || self.connection != connection_key(connection)?
             || self.profile != scope.profile
+            || self.profile_intent != scope.profile_intent
             || !matches_session
         {
             return Err(
@@ -170,6 +182,8 @@ mod tests {
             token: None,
         };
         let scope = DraftScope {
+            draft_origin: None,
+            profile_intent: crate::source::ProfileIntent::Backend,
             connection: 4,
             profile: "bot".into(),
             session: None,
@@ -220,5 +234,75 @@ mod tests {
         assert!(journal.save(&entry).is_err());
         assert!(journal.entries().unwrap().is_empty());
         fs::remove_dir_all(path).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod profile_intent_tests {
+    use super::*;
+    use crate::source::ProfileIntent;
+    #[test]
+    fn saved_intent_does_not_cross_identical_raw_and_selected_owners() {
+        let connection = Connection::Url {
+            endpoint: "https://fixture.invalid".into(),
+            token: None,
+        };
+        let raw = DraftScope {
+            draft_origin: None,
+            connection: 4,
+            profile: "default".into(),
+            profile_intent: ProfileIntent::Backend,
+            session: Some("same".into()),
+        };
+        let selected = DraftScope {
+            profile_intent: ProfileIntent::NativeSelf,
+            ..raw.clone()
+        };
+        let entry = Prepared::new(&connection, &raw, SendInput::default()).unwrap();
+        let old_json = serde_json::to_value(&entry).unwrap();
+        assert!(old_json.get("profile_intent").is_none());
+        let old: Prepared = serde_json::from_value(old_json).unwrap();
+        assert!(old.verify_owner(&connection, &raw).is_ok());
+        assert!(old.verify_owner(&connection, &selected).is_err());
+        let entry = Prepared::new(&connection, &selected, SendInput::default()).unwrap();
+        let restored: Prepared =
+            serde_json::from_value(serde_json::to_value(&entry).unwrap()).unwrap();
+        assert!(restored.verify_owner(&connection, &selected).is_ok());
+        assert!(restored.verify_owner(&connection, &raw).is_err());
+    }
+    #[test]
+    fn fresh_send_recovery_is_owned_by_its_persisted_origin() {
+        let connection = Connection::Url {
+            endpoint: "https://fixture.invalid".into(),
+            token: None,
+        };
+        let first = DraftScope {
+            connection: 9,
+            profile: "work".into(),
+            profile_intent: crate::source::ProfileIntent::Backend,
+            session: None,
+            draft_origin: Some(crate::composer::DraftOrigin::new()),
+        };
+        let second = DraftScope {
+            draft_origin: Some(crate::composer::DraftOrigin::new()),
+            ..first.clone()
+        };
+        let prepared = Prepared::new(&connection, &first, SendInput::default()).unwrap();
+        let restored: Prepared =
+            serde_json::from_value(serde_json::to_value(prepared).unwrap()).unwrap();
+        assert!(restored.verify_owner(&connection, &first).is_ok());
+        assert!(restored.verify_owner(&connection, &second).is_err());
+        let legacy = DraftScope {
+            draft_origin: None,
+            ..first
+        };
+        let mut value = serde_json::to_value(
+            Prepared::new(&connection, &legacy, SendInput::default()).unwrap(),
+        )
+        .unwrap();
+        value.as_object_mut().unwrap().remove("draft_origin");
+        let restored: Prepared = serde_json::from_value(value).unwrap();
+        assert!(restored.verify_owner(&connection, &legacy).is_ok());
+        assert!(restored.verify_owner(&connection, &second).is_err());
     }
 }

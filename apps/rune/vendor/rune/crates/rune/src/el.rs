@@ -165,6 +165,7 @@ pub struct InputSpec {
     pub(crate) submit: Option<PressFn>,
     pub(crate) key: Option<InputKeyFn>,
     pub(crate) change: Option<PressFn>,
+    pub(crate) display_change: Option<PressFn>,
     pub(crate) paste: Option<InputPasteFn>,
 }
 
@@ -757,6 +758,7 @@ impl ScrollAxes {
 }
 
 pub(crate) type AtBottomFn = Rc<dyn Fn(crate::states::States<'_>, bool)>;
+pub(crate) type MountChangeFn = Rc<dyn Fn(crate::states::States<'_>, bool) -> bool>;
 pub(crate) type VisibleRowsFn = Rc<dyn Fn(crate::states::States<'_>, std::ops::Range<usize>) -> bool>;
 pub(crate) type LayoutFn = Rc<dyn Fn(crate::states::States<'_>, [f32; 4])>;
 pub(crate) type DrawnLayoutFn = Rc<dyn Fn(crate::states::States<'_>, [f32; 4], &mut Tx)>;
@@ -817,6 +819,7 @@ pub struct El {
     pub(crate) on_at_bottom: Option<AtBottomFn>,
     pub(crate) on_far_from_bottom: Option<(f32, AtBottomFn)>,
     pub(crate) on_visible_rows: Option<VisibleRowsFn>,
+    pub(crate) on_mount_change: Option<MountChangeFn>,
     pub(crate) on_layout: Option<LayoutFn>,
     pub(crate) on_screen_layout: Option<LayoutFn>,
     pub(crate) on_drawn_layout: Option<DrawnLayoutFn>,
@@ -909,6 +912,7 @@ fn base(dir: FlexDirection) -> El {
         on_at_bottom: None,
         on_far_from_bottom: None,
         on_visible_rows: None,
+        on_mount_change: None,
         on_layout: None,
         on_screen_layout: None,
         on_drawn_layout: None,
@@ -1072,6 +1076,7 @@ pub fn text_input(edit: &TextEdit, style: TextStyle) -> El {
         submit: None,
         key: None,
         change: None,
+        display_change: None,
         paste: None,
     }));
     e.sync_input_pills();
@@ -1238,6 +1243,13 @@ impl El {
     pub fn on_input_change<S: 'static>(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
         if let Some(input) = &mut self.input {
             input.change = Some(Rc::new(move |s, tx| f(s.cast::<S>().expect("input change state type"), tx)));
+        }
+        self
+    }
+    /// Called when the displayed input text changes, including IME preedit.
+    pub fn on_input_display_change<S: 'static>(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
+        if let Some(input) = &mut self.input {
+            input.display_change = Some(Rc::new(move |s, tx| f(s.cast::<S>().expect("input display change state type"), tx)));
         }
         self
     }
@@ -1537,6 +1549,15 @@ impl El {
         f: impl Fn(&mut S, std::ops::Range<usize>) -> bool + 'static,
     ) -> Self {
         self.on_visible_rows = Some(Rc::new(move |s, r| f(downcast::<S>(s), r)));
+        self
+    }
+
+    /// Called after a node enters or leaves the mounted tree. Return true if view state changed.
+    pub fn on_mount_change<S: 'static>(
+        mut self,
+        f: impl Fn(&mut S, bool) -> bool + 'static,
+    ) -> Self {
+        self.on_mount_change = Some(Rc::new(move |s, mounted| f(downcast::<S>(s), mounted)));
         self
     }
 

@@ -38,6 +38,7 @@ struct Entry {
 struct FocusTarget {
     principal: String,
     profile: String,
+    profile_intent: crate::source::ProfileIntent,
     session: Option<String>,
     bot: bool,
 }
@@ -138,6 +139,8 @@ impl Viewer {
                 s.hydrate_client_preferences(prefs);
             }
             s.profile = record.route.profile.clone();
+            s.profile_intent = record.route.profile_intent;
+            s.draft_origin = record.route.draft_origin.clone();
             s.exact_connection_profile = true;
             s.window.boot_target = Some(record.route);
             s.window.lease = Some(lease);
@@ -188,15 +191,34 @@ impl Viewer {
         if self.connection.is_some() {
             return;
         }
+        self.retire_chat_search_reveals();
         if self.exact_connection_profile {
+            if route.route_profile.is_none()
+                && route.profile_intent == crate::source::ProfileIntent::NativeSelf
+                && matches!(
+                    &route.source,
+                    Some(
+                        crate::client::windows::SourceDescriptor::Legacy { namespace: Some(_) }
+                            | crate::client::windows::SourceDescriptor::Saved {
+                                namespace: Some(_),
+                                ..
+                            }
+                    )
+                )
+            {
+                route.route_profile = Some(route.profile.clone());
+            }
             route.profile = self.profile.clone();
+            route.profile_intent = crate::source::ProfileIntent::Backend;
             route.session = None;
             route.title = None;
             route.canonical_bot = false;
         } else {
             self.profile = route.profile.clone();
+            self.profile_intent = route.profile_intent;
             self.exact_connection_profile = true;
         }
+        self.draft_origin = route.draft_origin.clone();
         self.window.boot_target = Some(route);
     }
     pub(crate) fn window_ready(&mut self, app: AppHandle<Viewer>, host: WindowHandle) {
@@ -247,6 +269,8 @@ impl Viewer {
         self.window.menu = None;
     }
     pub(super) fn switching_window_source(&mut self) {
+        self.retire_chat_search_reveals();
+        self.legacy_settings.cancel_login();
         self.window.source = None;
         self.window.pending_fresh = None;
         self.window.retained = None;
@@ -275,29 +299,45 @@ impl Viewer {
         self.sidebar_state.menu = None;
         let mut route = WindowRoute {
             profile: self.profile.clone(),
+            profile_intent: self.profile_intent,
+            route_profile: self
+                .connection
+                .as_ref()
+                .and_then(|connection| connection.wire_policy())
+                .and_then(|policy| policy.selected())
+                .map(|selected| selected.window_alias().to_owned()),
             ..WindowRoute::default()
         };
         let kind = match target {
-            Some(ConversationTarget::Session { profile, id, title }) => {
+            Some(ConversationTarget::Session {
+                profile,
+                id,
+                title,
+                profile_intent,
+            }) => {
+                route.profile_intent = profile_intent;
                 route.profile = profile;
                 route.session = Some(id);
                 route.title = Some(title);
                 BootstrapKind::InteractiveSession
             }
-            Some(ConversationTarget::Bot(profile)) => {
+            Some(ConversationTarget::Bot {
+                profile,
+                profile_intent,
+            }) => {
+                route.profile_intent = profile_intent;
                 route.profile = profile;
                 route.canonical_bot = true;
                 BootstrapKind::ProfilePinned
             }
             None => BootstrapKind::PeerInherited,
         };
-        let resolver = self
-            .window
-            .retained
+        let source = match self
+            .connection
             .as_ref()
-            .map(|retained| retained._resolver.clone())
-            .or_else(|| self.connections.resolver());
-        let source = match Source::capture(self.connection.as_ref(), resolver) {
+            .map(|_| self.current_source_binding().map(Source::bound))
+            .transpose()
+        {
             Ok(source) => source,
             Err(error) => {
                 self.client_error = Some(error);
@@ -323,6 +363,7 @@ impl Viewer {
             .map(|principal| FocusTarget {
                 principal,
                 profile: route.profile.clone(),
+                profile_intent: route.profile_intent,
                 session: route.session.clone(),
                 bot: route.canonical_bot,
             });
@@ -507,16 +548,29 @@ impl Viewer {
         let Some(route) = self.window.boot_target.take() else {
             return false;
         };
-        if !self
-            .profiles
-            .iter()
-            .any(|profile| profile.name == route.profile)
+        if route.session.is_none() && !route.canonical_bot {
+            return true;
+        }
+        if route.profile_intent == crate::source::ProfileIntent::Backend
+            && !self
+                .profiles
+                .iter()
+                .any(|profile| profile.name == route.profile)
         {
             self.error = Some("The captured profile is no longer served by this agent".into());
             return true;
         }
         if route.canonical_bot {
-            self.open_bot(route.profile);
+            self.open_target(
+                ConversationTarget::Bot {
+                    profile: route.profile,
+                    profile_intent: route.profile_intent,
+                },
+                false,
+            );
+            if let Some(pending) = self.pending_bot.as_mut() {
+                pending.restore_origin = route.draft_origin;
+            }
         } else if let Some(id) = route.session {
             let title = route
                 .title
@@ -541,13 +595,25 @@ impl Viewer {
             .transpose()?;
         let bot = self.bot_is_active(&self.profile);
         let route = WindowRoute {
+            profile_intent: self.profile_intent,
             source,
             profile: self.profile.clone(),
+            route_profile: self
+                .connection
+                .as_ref()
+                .and_then(|connection| connection.wire_policy())
+                .and_then(|policy| policy.selected())
+                .map(|selected| selected.window_alias().to_owned()),
             session: if bot {
                 None
             } else {
                 self.selected_session.clone()
             },
+            draft_origin: self
+                .selected_session
+                .is_none()
+                .then(|| self.draft_origin.clone())
+                .flatten(),
             title: if bot {
                 None
             } else {
@@ -591,6 +657,7 @@ impl Viewer {
                 .map(|principal| FocusTarget {
                     principal,
                     profile: route.profile.clone(),
+                    profile_intent: route.profile_intent,
                     session: route.session.clone(),
                     bot: route.canonical_bot,
                 });
@@ -614,6 +681,7 @@ pub(crate) fn may_close(s: &mut Viewer, _tx: &mut Tx) -> bool {
 }
 impl Viewer {
     fn flush_window_preferences(&mut self) -> Result<(), String> {
+        self.legacy_settings.can_close()?;
         if self.preferences_writable {
             self.preferences_retry_at = None;
             self.save_client_preferences()?;
@@ -659,6 +727,33 @@ impl Viewer {
                 .as_ref()
                 .is_some_and(|lease| lease.record().kind == BootstrapKind::ProfilePinned)
     }
+    pub(super) fn has_namespaced_window_route(&self) -> bool {
+        use crate::client::windows::SourceDescriptor;
+        self.window.boot_target.as_ref().is_some_and(|route| {
+            matches!(
+                &route.source,
+                Some(
+                    SourceDescriptor::Legacy { namespace: Some(_) }
+                        | SourceDescriptor::Saved {
+                            namespace: Some(_),
+                            ..
+                        }
+                )
+            )
+        })
+    }
+    pub(super) fn restore_verified_window_target(&mut self, route: WindowRoute) {
+        self.window.boot_target = Some(route);
+    }
+    pub(super) fn should_resolve_legacy_startup(&self) -> bool {
+        self.connection.is_none()
+            && self.window.source.is_none()
+            && self
+                .window
+                .boot_target
+                .as_ref()
+                .is_none_or(|route| route.source.is_none())
+    }
     pub(super) fn is_primary_window(&self) -> bool {
         self.window
             .lease
@@ -703,29 +798,39 @@ impl Viewer {
         resolver: crate::connections::Resolver,
         lease: crate::connections::Lease,
     ) {
-        if !lease.is_valid()
-            || self
-                .connection
-                .as_ref()
-                .and_then(|c| crate::client::connection_key(c).ok())
-                != crate::client::connection_key(lease.connection()).ok()
+        match crate::source::Binding::new(lease.connection().clone(), Some(lease)) {
+            Ok(binding) => self.retain_window_binding(binding.retaining_resolver(resolver)),
+            Err(error) => self.client_error = Some(error),
+        }
+    }
+    pub(super) fn retain_window_binding(&mut self, binding: crate::source::Binding) {
+        if self
+            .connection
+            .as_ref()
+            .and_then(|c| crate::client::connection_key(c).ok())
+            != Some(binding.stamp().principal().to_owned())
         {
             self.client_error = Some("The activated source lease is no longer valid".into());
             return;
         }
-        self.window.retained = Some(Retained {
-            _resolver: resolver,
-            lease,
-        });
+        match Retained::from_binding(&binding) {
+            Ok(retained) => self.window.retained = retained,
+            Err(error) => self.client_error = Some(error),
+        }
     }
     pub fn window_source_valid(&self) -> bool {
-        if self.fixture || !matches!(self.connection, Some(Connection::Saved { .. })) {
+        if self.fixture {
             return true;
         }
-        self.window
-            .retained
-            .as_ref()
-            .is_some_and(|retained| retained.lease.is_valid())
+        match &self.connection {
+            Some(connection)
+                if matches!(connection, Connection::Saved { .. })
+                    || connection.route_owner().is_some() =>
+            {
+                self.current_source_binding().is_ok()
+            }
+            _ => true,
+        }
     }
 }
 
@@ -737,7 +842,7 @@ impl Viewer {
             self.window.retained.as_ref().map(|r| r.lease.clone()),
         )?;
         Ok(match &self.window.retained {
-            Some(retained) => binding.retaining_resolver(retained._resolver.clone()),
+            Some(retained) => binding.retaining_origins(retained.origins()),
             None => binding,
         })
     }
@@ -746,22 +851,50 @@ impl Viewer {
         version: crate::source::SourceVersion,
         profile: String,
     ) -> Result<(), String> {
-        self.open_fleet_window(version, profile, None, true, None, None)
+        self.open_fleet_window(
+            version,
+            profile,
+            crate::source::ProfileIntent::Backend,
+            None,
+            true,
+            None,
+            None,
+        )
     }
     fn open_fleet_window(
         &mut self,
         version: crate::source::SourceVersion,
         profile: String,
+        profile_intent: crate::source::ProfileIntent,
         session: Option<String>,
         bot: bool,
         expected: Option<String>,
         title: Option<String>,
     ) -> Result<(), String> {
         let binding = self.captured_fleet_binding(&version, expected.as_deref());
+        let route_profile = binding
+            .as_ref()
+            .and_then(|binding| binding.connection().wire_policy())
+            .and_then(|policy| policy.selected())
+            .map(|selected| selected.window_alias().to_owned());
         if expected.is_some() && binding.is_none() {
             return Err("The exact captured source is no longer retained".into());
         }
         let (source, descriptor, principal) = match (&version.id, binding) {
+            (_, Some(binding)) => {
+                binding.validate()?;
+                if expected
+                    .as_deref()
+                    .is_some_and(|p| p != binding.stamp().principal())
+                {
+                    return Err("The captured source changed before opening its window".into());
+                }
+                let descriptor = crate::client::windows::SourceDescriptor::from_connection(
+                    binding.connection(),
+                )?;
+                let principal = binding.stamp().principal().to_owned();
+                (Source::bound(binding), descriptor, Some(principal))
+            }
             (crate::source::SourceId::Saved(id), binding) => {
                 let resolver = binding
                     .as_ref()
@@ -775,31 +908,16 @@ impl Viewer {
                 (
                     Source::Saved {
                         expected_principal: principal.clone(),
+                        expected_descriptor: None,
                         resolver,
                         receive,
                     },
                     crate::client::windows::SourceDescriptor::Saved {
                         id: id.clone(),
                         revision: version.revision.clone(),
+                        namespace: None,
                     },
                     principal,
-                )
-            }
-            (_, Some(binding)) => {
-                binding.validate()?;
-                if expected
-                    .as_deref()
-                    .is_some_and(|p| p != binding.stamp().principal())
-                {
-                    return Err("The captured source changed before opening its window".into());
-                }
-                let descriptor = crate::client::windows::SourceDescriptor::from_connection(
-                    binding.connection(),
-                )?;
-                (
-                    Source::Direct(binding.connection().clone()),
-                    descriptor,
-                    Some(binding.stamp().principal().to_owned()),
                 )
             }
             _ => return Err("The one-time source is no longer available".into()),
@@ -807,6 +925,7 @@ impl Viewer {
         let target = principal.map(|principal| FocusTarget {
             principal,
             profile: profile.clone(),
+            profile_intent,
             session: session.clone(),
             bot,
         });
@@ -817,8 +936,11 @@ impl Viewer {
                 BootstrapKind::InteractiveSession
             },
             route: WindowRoute {
+                draft_origin: None,
+                profile_intent,
                 source: Some(descriptor),
                 profile,
+                route_profile,
                 session,
                 title,
                 canonical_bot: bot,
@@ -841,6 +963,7 @@ impl Viewer {
         self.open_fleet_window(
             target.owner.source.version().clone(),
             target.owner.profile,
+            target.owner.profile_intent,
             Some(target.stored_id),
             false,
             Some(target.owner.source.principal().to_owned()),

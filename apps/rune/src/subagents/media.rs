@@ -207,6 +207,8 @@ mod tests {
             .unwrap();
         });
         let owner = DraftScope {
+            draft_origin: None,
+            profile_intent: crate::source::ProfileIntent::Backend,
             connection: 9,
             profile: "work".into(),
             session: Some("child".into()),
@@ -243,6 +245,8 @@ mod tests {
     #[test]
     fn explicit_inline_open_uses_private_native_copy_and_wrong_owner_cannot_publish_it() {
         let owner = DraftScope {
+            draft_origin: None,
+            profile_intent: crate::source::ProfileIntent::Backend,
             connection: 1,
             profile: "work".into(),
             session: Some("child".into()),

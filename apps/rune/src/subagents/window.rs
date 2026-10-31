@@ -48,6 +48,8 @@ impl WindowState {
     }
     pub fn owner(&self) -> DraftScope {
         DraftScope {
+            draft_origin: None,
+            profile_intent: crate::source::ProfileIntent::Backend,
             connection: self.epoch,
             profile: self.profile.clone(),
             session: Some(self.child.clone()),

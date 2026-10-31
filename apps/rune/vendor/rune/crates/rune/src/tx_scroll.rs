@@ -16,13 +16,18 @@ impl Tx {
     /// `"inspector/label"` whose leading keys are the element's nearest keyed ancestors, which
     /// tells apart an app's `label` from a component's.
     pub fn scroll_into_view(&mut self, key: impl Into<String>) {
-        self.scroll_to.push((None, key.into()));
+        self.scroll_to.push((None, key.into(), false));
     }
     /// [`Tx::scroll_into_view`] for row `key` inside the element keyed `scope` only, so lists
     /// that key their rows alike (a file tree and a diff, both by path) don't reveal each
     /// other's rows.
     pub fn scroll_into_view_in(&mut self, scope: impl Into<String>, key: impl Into<String>) {
-        self.scroll_to.push((Some(scope.into()), key.into()));
+        self.scroll_to.push((Some(scope.into()), key.into(), false));
+    }
+    /// Reveal a keyed text highlight through every enclosing vertical scroll viewport
+    /// inside `scope`, from the innermost outward. The target must already be mounted.
+    pub fn scroll_highlight_into_view_all_in(&mut self, scope: impl Into<String>, key: impl Into<String>) {
+        self.scroll_to.push((Some(scope.into()), key.into(), true));
     }
     /// Glide the scroll viewport keyed `key` (or the one containing it) to its bottom, as a
     /// "jump to latest" button does. A `stick_bottom` viewport follows the end again once it

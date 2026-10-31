@@ -77,6 +77,8 @@ pub(super) fn run(args: &[String]) -> Result<(), String> {
         token: None,
     };
     let scope = DraftScope {
+        draft_origin: None,
+        profile_intent: crate::source::ProfileIntent::Backend,
         connection: 1,
         profile: "work".into(),
         session: Some("parent".into()),

@@ -190,8 +190,11 @@ fn an_explicit_launch_profile_keeps_the_restored_source_without_its_old_conversa
     s.exact_connection_profile = true;
     let source = SourceDescriptor::from_connection(&connection("launch")).unwrap();
     s.restore_launch_route(WindowRoute {
+        draft_origin: None,
+        profile_intent: crate::source::ProfileIntent::Backend,
         source: Some(source.clone()),
         profile: "archive".into(),
+        route_profile: None,
         session: Some("old-archive-chat".into()),
         title: Some("Old archive title".into()),
         canonical_bot: false,
@@ -213,11 +216,34 @@ fn an_explicit_launch_profile_keeps_the_restored_source_without_its_old_conversa
     assert_eq!(s.profile, "research");
 }
 #[test]
+fn explicit_launch_profile_preserves_an_old_selected_route_label_before_using_raw_owner() {
+    let mut s = Viewer::empty();
+    s.profile = "backend".into();
+    s.exact_connection_profile = true;
+    s.restore_launch_route(WindowRoute {
+        source: Some(SourceDescriptor::Legacy {
+            namespace: Some("private-namespace".into()),
+        }),
+        profile: "desktop".into(),
+        profile_intent: crate::source::ProfileIntent::NativeSelf,
+        session: Some("prior".into()),
+        draft_origin: None,
+        ..Default::default()
+    });
+    let target = s.window.boot_target.as_ref().unwrap();
+    assert_eq!(target.profile, "backend");
+    assert_eq!(target.profile_intent, crate::source::ProfileIntent::Backend);
+    assert_eq!(target.route_profile.as_deref(), Some("desktop"));
+    assert!(target.session.is_none());
+}
+
+#[test]
 fn an_ordinary_restored_launch_keeps_its_exact_profile_and_conversation() {
     let mut s = Viewer::empty();
     s.restore_launch_route(WindowRoute {
         profile: "archive".into(),
         session: Some("stored".into()),
+        draft_origin: None,
         ..Default::default()
     });
     assert_eq!(s.profile, "archive");

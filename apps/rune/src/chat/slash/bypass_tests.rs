@@ -23,6 +23,7 @@ fn snapshot(generation: u64, yolo: bool) -> Value {
 }
 fn intent() -> SlashIntent {
     SlashIntent {
+        draft_origin: None,
         id: uuid::Uuid::new_v4().to_string(),
         principal: "test".into(),
         profile: "work".into(),

@@ -21,6 +21,8 @@ pub(super) struct AudioDecoder {
     discard_before: f64,
     last_end: f64,
     budget: super::budget::Budget,
+    #[cfg(test)]
+    diagnostic: Option<(std::sync::Weak<super::Shared>, u64)>,
 }
 enum Codec {
     Native(Box<dyn Decoder>),
@@ -195,6 +197,14 @@ impl AudioDecoder {
             discard_before: 0.,
             last_end: first_end,
             budget,
+            #[cfg(test)]
+            diagnostic: super::TEST_PLAYER.with(|slot| {
+                let weak = slot.borrow().clone();
+                weak.upgrade().map(|player| {
+                    let generation = player.controls.lock().unwrap().generation;
+                    (weak, generation)
+                })
+            }),
         })
     }
     pub fn seek(&mut self, seconds: f64) -> Result<(), String> {
@@ -252,7 +262,18 @@ impl AudioDecoder {
                     }
                     return Ok(None);
                 }
-                Err(_) => {
+                Err(error) => {
+                    #[cfg(test)]
+                    if let Some((player, generation)) = &self.diagnostic
+                        && let Some(player) = player.upgrade()
+                        && player.controls.lock().unwrap().generation == *generation
+                    {
+                        let detail = format!("{error:?}");
+                        *player.packet_error.lock().unwrap() =
+                            Some((*generation, detail.chars().take(2048).collect()));
+                    }
+                    #[cfg(not(test))]
+                    let _ = error;
                     return Err("The audio stream ended unexpectedly or could not be read".into());
                 }
             };

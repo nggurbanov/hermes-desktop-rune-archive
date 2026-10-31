@@ -9,6 +9,11 @@ use serde_json::Value;
 pub struct ReplayBundle {
     pub principal: String,
     pub profile: String,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::source::ProfileIntent::is_backend"
+    )]
+    pub profile_intent: crate::source::ProfileIntent,
     pub session: String,
     pub row: u64,
     pub visible: String,
@@ -62,6 +67,7 @@ impl ReplayBundle {
         Ok(Self {
             principal: crate::client::connection_key(connection)?,
             profile: owner.profile.clone(),
+            profile_intent: owner.profile_intent,
             session: owner
                 .session
                 .clone()
@@ -81,6 +87,7 @@ impl ReplayBundle {
         }
         if self.principal != crate::client::connection_key(connection)?
             || self.profile != owner.profile
+            || self.profile_intent != owner.profile_intent
             || owner.session.as_deref() != Some(self.session.as_str())
             || self.row == 0
         {
@@ -184,6 +191,8 @@ mod tests {
     }
     fn owner() -> DraftScope {
         DraftScope {
+            draft_origin: None,
+            profile_intent: crate::source::ProfileIntent::Backend,
             connection: 1,
             profile: "work".into(),
             session: Some("stored".into()),
@@ -225,5 +234,43 @@ mod tests {
         );
         let replay = ReplayBundle::capture(&connection(), &owner(), &row).unwrap();
         assert!(replay.with_text("new").is_err());
+    }
+}
+
+#[cfg(test)]
+mod profile_intent_tests {
+    use super::*;
+    use crate::source::ProfileIntent;
+    #[test]
+    fn replay_keeps_original_owner_intent_across_serialization() {
+        let connection = Connection::Url {
+            endpoint: "https://fixture.invalid".into(),
+            token: None,
+        };
+        let raw = DraftScope {
+            draft_origin: None,
+            connection: 1,
+            profile: "default".into(),
+            profile_intent: ProfileIntent::Backend,
+            session: Some("same".into()),
+        };
+        let selected = DraftScope {
+            profile_intent: ProfileIntent::NativeSelf,
+            ..raw.clone()
+        };
+        let row = HistoryMessage::from_row(
+            &serde_json::json!({"row_id": 1, "role": "user", "text": "hello", "content": "hello"}),
+        );
+        let replay = ReplayBundle::capture(&connection, &raw, &row).unwrap();
+        let legacy = serde_json::to_value(&replay).unwrap();
+        assert!(legacy.get("profile_intent").is_none());
+        let replay: ReplayBundle = serde_json::from_value(legacy).unwrap();
+        assert!(replay.verify(&connection, &raw).is_ok());
+        assert!(replay.verify(&connection, &selected).is_err());
+        let selected_replay = ReplayBundle::capture(&connection, &selected, &row).unwrap();
+        let restored: ReplayBundle =
+            serde_json::from_value(serde_json::to_value(selected_replay).unwrap()).unwrap();
+        assert!(restored.verify(&connection, &selected).is_ok());
+        assert!(restored.verify(&connection, &raw).is_err());
     }
 }

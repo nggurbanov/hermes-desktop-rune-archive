@@ -26,6 +26,8 @@ fn prepared() -> Prepared {
             token: Some("private-fixture-token".into()),
         },
         &DraftScope {
+            draft_origin: None,
+            profile_intent: crate::source::ProfileIntent::Backend,
             connection: 7,
             profile: "work".into(),
             session: None,
@@ -263,4 +265,35 @@ fn journal_transaction_release_ignores_duplicated_descriptors() {
         entry.revision()
     );
     drop(inherited);
+}
+
+#[test]
+fn journal_revision_cannot_be_reused_by_a_different_profile_intent() {
+    let root = Workspace::new();
+    let journal = root.journal();
+    let entry = prepared();
+    journal.save(&entry).unwrap();
+    let mut other = entry.clone();
+    other.profile_intent = crate::source::ProfileIntent::NativeSelf;
+    assert!(journal.save(&other).is_err());
+    assert!(journal.retire(&other).is_err());
+    assert!(
+        journal
+            .load(&entry.submission_id)
+            .unwrap()
+            .verify_owner(
+                &Connection::Url {
+                    endpoint: "https://fixture.invalid".into(),
+                    token: Some("private-fixture-token".into())
+                },
+                &DraftScope {
+                    draft_origin: None,
+                    connection: 7,
+                    profile: "work".into(),
+                    profile_intent: crate::source::ProfileIntent::Backend,
+                    session: None
+                },
+            )
+            .is_ok()
+    );
 }

@@ -1,5 +1,6 @@
 use super::*;
 mod leases;
+pub(super) mod legacy;
 pub(super) mod passive;
 mod registry;
 mod startup;
@@ -10,6 +11,9 @@ pub(super) trait Secrets: Send {
         Err("Passive saved credentials are unavailable".into())
     }
     fn get(&mut self, id: &str) -> Result<String, String>;
+    fn get_optional(&mut self, id: &str) -> Result<Option<String>, String> {
+        self.get(id).map(Some)
+    }
     fn set(&mut self, id: &str, value: &str) -> Result<(), String>;
     fn delete(&mut self, id: &str) -> Result<(), String>;
 }
@@ -17,6 +21,9 @@ pub(super) trait Metadata: Send {
     fn transaction(&mut self) -> Result<Option<crate::client::FileLock>, String>;
     fn load(&mut self) -> Result<Registry, String>;
     fn save(&mut self, registry: &Registry) -> Result<(), String>;
+    fn storage_path(&self) -> Option<&std::path::Path> {
+        None
+    }
 }
 pub(super) trait Probe: Send {
     fn check(&mut self, connection: &Connection) -> Result<Vec<crate::gateway::Profile>, String>;
@@ -36,6 +43,15 @@ impl Secrets for SystemSecrets {
     fn get(&mut self, id: &str) -> Result<String, String> {
         keyring::Entry::new("Hermes Rune",id).map_err(|_|"The OS credential store could not be opened")?.get_password().map_err(|_|"The saved gateway credential is missing or the OS credential store is locked. Edit the connection to enter it again".into())
     }
+    fn get_optional(&mut self, id: &str) -> Result<Option<String>, String> {
+        let entry = keyring::Entry::new("Hermes Rune", id)
+            .map_err(|_| "The OS credential store could not be opened")?;
+        match entry.get_password() {
+            Ok(value) => Ok(Some(value)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(_) => Err("The OS credential store is unavailable or locked".into()),
+        }
+    }
     fn set(&mut self, id: &str, value: &str) -> Result<(), String> {
         keyring::Entry::new("Hermes Rune",id).map_err(|_|"The OS credential store could not be opened")?.set_password(value).map_err(|_|"The gateway token could not be saved in the OS credential store. Unlock the keychain and try again".into())
     }
@@ -54,6 +70,9 @@ impl Secrets for SystemSecrets {
 }
 struct JsonMetadata(PathBuf);
 impl Metadata for JsonMetadata {
+    fn storage_path(&self) -> Option<&std::path::Path> {
+        Some(&self.0)
+    }
     fn transaction(&mut self) -> Result<Option<crate::client::FileLock>, String> {
         registry::transaction(&self.0).map(Some)
     }
@@ -90,6 +109,9 @@ pub(super) struct Core {
     outbox: std::collections::VecDeque<(String, String, String)>,
     leases: std::collections::BTreeMap<(String, String), super::leases::Entry>,
     primary_lease: Option<Lease>,
+    route_leases: std::collections::BTreeMap<(String, String), legacy::RouteEntry>,
+    ssh_pool: super::installed_ssh::Pool,
+    ssh_binary: PathBuf,
 }
 impl Core {
     pub fn system(path: PathBuf) -> Self {
@@ -103,6 +125,9 @@ impl Core {
             outbox: std::collections::VecDeque::new(),
             leases: std::collections::BTreeMap::new(),
             primary_lease: None,
+            route_leases: std::collections::BTreeMap::new(),
+            ssh_pool: super::installed_ssh::Pool::default(),
+            ssh_binary: PathBuf::from("ssh"),
         }
     }
     pub fn execute(&mut self, command: Command) -> Result<Outcome, String> {
@@ -478,17 +503,27 @@ impl Core {
         ))
     }
     fn cleanup(&mut self) -> Option<String> {
+        let reachable = match self.registry.credential_refs() {
+            Ok(refs) => refs,
+            Err(error) => return Some(error),
+        };
         let before = self.registry.cleanup.len();
         let mut failed = false;
         self.registry.cleanup.retain(|id| {
+            if reachable.contains(id) {
+                return false;
+            }
             let keep = self.secrets.delete(id).is_err();
             failed |= keep;
             keep
         });
-        if self.registry.cleanup.len() != before {
-            let _ = self.metadata.save(&self.registry);
+        let persistence_failed =
+            self.registry.cleanup.len() != before && self.metadata.save(&self.registry).is_err();
+        match (failed, persistence_failed) {
+            (true, _) => Some("The connection was saved, but an obsolete credential is still waiting for OS keychain cleanup".into()),
+            (false, true) => Some("Credential cleanup progress could not be saved; its durable ledger will be retried".into()),
+            _ => None,
         }
-        failed.then(||"The connection was saved, but an obsolete token is still waiting for OS keychain cleanup".into())
     }
     pub fn poll_tunnel(&mut self) -> Option<(String, String, String)> {
         self.poll_leases();
@@ -497,6 +532,7 @@ impl Core {
 }
 impl Drop for Core {
     fn drop(&mut self) {
+        self.retire_route_sources("The resolved connection service closed");
         for entry in self.leases.values_mut() {
             entry.fail("The saved connection service closed");
         }

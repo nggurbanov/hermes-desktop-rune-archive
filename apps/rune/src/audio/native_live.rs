@@ -342,7 +342,8 @@ async fn run_peer(
     let sdp = offer(&peer.connection).await?;
     let exchange_controls = controls.clone();
     let mut answer = tokio::task::spawn_blocking(move || {
-        let mut gateway = AudioGateway::connect(&connection, &scope.profile)?;
+        let mut gateway =
+            AudioGateway::connect_scoped(&connection, &scope.profile, scope.profile_intent)?;
         if exchange_controls.stop.load(Ordering::Acquire) {
             return Err("The voice call was cancelled before the SDP exchange".into());
         }

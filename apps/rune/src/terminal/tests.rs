@@ -41,7 +41,7 @@ fn restored_remote_identity_stays_detached_until_explicit_attach() {
 #[test]
 fn native_pty_receives_real_input_resize_and_flushes_ansi_output_before_exit() {
     let (send, receive) = mpsc::channel();
-    let handle=worker::spawn("native-test".into(),1,worker::Start{target:worker::Target::Test("stty -echo; printf 'READY\\n'; IFS= read -r line; stty size; printf '\\033[31m%s\\033[0m\\n' \"$line\"".into()),profile:"work".into(),cwd:String::new(),rows:24,cols:80,durable:None},send,std::sync::Arc::new(||{}));
+    let handle=worker::spawn("fixture".into(),"native-test".into(),1,worker::Start{target:worker::Target::Test("stty -echo; printf 'READY\\n'; IFS= read -r line; stty size; printf '\\033[31m%s\\033[0m\\n' \"$line\"".into()),profile:"work".into(),profile_intent: crate::source::ProfileIntent::Backend,cwd:String::new(),rows:24,cols:80,durable:None},send,std::sync::Arc::new(||{}));
     let mut output = Vec::new();
     let mut started = false;
     let mut sent = false;
@@ -141,6 +141,8 @@ fn terminal(connection: Connection) -> Terminal {
         .set_owner(
             connection,
             DraftScope {
+                draft_origin: None,
+                profile_intent: crate::source::ProfileIntent::Backend,
                 connection: 8,
                 profile: "work".into(),
                 session: Some("stored".into()),
@@ -294,6 +296,8 @@ fn process_mirrors_deduplicate_snapshots_keep_session_routes_and_never_accept_in
     };
     let mut terminal = terminal(connection.clone());
     let old = DraftScope {
+        draft_origin: None,
+        profile_intent: crate::source::ProfileIntent::Backend,
         connection: 8,
         profile: "work".into(),
         session: Some("stored".into()),
@@ -323,6 +327,7 @@ fn process_mirrors_deduplicate_snapshots_keep_session_routes_and_never_accept_in
             connection,
             DraftScope {
                 session: Some("another".into()),
+                draft_origin: None,
                 ..old.clone()
             },
             Some("/other-project".into()),
@@ -404,6 +409,7 @@ fn ssh_terminal_preserves_arguments_and_quotes_remote_paths_without_agent_lifecy
             connection: connection.clone(),
         },
         profile: "work".into(),
+        profile_intent: crate::source::ProfileIntent::Backend,
         cwd: "/srv/a'b".into(),
         rows: 24,
         cols: 80,
@@ -442,6 +448,8 @@ fn closing_an_agent_mirror_does_not_resurrect_it_on_poll_but_explicit_open_resto
         token: None,
     });
     let scope = DraftScope {
+        draft_origin: None,
+        profile_intent: crate::source::ProfileIntent::Backend,
         connection: 8,
         profile: "work".into(),
         session: Some("stored".into()),
@@ -502,4 +510,197 @@ fn local_restoration_keeps_retained_scrollback_and_ansi_without_starting_a_new_p
         tab.grid.screen().cell(0, 0).unwrap().fgcolor(),
         vt100::Color::Idx(1)
     );
+}
+
+#[test]
+fn equal_profile_and_tab_ids_keep_owner_events_and_persistence_isolated() {
+    use crate::source::ProfileIntent;
+    let connection = Connection::Url {
+        endpoint: "http://127.0.0.1:1".into(),
+        token: None,
+    };
+    let mut terminal = Terminal::new();
+    let backend = DraftScope {
+        draft_origin: None,
+        connection: 8,
+        profile: "default".into(),
+        session: Some("same".into()),
+        profile_intent: ProfileIntent::Backend,
+    };
+    let native = DraftScope {
+        profile_intent: ProfileIntent::NativeSelf,
+        ..backend.clone()
+    };
+    terminal
+        .set_owner(connection.clone(), backend.clone(), None, None)
+        .unwrap();
+    let backend_key = terminal.current.clone().unwrap();
+    terminal.current_mut().unwrap().tabs.push(Tab::new(
+        "same".into(),
+        Source::Remote,
+        String::new(),
+    ));
+    terminal
+        .set_owner(connection, native.clone(), None, None)
+        .unwrap();
+    let native_key = terminal.current.clone().unwrap();
+    assert_ne!(backend_key, native_key);
+    terminal.current_mut().unwrap().tabs.push(Tab::new(
+        "same".into(),
+        Source::Remote,
+        String::new(),
+    ));
+    terminal
+        .send
+        .send(Reply::Event {
+            owner: native_key.clone(),
+            id: "same".into(),
+            generation: 0,
+            event: worker::Event::Closed,
+        })
+        .unwrap();
+    terminal.poll();
+    assert_eq!(terminal.workspaces[&backend_key].tabs.len(), 1);
+    assert!(terminal.workspaces[&native_key].tabs.is_empty());
+    terminal.close_profile(8, "default");
+    assert!(!terminal.session_owners.contains_key(&backend));
+    assert!(terminal.session_owners.contains_key(&native));
+    let saved = terminal.saved();
+    let json = serde_json::to_value(&saved).unwrap();
+    let backend_json = json
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["key"] == backend_key)
+        .unwrap();
+    assert!(backend_json.get("profile_intent").is_none());
+    let mut restored = Terminal::new();
+    restored.restore(serde_json::from_value(json).unwrap());
+    assert_eq!(
+        restored.workspaces[&native_key].profile_intent,
+        ProfileIntent::NativeSelf
+    );
+    assert_eq!(restored.workspaces[&backend_key].tabs.len(), 1);
+}
+
+#[test]
+fn scoped_terminal_dials_preserve_equal_named_owners_through_open_resume_and_close() {
+    use crate::gateway::prepared::{BackendTarget, SelectedContext, WirePolicy};
+    use crate::gateway::route::{OverrideKind, ProfilePolicy, RouteOptions};
+    use crate::source::ProfileIntent;
+    use std::{collections::BTreeMap, sync::Arc};
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let policy = ProfilePolicy::new(
+        "default",
+        RouteOptions {
+            primary_profile: Some("primary".into()),
+            profile_remote_override: true,
+            backend_profile: Some("dixie".into()),
+            override_kind: OverrideKind::Url,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let policy = WirePolicy::token(
+        policy,
+        BTreeMap::from([("x-access-fixture".into(), "private-access".into())]),
+    )
+    .unwrap()
+    .with_selected(SelectedContext::new("default", BackendTarget::Named("dixie".into())).unwrap())
+    .unwrap();
+    let connection = Connection::Routed {
+        actual: Box::new(Connection::Url {
+            endpoint: format!("http://{}/hermes/", listener.local_addr().unwrap()),
+            token: Some("private-session".into()),
+        }),
+        policy: Arc::new(policy),
+        owner: Arc::new(crate::source::RouteOwner::legacy("terminal-fixture").unwrap()),
+    };
+    let server = thread::spawn(move || {
+        for expected_profile in ["default", "dixie"] {
+            for (attach, close) in [
+                (None, false),
+                (Some("same-shell"), false),
+                (Some("same-shell"), true),
+            ] {
+                let (root, _) = listener.accept().unwrap();
+                let _gateway = tungstenite::accept(root).unwrap();
+                let (stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(4)))
+                    .unwrap();
+                let mut socket = tungstenite::accept_hdr(
+                    stream,
+                    |request: &tungstenite::handshake::server::Request, response| {
+                        let url =
+                            url::Url::parse(&format!("http://fixture{}", request.uri())).unwrap();
+                        assert_eq!(url.path(), "/hermes/api/host-terminal");
+                        let query: HashMap<_, _> = url.query_pairs().into_owned().collect();
+                        assert_eq!(
+                            query.get("profile").map(String::as_str),
+                            Some(expected_profile)
+                        );
+                        assert_eq!(query.get("attach").map(String::as_str), attach);
+                        assert_eq!(
+                            query.get("action").map(String::as_str),
+                            close.then_some("close")
+                        );
+                        assert_eq!(
+                            query.get("token").map(String::as_str),
+                            Some("private-session")
+                        );
+                        assert_eq!(request.headers()["x-access-fixture"], "private-access");
+                        Ok(response)
+                    },
+                )
+                .unwrap();
+                meta(
+                    &mut socket,
+                    serde_json::json!({"terminalId":"same-shell", "shell":"fixture", "closed":close}),
+                );
+                if !close {
+                    assert_eq!(socket.read().unwrap().into_text().unwrap(), "typed-input");
+                    assert_eq!(
+                        socket.read().unwrap().into_text().unwrap(),
+                        "\x1b[RESIZE:100;31]"
+                    );
+                }
+            }
+        }
+    });
+    for intent in [ProfileIntent::Backend, ProfileIntent::NativeSelf] {
+        for (attach, close) in [
+            (None, false),
+            (Some("same-shell"), false),
+            (Some("same-shell"), true),
+        ] {
+            let mut socket = crate::gateway::terminal::HostTerminal::connect_scoped(
+                &connection,
+                "default",
+                intent,
+                "",
+                80,
+                24,
+                attach,
+                close,
+            )
+            .unwrap();
+            match socket.poll().unwrap().unwrap() {
+                crate::gateway::terminal::Frame::Meta {
+                    terminal_id,
+                    closed,
+                    ..
+                } => {
+                    assert_eq!(terminal_id.as_deref(), Some("same-shell"));
+                    assert_eq!(closed, close);
+                }
+                _ => panic!("missing terminal receipt"),
+            }
+            if !close {
+                socket.write(b"typed-input").unwrap();
+                socket.resize(100, 31).unwrap();
+            }
+        }
+    }
+    server.join().unwrap();
 }

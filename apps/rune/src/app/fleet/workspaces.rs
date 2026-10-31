@@ -6,7 +6,9 @@ pub(super) struct Workspace {
     _resolver: Option<crate::connections::Resolver>,
     epoch: u64,
     profile: String,
+    profile_intent: crate::source::ProfileIntent,
     selected: Option<String>,
+    draft_origin: Option<crate::composer::DraftOrigin>,
     tabs: Vec<ConversationTab>,
     sessions: Vec<Session>,
     messages: Vec<HistoryMessage>,
@@ -78,7 +80,9 @@ impl Viewer {
     }
     pub(in crate::app) fn inspect_parked_sources(&self) -> Vec<serde_json::Value> {
         self.fleet_state.workspaces.values().map(|workspace| {
-            let scope = DraftScope {connection:workspace.epoch, profile:workspace.profile.clone(), session:workspace.selected.clone()};
+            let scope = DraftScope {
+            draft_origin: workspace.selected.is_none().then(|| workspace.draft_origin.clone()).flatten(),
+            profile_intent: workspace.profile_intent,connection:workspace.epoch, profile:workspace.profile.clone(), session:workspace.selected.clone()};
             let editor = self.inspect_owned_editor(&scope);
             let view = self.conversation.view(&scope);
             serde_json::json!({
@@ -95,7 +99,7 @@ impl Viewer {
     pub(in crate::app) fn target_foreground_slot(
         &self,
         connection: &Connection,
-    ) -> Option<(String, String)> {
+    ) -> Option<ConversationSlot> {
         let stamp = SourceStamp::from_connection(connection).ok()?;
         if self
             .connection
@@ -107,10 +111,13 @@ impl Viewer {
             return self.foreground_slot();
         }
         let workspace = self.fleet_state.workspaces.get(&stamp.key())?;
-        workspace
-            .selected
-            .as_ref()
-            .map(|id| (workspace.profile.clone(), id.clone()))
+        workspace.selected.as_ref().map(|id| {
+            (
+                workspace.profile.clone(),
+                workspace.profile_intent,
+                id.clone(),
+            )
+        })
     }
     pub(in crate::app) fn park_source_workspace(&mut self) -> Result<bool, String> {
         let Ok(binding) = self.current_source_binding() else {
@@ -136,7 +143,9 @@ impl Viewer {
                 _resolver: resolver,
                 epoch: self.connection_epoch,
                 profile: self.profile.clone(),
+                profile_intent: self.profile_intent,
                 selected: self.selected_session.clone(),
+                draft_origin: self.draft_origin.clone(),
                 tabs: self.tabs.clone(),
                 sessions: self.sessions.clone(),
                 messages: self.messages.clone(),
@@ -167,13 +176,15 @@ impl Viewer {
             self.client_error = Some(error);
             return;
         }
+        self.retire_chat_search_reveals();
         self.connection_epoch = workspace.epoch;
         self.tabs = workspace.tabs;
         self.sidebar_state.prefs.all_profiles = workspace.all_profiles;
         let profile = requested.unwrap_or(&workspace.profile);
         self.profile = profile.to_owned();
-        if profile == workspace.profile {
+        if profile == workspace.profile && self.profile_intent == workspace.profile_intent {
             self.selected_session = workspace.selected;
+            self.draft_origin = workspace.draft_origin;
             self.sessions = workspace.sessions;
             self.messages = workspace.messages;
             self.bot_empty = workspace.bot_empty;
@@ -188,9 +199,11 @@ impl Viewer {
     ) {
         let destination = DraftScope {
             session: Some(stored.into()),
+            draft_origin: None,
             ..origin.clone()
         };
         let tab = ConversationTab {
+            profile_intent: origin.profile_intent,
             profile: origin.profile.clone(),
             session: stored.into(),
             title: self
@@ -205,11 +218,11 @@ impl Viewer {
                 .is_some_and(|view| view.canonical_bot),
         };
         if origin.connection == self.connection_epoch {
-            if !self
-                .tabs
-                .iter()
-                .any(|t| t.profile == origin.profile && t.session == stored)
-            {
+            if !self.tabs.iter().any(|t| {
+                t.profile == origin.profile
+                    && t.profile_intent == origin.profile_intent
+                    && t.session == stored
+            }) {
                 self.tabs.push(tab);
             }
             if active {
@@ -223,16 +236,20 @@ impl Viewer {
             .values_mut()
             .find(|workspace| workspace.epoch == origin.connection && workspace.valid())
         {
-            if !workspace
-                .tabs
-                .iter()
-                .any(|t| t.profile == origin.profile && t.session == stored)
-            {
+            if !workspace.tabs.iter().any(|t| {
+                t.profile == origin.profile
+                    && t.profile_intent == origin.profile_intent
+                    && t.session == stored
+            }) {
                 workspace.tabs.push(tab);
             }
             // Bind only the parked foreground input which produced this receipt.
             // A new fresh input later gets its own editor; None is never a global alias.
-            if workspace.profile == origin.profile && workspace.selected == origin.session {
+            if workspace.profile == origin.profile
+                && workspace.profile_intent == origin.profile_intent
+                && workspace.selected == origin.session
+                && (origin.session.is_some() || origin.draft_origin == workspace.draft_origin)
+            {
                 workspace.selected = Some(stored.into());
                 workspace.bot_empty = false;
             }
@@ -245,6 +262,7 @@ impl Viewer {
         if let Some(workspace) = self.fleet_state.workspaces.values_mut().find(|workspace| {
             workspace.epoch == scope.connection
                 && workspace.profile == scope.profile
+                && workspace.profile_intent == scope.profile_intent
                 && workspace.selected == scope.session
                 && workspace.valid()
         }) {

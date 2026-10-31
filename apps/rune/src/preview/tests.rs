@@ -2,6 +2,8 @@ use super::*;
 fn target() -> Target {
     Target {
         owner: DraftScope {
+            draft_origin: None,
+            profile_intent: crate::source::ProfileIntent::Backend,
             connection: 7,
             profile: "research".into(),
             session: Some("s1".into()),

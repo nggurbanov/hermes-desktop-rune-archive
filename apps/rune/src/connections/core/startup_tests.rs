@@ -47,7 +47,7 @@ fn ui_worker(
 ) {
     let (send, resolver, receive, done, worker) = retained_worker(core);
     let mut ui = Connections::new();
-    ui.network = Some(Network { send, receive });
+    ui.network = Some(Network::new(send, receive));
     ui.load();
     wait_until(
         || {

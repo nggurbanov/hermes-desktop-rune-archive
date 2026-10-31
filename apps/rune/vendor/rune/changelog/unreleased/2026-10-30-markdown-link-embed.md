@@ -1,0 +1,1 @@
+- Markdown can optionally replace authored link labels with caller-built elements in separate rows between styled text fragments. Empty authored labels are eligible, and copying selected text does not include replaced link source. The Markdown library test fixtures initialize the embedded-block accumulator.

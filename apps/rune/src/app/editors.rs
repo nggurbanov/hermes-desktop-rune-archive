@@ -59,6 +59,16 @@ impl Viewer {
                 .is_none_or(|(owner, _)| *owner == self.composer_scope())
     }
     pub(super) fn ensure_editor(&mut self) -> bool {
+        let owner = self.chat_search_owner();
+        if self
+            .chat
+            .searches
+            .views
+            .iter()
+            .any(|(held, view)| held != &owner && view.pending.is_some())
+        {
+            self.retire_chat_search_reveals();
+        }
         // A new peer may resolve a saved source after its first frame. Do not
         // bind the editor to a source-less placeholder before that reply.
         if !self.fixture && self.connection.is_none() {

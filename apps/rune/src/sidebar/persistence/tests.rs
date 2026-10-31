@@ -223,3 +223,23 @@ fn close_flush_retries_sidebar_intents_immediately_after_repair() {
     assert_eq!(saved["extension"]["keep"], true);
     assert!(state.storage_wake_after().is_none());
 }
+
+#[test]
+fn show_all_compatibility_merge_reload_and_reset() {
+    let root = Workspace::new();
+    root.write(br#"{"grouping":"project","extension":{"keep":true}}"#);
+    let mut a = root.state();
+    let mut b = root.state();
+    assert!(!a.prefs.show_all_sessions);
+    a.action(Action::Toggle("show_all_sessions"));
+    b.action(Action::Toggle("tokens"));
+    let reloaded = root.state();
+    assert!(reloaded.prefs.show_all_sessions);
+    assert!(reloaded.prefs.tokens);
+    assert_eq!(root.saved()["extension"]["keep"], true);
+    b.action(Action::ResetView);
+    let reloaded = root.state();
+    assert!(!reloaded.prefs.show_all_sessions);
+    assert!(!reloaded.prefs.tokens);
+    assert_eq!(root.saved()["extension"]["keep"], true);
+}

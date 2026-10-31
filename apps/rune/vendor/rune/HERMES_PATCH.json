@@ -911,19 +911,19 @@
     },
     "crates/rune/src/el_tx.rs": {
       "upstream_sha256": "fd1a1728ca9a35fc7b50f1b9d8d5be28848bc33999f975aa573b3edc92ff425f",
-      "patched_sha256": "ee544556a3926aff07c2e7ba1f89644f19ddd9fb8b89b8f7e1a8065966511de9"
+      "patched_sha256": "ff22302ba3ea5f09ff92bb9c26383ec5929ce587532cb5584155b30785697f12"
     },
     "crates/rune/src/lib.rs": {
       "upstream_sha256": "25fd9ed319c4f42f6a41df17c6312272c726a65fa892a894e1f2c0ab26b4266e",
-      "patched_sha256": "5261a808d9a9946793ede05fef37bce40a2a6bd1156dd20e0adf5ebea8cb4d95"
+      "patched_sha256": "369c178be3471eed89f18359590fdbe92567584d21e9a892342e98daa7bbab29"
     },
     "crates/rune/src/runtime.rs": {
       "upstream_sha256": "308ce7ade91ab6e27165c945596a5d4e50f44febc3be5d396b2a9ed51877b4de",
-      "patched_sha256": "0e9e33d277c35b9575255cbffe4a240a4b3b5231feff7105b8b54836f7b50342"
+      "patched_sha256": "4b83711429defdb74bdd06d2ea57c03647db6d6b2bb794d7bf5646a8b57f243c"
     },
     "crates/rune/src/runtime/action.rs": {
       "upstream_sha256": "0d1422945c4531667a5f1b9b6f8989c84c391a1fae550b283de76a3ea0f23405",
-      "patched_sha256": "30aa2a9f48d0eacf726c3f063a52e5c06a5a4c2f231818c24d8426a83a964729"
+      "patched_sha256": "ce3c26083d1e82bbcff8bf6a29ebc469cb34a25abf5f5f7e16e042285769b654"
     },
     "crates/rune/src/runtime/on_key_tests.rs": {
       "upstream_sha256": "c3186495acfd0ac7f05d0358987c6567801a89005229f310780caf5defbf56d7",
@@ -940,15 +940,83 @@
     "crates/rune/src/windows.rs": {
       "upstream_sha256": "717634d83dc733b6e32a343366869049300e187590c327921708ad030f652632",
       "patched_sha256": "51ffc9f8843029dec241504bdb1d659a3f6e8f0661039858889a12e7b59aa94b"
+    },
+    "crates/rune/src/el.rs": {
+      "upstream_sha256": "604a44351a1b474cc5428254cee8f75bc3f9d91959032f1e104884864b59aefe",
+      "patched_sha256": "7725091103896edb1401bc45ac08a76081c1b681e7cfc47b60821bf995a4d5ff"
+    },
+    "crates/rune/src/focus.rs": {
+      "upstream_sha256": "031c3b0fbffada2663b2788797c5eaf62485327a75fe6dc6d9c5143e2b59d8fc",
+      "patched_sha256": "b8dec02f31f7a26b66c8ffdc5a9c577d2cd971fe898653a5c226acb52b65caab"
+    },
+    "crates/rune/src/runtime/playground.rs": {
+      "upstream_sha256": "67a4e7ebdf52b388a6c841674044123e86d6dd6c9c22a77ac3caf485ac56de8b",
+      "patched_sha256": "d611fff05bc744f1c85ce5c1a3092fe8687c2b80214b3290c248db7d7fd6984c"
+    },
+    "crates/rune/src/tx_scroll.rs": {
+      "upstream_sha256": "6fae57521f149b0abd0becf64d7f0d5f4d6bf3434d8e8b10be1c543517a05b27",
+      "patched_sha256": "30726bf1bb21eea9187dc420d7f09186b3e7bc129199014b77af7272517b7136"
+    },
+    "crates/rune/src/runtime/flatten.rs": {
+      "upstream_sha256": "a2e07a348287db6f79a0280d0f10994ff28b6482cd19da7d9504002384c5bc06",
+      "patched_sha256": "9581f996ba8e68edf81cb1fbc8b12dd3026817a8c59607237d40b072b02d240f"
+    },
+    "crates/rune-kit/src/markdown.rs": {
+      "upstream_sha256": "dd03427a14575dca036e93cd1e5f298824ae6100313225f634a54f81d8b0ea8a",
+      "patched_sha256": "c9ca5c463e6a6dd4ec8250a7788fffaa37ba63904c028283833bad8abfe978f3"
+    },
+    "crates/rune/src/desktop.rs": {
+      "upstream_sha256": "244c1f7431708b21fd2857d8efd8fc957dcecafd0c16fc369d2ba180876f1ea3",
+      "patched_sha256": "ba1ee233a9135762d2917965b4739d8869707f9de02c2de1e180c9bc60b456e1"
+    },
+    "crates/rune/src/file_dialog.rs": {
+      "upstream_sha256": "4a0032017a44f107ef37db0279925b6a7420405bd4b611e3cbc2cf31a3a5b88d",
+      "patched_sha256": "0323c75e3e3859feea914e013c41bf37d080a8062b3d0a4dff236fc8684ce62c"
+    },
+    "crates/rune/src/file_dialog/portal.rs": {
+      "upstream_sha256": "1a3a7b30178e68e8f9d8ba97e805e3002d53c6d1a8795f34812cbbb9acbe81c9",
+      "patched_sha256": "1d3fae1d1f80f0966fb769f7fe0362c7987bc811340f20154146ee9103971e1e"
+    },
+    "crates/rune/src/file_dialog/portal_format.rs": {
+      "upstream_sha256": "be20b1ede357eceaa8dad85eab44e0fa693d9325b7f697c7384024e5f85ca676",
+      "patched_sha256": "5dad393892a80027e6917e1894a8d5b872149a254b6695441071e8c525f3d110"
+    },
+    "crates/rune/src/file_dialog_dispatch.rs": {
+      "upstream_sha256": "49c0e3233b5517aa1a766b21d077357f745173fb163af43f399024e954ad28d6",
+      "patched_sha256": "8f3fca92d85eb3320ec8ed50109c1112f5c2e72d51d6d27eb7378b87571dee03"
+    },
+    "crates/rune/src/headless_run.rs": {
+      "upstream_sha256": "3f14c2f3ed59d9a25bcc62a72b503c81c3bac9af98d4aa6ebd4f8f16438e3ff9",
+      "patched_sha256": "719192dd8438d30a564cb26831ecf8f9260d3a88d50404c1d27ba3999dee2932"
+    },
+    "crates/rune/src/tooling.rs": {
+      "upstream_sha256": "2d549004a611503ad465b580889182a6be8d847dee1026d6222f46e0fa876576",
+      "patched_sha256": "df620c3cbd01d79a25860a6fe575034fe82616dfad8c8b90745af3b094ba1ba0"
+    },
+    "crates/rune/src/tooling/args.rs": {
+      "upstream_sha256": "c43eb1d5e149affe2310599200fcb51470062bf422919ac1e051deafdf0e8639",
+      "patched_sha256": "523617c6cae1fd7ea1342873b2b410621afbe0eef16af8890423ea50f7192ad2"
+    },
+    "crates/rune/src/tooling/parser_tests.rs": {
+      "upstream_sha256": "47c61caa59308fd5d6e50bc0c7a85092d45a229461551872434393ceb3c087b3",
+      "patched_sha256": "23dfc4bc484795de49a06ad1c00cf99df9a6a7bdcb9ad9e5f2fda7be378d3032"
+    },
+    "crates/rune/src/tooling/script.rs": {
+      "upstream_sha256": "215cfa3b7263f01b4a9acfdcaec200b0d72beaa73b888d6725b1569ed19487e4",
+      "patched_sha256": "179a7c4db642c6b8d9cb6ea2ad1ca91ba72f691ba39ee3e6d0f30ab3ca2b24aa"
+    },
+    "crates/rune/Cargo.toml": {
+      "upstream_sha256": "8e276c8d7f0f67ed1ed3d922ed15b10ddfeb7ac823cd32f7d6a4c116bb15240c",
+      "patched_sha256": "8ecf89c25c8a0cf64f22941881b1f1d49e43cddc168be84835be8ed57e219be2"
     }
   },
   "added": {
     "HERMES.md": {
-      "sha256": "c0e36c3319f697d9f8beaa726985bee27bf2acb7be955413f8141ccec8d436da",
+      "sha256": "f5df07eacae4a328cda5b094fc859fc293ede2e42c102a56023a7178bfeff5b0",
       "license": "MIT"
     },
     "HERMES.patch": {
-      "sha256": "610a097740eacedef2bbeabf87557c7a7c77f172c3feddccb31349037d577ffa",
+      "sha256": "842aaedb6f42336084242a48145537822cf53c8a5070ab7296f6130d32b85d0f",
       "license": "MIT"
     },
     "changelog/unreleased/2026-10-29-dynamic-hermes-windows.md": {
@@ -998,6 +1066,48 @@
     "scripts/verify-hermes-source.py": {
       "sha256": "f9a538ab559d295d3fcdef811caeb2969a0161c474c28d84f6e304e5d203cf7d",
       "license": "MIT"
+    },
+    "changelog/unreleased/2026-10-30-input-display-change.md": {
+      "sha256": "511ee353abe07d656930f28ba79dc6f8249d57ce491fa71467fd3603b5d49afe",
+      "license": "MIT"
+    },
+    "changelog/unreleased/2026-10-30-scoped-highlight-reveal.md": {
+      "sha256": "20d3eda79969d80bc9f249d4acd8a2bae4fa9e8395acce890ee9b76ba3850ebd",
+      "license": "MIT"
+    },
+    "changelog/unreleased/2026-10-30-mounted-node-lifetime.md": {
+      "sha256": "ffa05efd13162bdfd20295b5ba0a7f9036ecca761ae6db866040025553c926ca",
+      "license": "MIT"
+    },
+    "crates/rune-kit/tests/markdown_occurrences.rs": {
+      "sha256": "515bb19ba076e725a12eb9d1e946cad7552e8fcdac02de5eb613eb0790a9c5c7",
+      "license": "MIT"
+    },
+    "changelog/unreleased/2026-10-30-markdown-link-source.md": {
+      "sha256": "5034a05308e42e5fca039b165f58b88a0ede8cbc7b79573deb4ede677c446f62",
+      "license": "MIT"
+    },
+    "crates/rune-kit/tests/markdown_embed.rs": {
+      "sha256": "818ac625740a12b32e45b04fba32af7a59203a4eb86180105b9100890a65d678",
+      "license": "MIT"
+    },
+    "changelog/unreleased/2026-10-30-markdown-link-embed.md": {
+      "sha256": "94b95aa53db1ab376122bdff103e56d6b5091e6b60c73f9da93bdac49366789e",
+      "license": "MIT"
+    },
+    "crates/rune/src/file_dialog/multifolder_tests.rs": {
+      "sha256": "341965c3517e34a04ca945f09a89b70609c39a45cd349a469696f0427a7c59ad",
+      "license": "MIT"
+    },
+    "changelog/unreleased/2026-10-30-multiple-folder-dialog.md": {
+      "sha256": "ee72af0762b67831556c8c9cb886e27c794701bf2a518763ded4bd574985adc6",
+      "license": "MIT"
+    },
+    "crates/rune/src/tooling/multifolder_driver_tests.rs": {
+      "sha256": "fd78ec776d0492fe39ee6c782a5d3e18defd2120e35263711383c47121e9c145"
+    },
+    "changelog/unreleased/2026-10-30-test-presenter.md": {
+      "sha256": "b99a773eb440edad8c0356cfa41f979f34d15961b8dbc8e1561a26d63494838e"
     }
   },
   "reason": "Runtime-created independent ordinary Hermes peer windows, with local state factories and explicit creation receipts.",
@@ -1006,7 +1116,14 @@
     "Live hosts use a map with never-reused routing IDs; ordinary peers outlive the creating window and release closed host state.",
     "Physical geometry/maximization request and a local close-request veto; global Quit/OS termination veto remains application-level work.",
     "Existing macOS native-help test is gated to its actual platform so the Linux unit harness compiles.",
-    "Timer-driven close/hide publishes current AppHandle visibility; real native opener-close acceptance exposed the missing publication."
+    "Timer-driven close/hide publishes current AppHandle visibility; real native opener-close acceptance exposed the missing publication.",
+    "Opt-in display-change callback reports visible input composition without changing committed-text callbacks.",
+    "Opt-in scoped highlight reveal traverses vertical scroll ancestors for transcript search.",
+    "Opt-in post-commit mounted-node lifetime callback supports independent virtualized transcript audio resources.",
+    "Cached Markdown parser link occurrences retain authored source and rendered label byte ranges.",
+    "Opt-in Markdown authored-link replacements render fresh elements in separate rows between styled fragments.",
+    "Markdown library test renderer fixtures initialize the embedded-block accumulator consistently with production.",
+    "Ordered multiple-folder native and scripted selection with cancellation and window-owned delivery."
   ],
   "license_sha256": "0c267f186f600c6f4d9d229d1792861361f2c433cfb23054fece61f227006344"
 }

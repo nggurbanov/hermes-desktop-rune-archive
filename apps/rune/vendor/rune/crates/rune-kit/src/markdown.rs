@@ -109,7 +109,15 @@ pub struct Table {
 
 /// Maps source UTF-8 byte ranges to rendered text UTF-8 byte ranges.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub(super) struct SpanMap(pub(super) Vec<(Range<usize>, Range<usize>)>);
+pub(super) struct SpanMap(pub(super) Vec<(Range<usize>, Range<usize>)>, Vec<LinkOccurrence>);
+
+/// An authored parser link and its label range in the containing rendered inline text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LinkOccurrence {
+    pub source: Range<usize>,
+    pub destination: String,
+    pub label: Range<usize>,
+}
 
 impl SpanMap {
     fn push(&mut self, src: Range<usize>, out: Range<usize>) {
@@ -148,6 +156,10 @@ impl SpanMap {
     fn shift_src(&mut self, offset: usize) {
         if offset == 0 {
             return;
+        }
+        for occurrence in &mut self.1 {
+            occurrence.source.start += offset;
+            occurrence.source.end += offset;
         }
         for (src, _) in &mut self.0 {
             src.start += offset;
@@ -260,6 +272,7 @@ struct Open {
     start: usize,
     style: Style,
     url: Option<String>,
+    source: Option<Range<usize>>,
 }
 
 enum Container {
@@ -326,6 +339,10 @@ impl Builder {
             let trimmed = inl.text.trim_end().len();
             inl.text.truncate(trimmed);
             map.truncate_out(trimmed);
+            for occurrence in &mut map.1 {
+                occurrence.label.start = occurrence.label.start.min(trimmed);
+                occurrence.label.end = occurrence.label.end.min(trimmed);
+            }
             inl.spans.retain_mut(|s| {
                 s.1 = s.1.min(trimmed);
                 s.0 < s.1
@@ -347,7 +364,7 @@ impl Builder {
                 }
                 return;
             }
-            if inl.text.is_empty() {
+            if inl.text.is_empty() && map.1.is_empty() {
                 return;
             }
             self.push(
@@ -729,10 +746,10 @@ fn parse_doc(src: &str, autolink: bool) -> (Vec<Block>, Vec<Source>, Vec<Option<
                     b.flush_inline();
                     b.inline = Some((InlineKind::Cell, Inline::default(), Vec::new(), SpanMap::default()));
                 }
-                Tag::Strong => open(&mut b, Style::Strong, None),
-                Tag::Emphasis => open(&mut b, Style::Em, None),
-                Tag::Strikethrough => open(&mut b, Style::Strike, None),
-                Tag::Link { dest_url, .. } => open(&mut b, Style::Link, Some(dest_url.into_string())),
+                Tag::Strong => open(&mut b, Style::Strong, None, None),
+                Tag::Emphasis => open(&mut b, Style::Em, None, None),
+                Tag::Strikethrough => open(&mut b, Style::Strike, None, None),
+                Tag::Link { dest_url, .. } => open(&mut b, Style::Link, Some(dest_url.into_string()), Some(range)),
                 Tag::Image { .. } => {
                     let start = b.inline().1.text.len();
                     b.image_starts.push(start);
@@ -943,15 +960,18 @@ fn inline_of(src: &str, offset: usize, autolink: bool) -> (Inline, SpanMap) {
     }
 }
 
-fn open(b: &mut Builder, style: Style, url: Option<String>) {
+fn open(b: &mut Builder, style: Style, url: Option<String>, source: Option<Range<usize>>) {
     let inl = b.inline();
     let start = inl.1.text.len();
-    inl.2.push(Open { start, style, url });
+    inl.2.push(Open { start, style, url, source });
 }
 
 fn close(b: &mut Builder) {
-    let (_, inl, open, _) = b.inline();
+    let (_, inl, open, map) = b.inline();
     if let Some(o) = open.pop() {
+        if let (Some(source), Some(destination)) = (&o.source, &o.url) {
+            map.1.push(LinkOccurrence { source: source.clone(), destination: destination.clone(), label: o.start..inl.text.len() });
+        }
         end_run(inl, o);
     }
 }
@@ -995,6 +1015,27 @@ thread_local! {
 /// cached however many there are; past a memory budget the least recently drawn of the rest go.
 pub fn parse_cached(src: &str) -> Rc<Vec<Block>> {
     doc_cached(src).0
+}
+
+/// Returns authored parser links from the cached document used for rendering.
+/// Label ranges are UTF-8 bytes local to the containing inline text. Bare URLs
+/// added by Rune's separate GFM linkification are not parser link events.
+pub fn link_occurrences_cached(src: &str) -> Vec<LinkOccurrence> {
+    fn collect(map: &BlockMap, out: &mut Vec<LinkOccurrence>) {
+        match map {
+            BlockMap::Inline(m) => out.extend(m.1.iter().cloned()),
+            BlockMap::List(items) => for item in items { for map in item { collect(map, out); } },
+            BlockMap::Quote(maps) => for map in maps { collect(map, out); },
+            BlockMap::Table { head, rows } => {
+                for map in head.iter().chain(rows.iter().flatten()) { out.extend(map.1.iter().cloned()); }
+            }
+            BlockMap::Code(_) | BlockMap::None => {}
+        }
+    }
+    let doc = doc_cached(src);
+    let mut out = Vec::new();
+    for map in doc.4.iter() { collect(map, &mut out); }
+    out
 }
 
 pub(super) fn doc_cached(src: &str) -> Doc {
@@ -1138,6 +1179,8 @@ pub trait HighlightItem: Sized {
     }
 }
 
+type EmbedLink = Rc<dyn Fn(&LinkOccurrence, &str) -> Option<El>>;
+
 type TaskWire = Rc<dyn Fn(El, Rc<str>, usize, bool) -> El>;
 
 /// Markdown source as an element. See the module docs for cost and keys.
@@ -1159,12 +1202,20 @@ pub struct Markdown {
     copy_source: bool,
     scroll_wide: bool,
     highlighter: Highlighter,
+    embed_links: Option<EmbedLink>,
 }
 
 impl Markdown {
     pub fn new(src: impl Into<String>) -> Markdown {
         Markdown { src: src.into(), style: None, block_keys: Vec::new(), highlights: Vec::new(), autolink: true, reveal: 0.0, streaming: false, on_link: None, on_link_secondary: None, link_look: None, link_ring: None,
-            on_task: None, tasks_read_only: false, selectable: false, copy_source: false, scroll_wide: false, highlighter: Highlighter::builtin() }
+            on_task: None, tasks_read_only: false, selectable: false, copy_source: false, scroll_wide: false, highlighter: Highlighter::builtin(), embed_links: None }
+    }
+    /// Replaces selected authored link labels in paragraphs and headings, in document order.
+    /// Embedded elements occupy their own rows; other labels remain ordinary links.
+    /// Table cells use their existing text rendering and are not replaced.
+    pub fn embed_links(mut self, f: impl Fn(&LinkOccurrence, &str) -> Option<El> + 'static) -> Self {
+        self.embed_links = Some(Rc::new(f));
+        self
     }
     /// Highlight UTF-8 byte ranges of the Markdown source string (see [`find`]).
     ///
@@ -1328,13 +1379,14 @@ impl Markdown {
         };
         let r = Renderer { s: style.clone(), highlights: self.highlights, reveal: self.reveal, streaming: self.streaming, on_link: self.on_link, on_link_secondary: self.on_link_secondary, link_look: self.link_look, link_ring: self.link_ring,
             on_task: self.on_task, tasks_read_only: self.tasks_read_only, selectable: self.selectable, scroll_wide: self.scroll_wide,
-            highlighter: self.highlighter, sources, next_source: Cell::new(0), tasks, next_task: Cell::new(0),
-            current_block_key: RefCell::new("b0".into()) };
+            highlighter: self.highlighter, embed_links: self.embed_links, sources, next_source: Cell::new(0), tasks, next_task: Cell::new(0),
+            current_block_key: RefCell::new("b0".into()), embedded_blocks: RefCell::new(Vec::new()) };
         let root = r.blocks(&blocks, &maps, &keys, true).selection_group(self.selectable);
         if !(self.selectable && self.copy_source) { return root; }
         let names: Rc<[String]> = rendered_keys(blocks.len(), &keys).into();
         let src: Rc<str> = self.src.into();
-        root.selection_copy(move |sel| source_copy(&src, &starts, &names, sel))
+        let embedded = r.embedded_blocks.into_inner();
+        root.selection_copy(move |sel| source_copy(&src, &starts, &names, &embedded, sel))
     }
 }
 
@@ -1353,6 +1405,7 @@ struct Renderer {
     /// `Markdown::scroll_wide`.
     scroll_wide: bool,
     highlighter: Highlighter,
+    embed_links: Option<EmbedLink>,
     sources: Rc<[Source]>,
     /// The next of `sources`, advanced at each [`Block::Code`] in document order.
     next_source: Cell<usize>,
@@ -1360,6 +1413,7 @@ struct Renderer {
     /// The next of `tasks`, advanced at each list item in document order.
     next_task: Cell<usize>,
     current_block_key: RefCell<Rc<str>>,
+    embedded_blocks: RefCell<Vec<String>>,
 }
 
 /// The keys [`Renderer::blocks`] gives `n` blocks.
@@ -1370,7 +1424,7 @@ fn rendered_keys(n: usize, keys: &[String]) -> Vec<String> {
 
 /// [`Markdown::copy_source`]: the source of the top-level blocks (keyed `names`, starting at
 /// `starts`) that `sel` touches, `None` for part of one block.
-fn source_copy(src: &str, starts: &[usize], names: &[String], sel: &rune::TextSelection) -> Option<String> {
+fn source_copy(src: &str, starts: &[usize], names: &[String], embedded: &[String], sel: &rune::TextSelection) -> Option<String> {
     // The longest key that is the path or its first segments: an app's key may hold a `/`.
     let block_of = |path: &str| names.iter().enumerate()
         .filter(|(_, k)| path == k.as_str() || path.strip_prefix(k.as_str()).is_some_and(|rest| rest.starts_with('/')))
@@ -1381,6 +1435,7 @@ fn source_copy(src: &str, starts: &[usize], names: &[String], sel: &rune::TextSe
         touched = Some(touched.map_or((b, b), |(first, _)| (first, b)));
     }
     let (first, last) = touched?;
+    if (first..=last).any(|i| embedded.contains(&names[i])) { return None; }
     if first == last && !sel.texts().iter().filter(|t| block_of(t.path()) == Some(first)).all(|t| t.is_whole() || t.is_empty()) {
         return None;
     }
@@ -1559,22 +1614,82 @@ impl Renderer {
     }
 
     fn para(&self, inl: &Inline, map: Option<&SpanMap>, style: TextStyle, color: Color) -> El {
+        if let (Some(embed), Some(map)) = (&self.embed_links, map) {
+            let mut replacements = Vec::new();
+            let mut end = 0;
+            for occurrence in &map.1 {
+                let range = &occurrence.label;
+                if range.start < end || range.start > range.end || range.end > inl.text.len()
+                    || !inl.text.is_char_boundary(range.start) || !inl.text.is_char_boundary(range.end) { continue; }
+                if let Some(el) = embed(occurrence, &inl.text[range.clone()]) {
+                    end = range.end;
+                    replacements.push((occurrence, el));
+                }
+            }
+            if !replacements.is_empty() {
+                self.embedded_blocks.borrow_mut().push(self.current_block_key.borrow().to_string());
+                let mut result = col().w_full();
+                let mut start = 0;
+                for (occurrence, el) in replacements {
+                    if start < occurrence.label.start {
+                        result = result.child(self.inline_fragment(inl, map, start..occurrence.label.start, style, color));
+                    }
+                    result = result.child(el.key(format!("md-embed-{}", occurrence.source.start)));
+                    start = occurrence.label.end;
+                }
+                if start < inl.text.len() {
+                    result = result.child(self.inline_fragment(inl, map, start..inl.text.len(), style, color));
+                }
+                return result;
+            }
+        }
         let e = rich(inl.text.clone(), self.spans(inl, style.size)).font(style).color(color).reveal(self.reveal).w_full();
         self.select_inline(e, inl, map)
+    }
+
+    fn inline_fragment(&self, inl: &Inline, map: &SpanMap, range: Range<usize>, style: TextStyle, color: Color) -> El {
+        let clip = |a: usize, b: usize| {
+            let a = a.max(range.start);
+            let b = b.min(range.end);
+            (a < b).then_some((a.saturating_sub(range.start), b.saturating_sub(range.start)))
+        };
+        let part = Inline {
+            text: inl.text[range.clone()].to_owned(),
+            spans: inl.spans.iter().filter_map(|&(a,b,s)| clip(a,b).map(|(a,b)| (a,b,s))).collect(),
+            links: inl.links.iter().filter_map(|(a,b,d)| clip(*a,*b).map(|(a,b)| (a,b,d.clone()))).collect(),
+        };
+        let sliced = SpanMap(map.0.iter().filter_map(|(src,out)| {
+            clip(out.start,out.end).map(|(a,b)| {
+                let mut source = src.clone();
+                if src.len() == out.len() {
+                    source.start += range.start.saturating_sub(out.start);
+                    source.end -= out.end.saturating_sub(range.end);
+                }
+                (source, a..b)
+            })
+        }).collect(), Vec::new());
+        let e = rich(part.text.clone(), self.spans(&part, style.size)).font(style).color(color).reveal(self.reveal).w_full();
+        self.select_inline(e, &part, Some(&sliced))
     }
 
     fn blocks(&self, blocks: &[Block], maps: &[BlockMap], keys: &[String], top_level: bool) -> El {
         let mut c = col().w_full();
         let mut prev_mb = 0.0f32;
+        let mut rendered = false;
         let names = rendered_keys(blocks.len(), keys);
         let empty = BlockMap::None;
         for ((i, b), key) in blocks.iter().enumerate().zip(names) {
             let (mt, mb) = margins(b, &self.s);
-            let top = if i == 0 { 0.0 } else { mt.max(prev_mb) };
+            let top = if rendered { mt.max(prev_mb) } else { 0.0 };
             if top_level {
                 self.current_block_key.replace(key.clone().into());
             }
-            c = c.child(self.block(b, maps.get(i).unwrap_or(&empty)).key(key).mt(top));
+            let before = self.embedded_blocks.borrow().len();
+            let child = self.block(b, maps.get(i).unwrap_or(&empty));
+            let empty_inline = matches!(b, Block::Para(inl) | Block::Heading(_, inl) if inl.text.is_empty());
+            if empty_inline && self.embedded_blocks.borrow().len() == before { continue; }
+            c = c.child(child.key(key).mt(top));
+            rendered = true;
             prev_mb = mb;
         }
         c
@@ -1826,8 +1941,8 @@ mod tests {
         }
         let (blocks, sources, tasks, _, _) = doc_cached(src);
         let r = Renderer { s: style.clone(), highlights: Vec::new(), reveal: 0.0, streaming: false, on_link: None, on_link_secondary: None, link_look: None, link_ring: None, on_task: None,
-            tasks_read_only: false, selectable: false, scroll_wide: false, highlighter, sources: sources.clone(),
-            next_source: Cell::new(0), tasks, next_task: Cell::new(0), current_block_key: RefCell::new("b0".into()) };
+            tasks_read_only: false, selectable: false, scroll_wide: false, highlighter, embed_links: None, sources: sources.clone(),
+            next_source: Cell::new(0), tasks, next_task: Cell::new(0), current_block_key: RefCell::new("b0".into()), embedded_blocks: RefCell::new(Vec::new()) };
         let mut found = Vec::new();
         codes(&blocks, &mut found);
         assert_eq!(found.len(), sources.len(), "one source per code block");
@@ -2078,8 +2193,8 @@ mod tests {
         let (blocks, sources, tasks, _, _) = doc_cached("[**bold** *em* `code` plain](session:1)");
         let Block::Para(inl) = &blocks[0] else { panic!() };
         let r = Renderer { s: style.clone(), highlights: Vec::new(), reveal: 0.0, streaming: false, on_link: None, on_link_secondary: None, link_look: Some(look), link_ring: None, on_task: None,
-            tasks_read_only: false, selectable: false, scroll_wide: false, highlighter: Highlighter::builtin(), sources,
-            next_source: Cell::new(0), tasks, next_task: Cell::new(0), current_block_key: RefCell::new("b0".into()) };
+            tasks_read_only: false, selectable: false, scroll_wide: false, highlighter: Highlighter::builtin(), embed_links: None, sources,
+            next_source: Cell::new(0), tasks, next_task: Cell::new(0), current_block_key: RefCell::new("b0".into()), embedded_blocks: RefCell::new(Vec::new()) };
         let spans = r.spans(inl, style.body.size);
         // The link span is first so `flatten_spans` applies inner Strong/Em/Code over it.
         assert_eq!((spans[0].start, spans[0].end, spans[0].color, spans[0].weight, spans[0].bg, spans[0].bg_pad), (0, inl.text.len() as u32, Some(Color::WHITE), Some(500.0), Some(bg), 3.0));

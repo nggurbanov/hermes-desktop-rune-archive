@@ -53,6 +53,7 @@ pub struct Workspace {
     pub error: Option<String>,
     pub(crate) epoch: u64,
     pub(crate) profile: String,
+    pub(crate) profile_intent: crate::source::ProfileIntent,
     pub(crate) closed_processes: std::collections::HashSet<String>,
     pub(crate) process_snapshots: HashMap<String, serde_json::Value>,
 }
@@ -103,6 +104,7 @@ pub enum Action {
 }
 pub(crate) enum Reply {
     Event {
+        owner: String,
         id: String,
         generation: u64,
         event: worker::Event,
@@ -181,7 +183,11 @@ impl Terminal {
             return Err("Invalid terminal working directory".into());
         }
         let fingerprint = crate::client::connection_key(&connection)?;
-        let key = format!("{}", serde_json::json!([fingerprint, scope.profile, cwd]));
+        let key = if scope.profile_intent.is_backend() {
+            serde_json::json!([fingerprint, scope.profile, cwd]).to_string()
+        } else {
+            serde_json::json!([fingerprint, scope.profile, cwd, scope.profile_intent]).to_string()
+        };
         self.workspaces
             .entry(key.clone())
             .or_insert_with(|| Workspace {
@@ -190,6 +196,7 @@ impl Terminal {
                 error: None,
                 epoch: scope.connection,
                 profile: scope.profile.clone(),
+                profile_intent: scope.profile_intent,
                 closed_processes: Default::default(),
                 process_snapshots: Default::default(),
             });
@@ -446,6 +453,7 @@ impl Terminal {
         let start = worker::Start {
             target: Self::target(context, tab.source)?,
             profile: context.scope.profile.clone(),
+            profile_intent: context.scope.profile_intent,
             cwd: tab.cwd.clone(),
             rows,
             cols,
@@ -454,6 +462,7 @@ impl Terminal {
         tab.status = Status::Starting;
         tab.error = None;
         tab.handle = Some(worker::spawn(
+            context.key.clone(),
             tab.id.clone(),
             tab.generation,
             start,
@@ -596,7 +605,10 @@ impl Terminal {
             .and_then(|tab| tab.grid.find_next(&needle));
     }
     pub fn rehome(&mut self, origin: &DraftScope, target: DraftScope) {
-        if origin.connection != target.connection || origin.profile != target.profile {
+        if origin.connection != target.connection
+            || origin.profile != target.profile
+            || origin.profile_intent != target.profile_intent
+        {
             return;
         }
         if let Some(owner) = self.session_owners.get(origin).cloned() {
@@ -608,6 +620,7 @@ impl Terminal {
             .retain(|scope, _| scope.connection != epoch);
         for w in self.workspaces.values_mut().filter(|w| w.epoch == epoch) {
             for tab in &mut w.tabs {
+                tab.generation = tab.generation.wrapping_add(1);
                 tab.handle.take();
                 if !matches!(tab.source, Source::Agent) {
                     tab.status = Status::Detached;
@@ -617,14 +630,26 @@ impl Terminal {
         self.dirty = true;
     }
     pub fn close_profile(&mut self, epoch: u64, profile: &str) {
-        self.session_owners
-            .retain(|scope, _| !(scope.connection == epoch && scope.profile == profile));
+        self.close_profile_intent(epoch, profile, crate::source::ProfileIntent::Backend);
+    }
+    pub fn close_profile_intent(
+        &mut self,
+        epoch: u64,
+        profile: &str,
+        intent: crate::source::ProfileIntent,
+    ) {
+        self.session_owners.retain(|scope, _| {
+            !(scope.connection == epoch
+                && scope.profile == profile
+                && scope.profile_intent == intent)
+        });
         for w in self
             .workspaces
             .values_mut()
-            .filter(|w| w.epoch == epoch && w.profile == profile)
+            .filter(|w| w.epoch == epoch && w.profile == profile && w.profile_intent == intent)
         {
             for tab in &mut w.tabs {
+                tab.generation = tab.generation.wrapping_add(1);
                 tab.handle.take();
                 tab.status = Status::Detached;
             }
@@ -659,23 +684,21 @@ impl Terminal {
                     }
                 }
                 Reply::Event {
+                    owner,
                     id,
                     generation,
                     event,
                 } => {
-                    let Some(key) = self
-                        .workspaces
-                        .iter()
-                        .find(|(_, w)| {
-                            w.tabs
-                                .iter()
-                                .any(|t| t.id == id && t.generation == generation)
-                        })
-                        .map(|(k, _)| k.clone())
-                    else {
+                    let Some(w) = self.workspaces.get_mut(&owner) else {
                         continue;
                     };
-                    let w = self.workspaces.get_mut(&key).unwrap();
+                    if !w
+                        .tabs
+                        .iter()
+                        .any(|t| t.id == id && t.generation == generation)
+                    {
+                        continue;
+                    }
                     let tab = w.tabs.iter_mut().find(|t| t.id == id).unwrap();
                     match event {
                         worker::Event::Started {
@@ -771,6 +794,7 @@ impl Terminal {
                 error: None,
                 epoch: 0,
                 profile: "synthetic".into(),
+                profile_intent: crate::source::ProfileIntent::Backend,
                 closed_processes: Default::default(),
                 process_snapshots: Default::default(),
             },

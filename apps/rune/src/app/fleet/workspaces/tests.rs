@@ -27,6 +27,7 @@ fn same_names_keep_actual_editors_tabs_drafts_and_delayed_file_receipts_per_sour
     let mut s = viewer();
     s.selected_session = Some("same".into());
     s.tabs.push(ConversationTab {
+        profile_intent: crate::source::ProfileIntent::Backend,
         profile: "default".into(),
         session: "same".into(),
         title: "A conversation".into(),
@@ -43,6 +44,7 @@ fn same_names_keep_actual_editors_tabs_drafts_and_delayed_file_receipts_per_sour
     assert!(s.tabs.is_empty());
     s.selected_session = Some("same".into());
     s.tabs.push(ConversationTab {
+        profile_intent: crate::source::ProfileIntent::Backend,
         profile: "default".into(),
         session: "same".into(),
         title: "B conversation".into(),
@@ -96,6 +98,7 @@ fn a_fresh_send_binding_while_parked_restores_its_actual_input_and_stored_tab_on
         .replace_text("B untouched");
     let stored = DraftScope {
         session: Some("created-on-a".into()),
+        draft_origin: None,
         ..origin.clone()
     };
     s.rehome_editors(&origin, stored.clone());
@@ -114,4 +117,31 @@ fn a_fresh_send_binding_while_parked_restores_its_actual_input_and_stored_tab_on
     assert!(s.composer_scope().session.is_none());
     assert_ne!(s.composer.editor_id(), &editor);
     assert!(s.composer.draft(&s.composer_scope()).is_none());
+}
+
+#[test]
+fn parked_selected_route_restores_only_its_captured_profile_intent() {
+    use crate::source::ProfileIntent;
+    let mut s = viewer();
+    s.profile_intent = ProfileIntent::NativeSelf;
+    s.selected_session = Some("same".into());
+    let selected = s.composer_scope();
+    assert!(s.ensure_editor());
+    s.composer
+        .draft_mut(selected.clone())
+        .text
+        .replace_text("selected input");
+    switch(&mut s, "b");
+    assert_eq!(s.profile_intent, ProfileIntent::Backend);
+    assert!(s.use_connection_for_profile_intent(
+        connection("a"),
+        Some("default".into()),
+        ProfileIntent::NativeSelf
+    ));
+    assert_eq!(s.composer_scope(), selected);
+    assert!(s.ensure_editor());
+    assert_eq!(
+        s.composer.draft(&selected).unwrap().text.text,
+        "selected input"
+    );
 }

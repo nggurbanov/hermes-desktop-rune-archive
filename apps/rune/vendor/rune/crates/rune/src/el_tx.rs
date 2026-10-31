@@ -36,7 +36,7 @@ pub struct Tx {
     /// `Tx::launch`: (source, destination).
     pub(crate) launches: Vec<(String, String)>,
     /// Rows to reveal: (scope, key).
-    pub(crate) scroll_to: Vec<(Option<String>, String)>,
+    pub(crate) scroll_to: Vec<(Option<String>, String, bool)>,
     /// Scroll viewports to send to their bottom: (key, animated).
     pub(crate) scroll_bottom: Vec<(String, bool)>,
     /// Scroll viewports to page: (key, pages).

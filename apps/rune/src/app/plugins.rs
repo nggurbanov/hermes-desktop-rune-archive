@@ -28,11 +28,19 @@ impl Viewer {
             }
         }
         self.plugin_hosts.set_resolver(self.connections.resolver());
-        self.invalidate_page_requests("plugin-host.");
-        if let Err(error) = self
-            .plugin_hosts
-            .launch(source, origin, scope, &connection, owner)
-        {
+        let previous = self.plugin_hosts.window_token();
+        let result = self.plugin_hosts.launch(
+            source,
+            origin,
+            scope,
+            &connection,
+            self.connections.active_lease(),
+            owner,
+        );
+        if previous != self.plugin_hosts.window_token() {
+            self.invalidate_page_requests("plugin-host.");
+        }
+        if let Err(error) = result {
             self.client_error = Some(error);
         }
     }
@@ -461,6 +469,7 @@ impl Viewer {
                 self.open_target(
                     ConversationTarget::Session {
                         profile: profile.clone(),
+                        profile_intent: crate::source::ProfileIntent::Backend,
                         id,
                         title,
                     },

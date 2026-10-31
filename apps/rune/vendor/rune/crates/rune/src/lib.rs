@@ -214,7 +214,7 @@ pub use live::{Live, LiveText, Tween};
 pub use memo::memo;
 pub use pixels::Pixels;
 pub use tray::{Tray, TrayError, TrayEvent, TrayIcon, TrayItem, TraySpec};
-pub use file_dialog::{FileDialogError, FileDialogKind, FileDialogOptions, FileDialogResult, FileDialogs, ScriptedFileDialog};
+pub use file_dialog::{FileDialogError, FileDialogKind, FileDialogOptions, FileDialogResult, MultiFileDialogResult, FileDialogs, ScriptedFileDialog};
 pub use image::{Image, ImageCache, ImageError, ImageId};
 pub use rune_motion::{
     Anim, AnimExt, Beat, Blend, Clock, CubicBezier, Curve, Decay, Easing, Edge, Effect, LayoutAnim, LoopKind, LoopSpec, NodeId,

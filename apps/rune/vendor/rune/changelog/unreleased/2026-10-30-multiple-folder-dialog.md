@@ -1,0 +1,1 @@
+- Support ordered multiple-folder selection and cancellation through native and scripted file dialogs.

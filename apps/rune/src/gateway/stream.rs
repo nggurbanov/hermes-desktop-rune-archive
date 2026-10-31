@@ -132,6 +132,12 @@ impl Gateway {
         if let Some(session) = &request.session {
             url.query_pairs_mut().append_pair("session_id", session);
         }
+        let method = if request.method == Method::Head {
+            reqwest::Method::HEAD
+        } else {
+            reqwest::Method::GET
+        };
+        let prepared = self.http_parts_method(profile, url, deadline, Some(method))?;
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
             reqwest::header::ACCEPT_ENCODING,
@@ -149,24 +155,6 @@ impl Gateway {
                     value
                         .parse()
                         .map_err(|_| "Invalid file negotiation header")?,
-                );
-            }
-        }
-        match &self.auth {
-            Auth::Token(Some(token)) => {
-                url.query_pairs_mut().append_pair("token", token);
-            }
-            Auth::Token(None) => {}
-            #[cfg(target_os = "linux")]
-            Auth::Native(endpoint) => {
-                let home = self
-                    .profile_homes
-                    .get(profile)
-                    .ok_or("Profile is not served by this gateway")?;
-                let ticket = endpoint.ticket_until(home, "native-http", deadline)?;
-                headers.insert(
-                    "X-Hermes-Gateway-Ticket",
-                    ticket.parse().map_err(|_| "Invalid file ticket")?,
                 );
             }
         }
@@ -198,13 +186,27 @@ impl Gateway {
             .map_err(|_| "The file transfer runtime could not start")?;
         runtime.block_on(async {
             let client=client.build().map_err(|_|"The file transport could not start")?;
-            let method=if request.method==Method::Head { reqwest::Method::HEAD }else{reqwest::Method::GET};
-            let send=client.request(method,url).headers(headers).send();
+            let send = |parts: &prepared::HttpParts| {
+                let mut request_headers = parts.headers.clone();
+                request_headers.extend(headers.clone());
+                client.request(parts.method.clone(), parts.url.clone()).headers(request_headers).send()
+            };
             let mut response=tokio::select! {
                 biased;
                 _=cancel.wait()=>return Err("File transfer cancelled".into()),
-                result=send=>result.map_err(|_|"File transfer failed (network, TLS or timeout)")?,
+                result=send(&prepared)=>result.map_err(|_|"File transfer failed (network, TLS or timeout)")?,
             };
+            if response.status() == reqwest::StatusCode::UNAUTHORIZED
+                && prepared.method == reqwest::Method::GET
+                && prepared::PreparedTransport::has_cloud_receipt(&prepared)
+            {
+                let retry = self.prepared.retry_http_unauthorized(prepared, deadline)?;
+                response = tokio::select! {
+                    biased;
+                    _=cancel.wait()=>return Err("File transfer cancelled".into()),
+                    result=send(&retry)=>result.map_err(|_|"File transfer failed (network, TLS or timeout)")?,
+                };
+            }
             let header=|name:&str| response.headers().get(name).and_then(|h|h.to_str().ok()).map(str::to_owned);
             let mut metadata=Metadata {
                 status:response.status().as_u16(), content_type:header("content-type"),

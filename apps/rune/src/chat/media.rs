@@ -124,6 +124,8 @@ mod tests {
     };
     fn owner() -> DraftScope {
         DraftScope {
+            draft_origin: None,
+            profile_intent: crate::source::ProfileIntent::Backend,
             connection: 7,
             profile: "work".into(),
             session: Some("child".into()),

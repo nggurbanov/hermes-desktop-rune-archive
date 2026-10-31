@@ -1,0 +1,30 @@
+[
+  {
+    "input": "MEDIA:/tmp/a.mp3\nMEDIA:/tmp/a.mp3 then MEDIA:/tmp/b.mp3",
+    "output": "[Audio: a.mp3](#media:%2Ftmp%2Fa.mp3)\n[Audio: a.mp3](#media:%2Ftmp%2Fa.mp3) then [Audio: b.mp3](#media:%2Ftmp%2Fb.mp3)"
+  },
+  {
+    "input": "MEDIA:/tmp/a.mp3\r\nMEDIA:/tmp/a.mp3 then MEDIA:/tmp/b.mp3",
+    "output": "[Audio: a.mp3](#media:%2Ftmp%2Fa.mp3)\r\n[Audio: b.mp3](#media:%2Ftmp%2Fa.mp3%20then%20MEDIA%3A%2Ftmp%2Fb.mp3)"
+  },
+  {
+    "input": "MEDIA:/tmp/a.mp3﻿",
+    "output": "[Audio: a.mp3](#media:%2Ftmp%2Fa.mp3)﻿"
+  },
+  {
+    "input": "MEDIA:/tmp/a.mp3",
+    "output": "[File: a.mp3](#media:%2Ftmp%2Fa.mp3%C2%85)"
+  },
+  {
+    "input": "MEDIA:https://example.invalid",
+    "output": "[File: https://example.invalid](#media:https%3A%2F%2Fexample.invalid)"
+  },
+  {
+    "input": "MEDIA:foo:bar",
+    "output": "MEDIA:foo:bar"
+  },
+  {
+    "input": "MEDIA:/tmp/a.mp3 then MEDIA:/tmp/b.mp3\nMEDIA:/tmp/a.mp3 then MEDIA:/tmp/b.mp3",
+    "output": "[Audio: b.mp3](#media:%2Ftmp%2Fa.mp3%20then%20MEDIA%3A%2Ftmp%2Fb.mp3)\n[Audio: a.mp3](#media:%2Ftmp%2Fa.mp3) then [Audio: b.mp3](#media:%2Ftmp%2Fb.mp3)"
+  }
+]

@@ -37,6 +37,8 @@ fn setup(s: &mut State, waker: rune::Waker) {
                 },
                 Target {
                     owner: DraftScope {
+                        draft_origin: None,
+                        profile_intent: crate::source::ProfileIntent::Backend,
                         connection: 17,
                         profile: "research".into(),
                         session: Some("audio-session".into()),

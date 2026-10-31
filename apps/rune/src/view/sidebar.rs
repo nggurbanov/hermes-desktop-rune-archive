@@ -94,128 +94,219 @@ pub fn sessions(s: &Viewer, p: &Pal, k: &Kit, layer: &mut Vec<El>) -> El {
                 ),
         );
     }
-    let all = visible_rows(s);
-    if !s.search.text.trim().is_empty() {
-        let matches = all
-            .iter()
-            .filter(|row| state.matches(row, &s.search.text))
-            .count();
-        body =
-            body.child(note(format!("{matches} of {}", all.len()), k).key("session-match-count"));
-    }
-    let pinned: Vec<_> = all
-        .iter()
-        .copied()
-        .filter(|r| r.pinned == Some(true) && state.matches(r, &s.search.text))
-        .collect();
-    let pinned_key = state.group_key("pinned", "section", "pinned");
-    body = body.child(section("Pinned", &pinned_key, pinned.len(), s, k, None));
-    if !state.prefs.collapsed.contains(&pinned_key) {
-        if pinned.is_empty() {
-            body = body.child(note(
-                if state.recents.loading && !state.recents.loaded {
-                    "Loading pinned conversations…"
-                } else {
-                    "Pin a conversation from its context menu to keep it here."
-                },
-                k,
-            ));
-        }
-        for item in pinned {
-            body = body.child(session_row(item, s, k));
-        }
-    }
-    let recents_key = state.group_key("recents", "section", "sessions");
-    body = body.child(
-        row()
-            .w_full()
-            .center_y()
-            .child(
-                section(
-                    "Sessions",
-                    &recents_key,
-                    state.recents.rows.len(),
-                    s,
-                    k,
-                    None,
-                )
-                .grow(1.0),
-            )
-            .child(filter_menu(s, k, layer)),
-    );
-    if !state.prefs.collapsed.contains(&recents_key) {
-        let rows = state.ordered(
-            state
-                .recents
-                .rows
-                .iter()
-                .filter(|r| {
-                    r.pinned != Some(true) && !canonical(r, s) && state.matches(r, &s.search.text)
-                })
-                .collect(),
-        );
-        body = render_list(body, rows, s, k);
-        body = slice_feedback(
-            body,
-            &state.recents,
-            "No conversations in this view.",
-            "recents",
+    let project_overview = state.prefs.grouping == Grouping::Project
+        && matches!(s.projects_state().scope, crate::projects::Scope::All);
+    if !project_overview {
+        body = body.child(crate::view::projects::navigation(
             s,
+            crate::view::projects::Actions {
+                select: Viewer::project_select,
+                retry: Viewer::project_retry,
+                open_session: Viewer::project_open_session,
+                open_preview: Viewer::project_open_preview,
+                toggle: Viewer::project_toggle,
+                expand: Viewer::project_expand,
+                reveal: Viewer::project_reveal,
+            },
             k,
-        );
+            layer,
+        ));
     }
-    let mut sources: BTreeMap<String, Vec<&SidebarSession>> = BTreeMap::new();
-    for item in &state.messaging.rows {
-        if item.pinned != Some(true) && !canonical(item, s) && state.matches(item, &s.search.text) {
-            sources
-                .entry(item.source.clone().unwrap_or_else(|| "messaging".into()))
-                .or_default()
-                .push(item);
+    if matches!(s.projects_state().scope, crate::projects::Scope::All) {
+        let all = visible_rows(s);
+        if !s.search.text.trim().is_empty() {
+            let matches = all
+                .iter()
+                .filter(|row| state.matches(row, &s.search.text))
+                .count();
+            body = body
+                .child(note(format!("{matches} of {}", all.len()), k).key("session-match-count"));
         }
-    }
-    if let Some(error) = &state.messaging.error {
-        body = body
-            .child(note(format!("Messaging sessions: {error}"), k))
-            .child(button(
-                "Retry messaging sessions",
-                Action::Refresh,
-                state.messaging.loading,
-                k,
-            ));
-    }
-    for (source, items) in sources {
-        let key = state.group_key(&format!("messaging:{source}"), "section", &source);
-        let label = source_label(&source);
-        body = body.child(section(&label, &key, items.len(), s, k, None));
-        if !state.prefs.collapsed.contains(&key) {
-            for item in state.ordered(items) {
+        let pinned: Vec<_> = all
+            .iter()
+            .copied()
+            .filter(|r| r.pinned == Some(true) && state.matches(r, &s.search.text))
+            .collect();
+        let pinned_key = state.group_key("pinned", "section", "pinned");
+        body = body.child(section("Pinned", &pinned_key, pinned.len(), s, k, None));
+        if !state.prefs.collapsed.contains(&pinned_key) {
+            if pinned.is_empty() {
+                body = body.child(note(
+                    if state.recents.loading && !state.recents.loaded {
+                        "Loading pinned conversations…"
+                    } else {
+                        "Pin a conversation from its context menu to keep it here."
+                    },
+                    k,
+                ));
+            }
+            for item in pinned {
                 body = body.child(session_row(item, s, k));
             }
         }
-    }
-    if state.messaging.truncated.values().any(|v| *v) {
-        body = body.child(button(
-            "More messaging conversations",
-            Action::LoadMore("messaging".into()),
-            state.messaging.loading,
-            k,
-        ));
-    }
-    if !s.simple_mode {
-        body = cron(body, s, k);
-    }
-    for (owner, label, partition) in s.fleet_sidebar_groups() {
-        let group = partition.group_key("source", "section", "sessions");
-        body = body.child(section(
-            &label,
-            &group,
-            partition.all_rows().len(),
-            s,
-            k,
-            None,
-        ));
-        if !state.prefs.collapsed.contains(&group) {
-            body = body.child(projection_owned(s, partition, &owner, k, layer));
+        let recents_key = state.group_key("recents", "section", "sessions");
+        body = body.child(
+            row()
+                .w_full()
+                .center_y()
+                .child(
+                    section(
+                        "Sessions",
+                        &recents_key,
+                        state.recents.rows.len(),
+                        s,
+                        k,
+                        None,
+                    )
+                    .grow(1.0),
+                )
+                .child(filter_menu(s, k, layer))
+                .children(if project_overview {
+                    s.projects_state().owner.as_ref().map(|owner| {
+                        crate::view::project_create::trigger::<Viewer>(
+                            crate::view::project_create::OpenTarget {
+                                owner: owner.clone(),
+                                scope: s.projects_state().scope.clone(),
+                                generation: s.projects_state().generation(),
+                                focus_return: "project-create-header".into(),
+                            },
+                            k,
+                            "project-create-header",
+                        )
+                    })
+                } else {
+                    None
+                }),
+        );
+        if !state.prefs.collapsed.contains(&recents_key) {
+            let rows = state.ordered(
+                state
+                    .recents
+                    .rows
+                    .iter()
+                    .filter(|r| {
+                        r.pinned != Some(true)
+                            && !canonical(r, s)
+                            && state.matches(r, &s.search.text)
+                    })
+                    .collect(),
+            );
+            if project_overview {
+                body = body.child(crate::view::projects::navigation(
+                    s,
+                    crate::view::projects::Actions {
+                        select: Viewer::project_select,
+                        retry: Viewer::project_retry,
+                        open_session: Viewer::project_open_session,
+                        open_preview: Viewer::project_open_preview,
+                        toggle: Viewer::project_toggle,
+                        expand: Viewer::project_expand,
+                        reveal: Viewer::project_reveal,
+                    },
+                    k,
+                    layer,
+                ));
+            }
+            if !project_overview
+                || s.projects_state()
+                    .tree
+                    .as_ref()
+                    .is_some_and(|tree| tree.projects.is_empty())
+            {
+                body = render_list(body, rows, s, k);
+            }
+            if project_overview
+                && s.search.text.trim().is_empty()
+                && s.projects_state()
+                    .tree
+                    .as_ref()
+                    .is_some_and(|tree| tree.projects.is_empty())
+            {
+                if let Some(owner) = s.projects_state().owner.as_ref() {
+                    body = body.child(crate::view::project_create::trigger::<Viewer>(
+                        crate::view::project_create::OpenTarget {
+                            owner: owner.clone(),
+                            scope: s.projects_state().scope.clone(),
+                            generation: s.projects_state().generation(),
+                            focus_return: "project-create-empty".into(),
+                        },
+                        k,
+                        "project-create-empty",
+                    ));
+                }
+            }
+            if !project_overview
+                || s.projects_state()
+                    .tree
+                    .as_ref()
+                    .is_some_and(|tree| tree.projects.is_empty())
+            {
+                body = slice_feedback(
+                    body,
+                    &state.recents,
+                    "No conversations in this view.",
+                    "recents",
+                    s,
+                    k,
+                );
+            }
+        }
+        let mut sources: BTreeMap<String, Vec<&SidebarSession>> = BTreeMap::new();
+        for item in &state.messaging.rows {
+            if item.pinned != Some(true)
+                && !canonical(item, s)
+                && state.matches(item, &s.search.text)
+            {
+                sources
+                    .entry(item.source.clone().unwrap_or_else(|| "messaging".into()))
+                    .or_default()
+                    .push(item);
+            }
+        }
+        if let Some(error) = &state.messaging.error {
+            body = body
+                .child(note(format!("Messaging sessions: {error}"), k))
+                .child(button(
+                    "Retry messaging sessions",
+                    Action::Refresh,
+                    state.messaging.loading,
+                    k,
+                ));
+        }
+        for (source, items) in sources {
+            let key = state.group_key(&format!("messaging:{source}"), "section", &source);
+            let label = source_label(&source);
+            body = body.child(section(&label, &key, items.len(), s, k, None));
+            if !state.prefs.collapsed.contains(&key) {
+                for item in state.ordered(items) {
+                    body = body.child(session_row(item, s, k));
+                }
+            }
+        }
+        if state.messaging.truncated.values().any(|v| *v) {
+            body = body.child(button(
+                "More messaging conversations",
+                Action::LoadMore("messaging".into()),
+                state.messaging.loading,
+                k,
+            ));
+        }
+        if !s.simple_mode {
+            body = cron(body, s, k);
+        }
+        for (owner, label, partition) in s.fleet_sidebar_groups() {
+            let group = partition.group_key("source", "section", "sessions");
+            body = body.child(section(
+                &label,
+                &group,
+                partition.all_rows().len(),
+                s,
+                k,
+                None,
+            ));
+            if !state.prefs.collapsed.contains(&group) {
+                body = body.child(projection_owned(s, partition, &owner, k, layer));
+            }
         }
     }
     let mut panel = col()
@@ -714,7 +805,15 @@ fn filter_menu(s: &Viewer, k: &Kit, layer: &mut Vec<El>) -> El {
             )
         })
         .collect();
-    menu = menu.item(submenu("Show", "show", show, s)).separator();
+    menu = menu.item(submenu("Show", "show", show, s));
+    if state.prefs.grouping == Grouping::Project {
+        menu = menu.item(
+            MenuItem::new("Show all sessions")
+                .checked(state.prefs.show_all_sessions)
+                .on_select(|s: &mut Viewer| s.sidebar_action(Action::Toggle("show_all_sessions"))),
+        );
+    }
+    menu = menu.separator();
     let status = Status::ALL
         .into_iter()
         .map(|status| {
@@ -874,6 +973,7 @@ fn context_menu(s: &Viewer, k: &Kit, layer: &mut Vec<El>) -> El {
         profile: profile.clone(),
         id: id.clone(),
         title: item.title.clone().unwrap_or_else(|| "Conversation".into()),
+        profile_intent: crate::source::ProfileIntent::Backend,
     };
     let session = item.session_ref();
     let title = item.title().to_owned();

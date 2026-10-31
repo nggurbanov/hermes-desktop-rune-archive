@@ -64,4 +64,5 @@ symphonia-format-riff = { path = "vendor/symphonia-format-riff" }
 symphonia-format-isomp4 = { path = "vendor/symphonia-format-isomp4" }
 
 [dev-dependencies]
+rune = { path = "vendor/rune/crates/rune", features = ["test-presenter"] }
 symphonia-metadata = "=0.5.5"

@@ -47,6 +47,16 @@ pub(super) fn outcome(status: u32, uris: &[String]) -> Result<Option<PathBuf>, F
     }
 }
 
+/// Preserve all portal selections for multi-folder requests; legacy requests keep the first.
+pub(super) fn outcome_many(status: u32, uris: &[String], multiple: bool) -> Result<Option<Vec<PathBuf>>, FileDialogError> {
+    if !multiple { return outcome(status, uris).map(|path| path.map(|p| vec![p])); }
+    match status {
+        0 => uris.iter().map(|uri| uri_path(uri)).collect::<Result<Vec<_>, _>>().map(Some),
+        1 | 2 => Ok(None),
+        n => Err(FileDialogError(format!("file dialog portal response {n}"))),
+    }
+}
+
 /// A local `file://` URI as a path, percent-decoded to raw bytes.
 pub(super) fn uri_path(uri: &str) -> Result<PathBuf, FileDialogError> {
     let invalid = || FileDialogError(format!("file dialog returned a non-local URI: {uri}"));
@@ -93,6 +103,13 @@ mod tests {
         assert_eq!(uri_path("file:///tmp/%FF").unwrap().as_os_str().as_bytes(), b"/tmp/\xff");
         assert!(uri_path("file://server/share/a").is_err());
         assert!(uri_path("https://example.com/a").is_err());
+    }
+    #[test]
+    fn multiple_folder_outcome_preserves_order_and_empty() {
+        assert_eq!(outcome_many(0, &uris(&["file:///one", "file:///two"]), true).unwrap(), Some(vec!["/one".into(), "/two".into()]));
+        assert_eq!(outcome_many(0, &[], true).unwrap(), Some(vec![]));
+        assert_eq!(outcome_many(1, &[], true).unwrap(), None);
+        assert!(outcome_many(0, &uris(&["file:///one", "https://invalid"]), true).is_err());
     }
     #[test]
     fn cancelled_or_ended_dialog_is_no_choice() {

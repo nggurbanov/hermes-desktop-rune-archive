@@ -17,6 +17,7 @@ mod gateway;
 mod identities;
 mod image_previews;
 mod layout;
+mod legacy_settings;
 mod media;
 mod media_player;
 mod media_preview_proof;
@@ -27,6 +28,7 @@ mod operations;
 mod pages;
 mod plugin_host;
 mod preview;
+mod projects;
 mod review;
 mod sidebar;
 mod sounds;
@@ -57,6 +59,9 @@ fn main() {
         return;
     }
     desktop_window::application(None).run();
+    if let Err(error) = connections::drain_workers(std::time::Duration::from_secs(20)) {
+        eprintln!("{error}");
+    }
 }
 
 /// A read-only acceptance probe. Never prints endpoint credentials or conversation data.

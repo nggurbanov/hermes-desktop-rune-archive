@@ -1,5 +1,10 @@
 use super::*;
+use crate::{
+    gateway::prepared::{WirePolicy, WirePolicySnapshot},
+    source::{RouteDoor, RouteOwner},
+};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use std::{
     io::{BufRead, BufReader, Read, Write},
     path::PathBuf,
@@ -18,9 +23,94 @@ enum Transport {
         token: Option<String>,
     },
 }
+// Credential material stays on the inherited private control pipe. A malformed
+// envelope is rejected while decoding Launch, before a native child can connect.
+struct CapturedRoute {
+    policy: Arc<WirePolicy>,
+    owner: Arc<RouteOwner>,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CapturedRouteSnapshot {
+    version: u32,
+    policy: WirePolicySnapshot,
+    owner: RouteOwnerSnapshot,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RouteOwnerSnapshot {
+    door: OwnerDoor,
+    namespace: String,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum OwnerDoor {
+    Legacy,
+    Saved { id: String, revision: String },
+}
+impl RouteOwnerSnapshot {
+    fn capture(owner: &RouteOwner) -> Self {
+        let door = match owner.door() {
+            RouteDoor::Legacy => OwnerDoor::Legacy,
+            RouteDoor::Saved { id, revision } => OwnerDoor::Saved {
+                id: id.clone(),
+                revision: revision.clone(),
+            },
+        };
+        Self {
+            door,
+            namespace: owner.namespace().to_owned(),
+        }
+    }
+    fn restore(self) -> Result<RouteOwner, String> {
+        match self.door {
+            OwnerDoor::Legacy => RouteOwner::legacy(self.namespace),
+            OwnerDoor::Saved { id, revision } => RouteOwner::saved(id, revision, self.namespace),
+        }
+    }
+}
+impl CapturedRoute {
+    fn capture(connection: &Connection) -> Option<Self> {
+        match connection {
+            Connection::Routed { policy, owner, .. } => Some(Self {
+                policy: policy.clone(),
+                owner: owner.clone(),
+            }),
+            Connection::Saved { inner, .. } => Self::capture(inner),
+            _ => None,
+        }
+    }
+}
+impl Serialize for CapturedRoute {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        CapturedRouteSnapshot {
+            version: 1,
+            policy: self.policy.private_ipc_snapshot(),
+            owner: RouteOwnerSnapshot::capture(&self.owner),
+        }
+        .serialize(serializer)
+    }
+}
+impl<'de> Deserialize<'de> for CapturedRoute {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let snapshot = CapturedRouteSnapshot::deserialize(deserializer)?;
+        if snapshot.version != 1 {
+            return Err(serde::de::Error::custom("Unsupported inherited route"));
+        }
+        let policy =
+            WirePolicy::from_private_ipc(snapshot.policy).map_err(serde::de::Error::custom)?;
+        let owner = snapshot.owner.restore().map_err(serde::de::Error::custom)?;
+        Ok(Self {
+            policy: Arc::new(policy),
+            owner: Arc::new(owner),
+        })
+    }
+}
 #[derive(Serialize, Deserialize)]
 pub(super) struct Launch {
     transport: Transport,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    route: Option<CapturedRoute>,
     pub epoch: u64,
     pub profile: String,
     pub child: String,
@@ -43,10 +133,11 @@ impl Launch {
                 endpoint: endpoint.clone(),
                 token: token.clone(),
             },
-            Connection::Saved { .. } => unreachable!(),
+            Connection::Saved { .. } | Connection::Routed { .. } => unreachable!(),
         };
         Self {
             transport,
+            route: CapturedRoute::capture(connection),
             epoch: scope.connection,
             profile: scope.profile.clone(),
             child: row.session.clone().unwrap_or_default(),
@@ -57,12 +148,20 @@ impl Launch {
         }
     }
     pub fn connection(&self) -> Connection {
-        match &self.transport {
+        let actual = match &self.transport {
             Transport::Local { home } => Connection::Local { home: home.clone() },
             Transport::Url { endpoint, token } => Connection::Url {
                 endpoint: endpoint.clone(),
                 token: token.clone(),
             },
+        };
+        match &self.route {
+            Some(route) => Connection::Routed {
+                actual: Box::new(actual),
+                policy: route.policy.clone(),
+                owner: route.owner.clone(),
+            },
+            None => actual,
         }
     }
     pub fn synthetic() -> Self {
@@ -71,6 +170,7 @@ impl Launch {
                 endpoint: "http://127.0.0.1:1".into(),
                 token: None,
             },
+            route: None,
             epoch: 1,
             profile: "studio".into(),
             child: "child-session".into(),
@@ -230,3 +330,6 @@ pub(super) fn receipt(kind: &str, dark: Option<bool>) {
 pub(super) fn report(value: Value) {
     let _ = send(&mut std::io::stdout().lock(), &value);
 }
+
+#[cfg(test)]
+mod tests;

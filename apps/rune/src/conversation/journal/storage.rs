@@ -99,6 +99,7 @@ impl Journal {
                 && saved.create_id == entry.create_id
                 && saved.connection == entry.connection
                 && saved.profile == entry.profile
+                && saved.profile_intent == entry.profile_intent
                 && saved.session == entry.session => Ok(()),
             None if entry.revision() == 0 => Ok(()),
             _ => Err("This saved send changed in another window. Review its latest state before retrying or discarding it.".into()),

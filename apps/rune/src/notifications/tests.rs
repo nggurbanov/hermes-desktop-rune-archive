@@ -7,6 +7,8 @@ use std::{
 };
 fn scope(id: &str) -> DraftScope {
     DraftScope {
+        draft_origin: None,
+        profile_intent: crate::source::ProfileIntent::Backend,
         connection: 9,
         profile: "alpha".into(),
         session: Some(id.into()),

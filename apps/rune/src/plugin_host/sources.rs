@@ -84,6 +84,13 @@ impl Sources {
         let _ = result.ensure(&primary);
         Ok(result)
     }
+    #[cfg(test)]
+    pub(super) fn retire_primary_for_test(&mut self) {
+        let source = self.rows.get_mut(&self.primary).unwrap();
+        source.retired = true;
+        source.error = Some("fixture source retired".into());
+        source.connection = None;
+    }
     pub fn refresh(&mut self) -> Result<(), String> {
         let saved = crate::connections::plugin::routes()?;
         let valid = saved

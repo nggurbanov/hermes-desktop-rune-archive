@@ -11,6 +11,96 @@ pub(super) fn run(
     let mut next_registry_read = std::time::Instant::now() + std::time::Duration::from_secs(1);
     loop {
         match requests.recv_timeout(std::time::Duration::from_millis(200)) {
+            Ok(Work::Shutdown) => break,
+            Ok(Work::ResolveLegacy {
+                request,
+                alive,
+                reply,
+            }) => {
+                let intent = request.intent;
+                let desktop_profile = request.desktop_profile.clone();
+                let result = match &mut state {
+                    Ok(core) => core.resolve_legacy(request, &alive),
+                    Err(error) => Err(error.clone()),
+                };
+                if reply
+                    .send(legacy::ResolveReceipt {
+                        intent,
+                        desktop_profile,
+                        result,
+                    })
+                    .is_ok()
+                {
+                    waker();
+                }
+            }
+            Ok(Work::CommitLegacy {
+                resolved,
+                expected_namespace,
+                intent,
+                alive,
+                reply,
+            }) => {
+                let desktop_profile = resolved.desktop_profile.clone();
+                let result = match &mut state {
+                    Ok(core) => core.commit_legacy(resolved, expected_namespace.as_deref(), &alive),
+                    Err(error) => Err(error.clone()),
+                };
+                let success = result.is_ok();
+                if reply
+                    .send(legacy::ResolveReceipt {
+                        intent,
+                        desktop_profile,
+                        result,
+                    })
+                    .is_ok()
+                {
+                    waker();
+                }
+                if success {
+                    if let Ok(core) = &state {
+                        reply_ui(
+                            &mut ui,
+                            Reply {
+                                id: 0,
+                                result: Ok(Outcome::Maintained(Ok(core.visible_registry()))),
+                            },
+                            &waker,
+                        );
+                    }
+                }
+            }
+            Ok(Work::LegacySnapshot { reply }) => {
+                let result = match &mut state {
+                    Ok(core) => core.legacy_snapshot(),
+                    Err(error) => Err(error.clone()),
+                };
+                if reply.send(result).is_ok() {
+                    waker();
+                }
+            }
+            Ok(Work::SaveLegacy { edit, reply }) => {
+                let result = match &mut state {
+                    Ok(core) => core.save_legacy(edit),
+                    Err(error) => Err(error.clone()),
+                };
+                let success = result.is_ok();
+                if reply.send(result).is_ok() {
+                    waker();
+                }
+                if success {
+                    if let Ok(core) = &state {
+                        reply_ui(
+                            &mut ui,
+                            Reply {
+                                id: 0,
+                                result: Ok(Outcome::Maintained(Ok(core.visible_registry()))),
+                            },
+                            &waker,
+                        );
+                    }
+                }
+            }
             Ok(Work::RetainPassive {
                 version,
                 connection,

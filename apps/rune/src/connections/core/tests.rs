@@ -118,6 +118,9 @@ fn core() -> (Core, FakeMetadata, FakeSecrets, FakeProbe, FakeTunnels) {
             outbox: std::collections::VecDeque::new(),
             leases: std::collections::BTreeMap::new(),
             primary_lease: None,
+            route_leases: std::collections::BTreeMap::new(),
+            ssh_pool: super::super::installed_ssh::Pool::default(),
+            ssh_binary: PathBuf::from("ssh"),
         },
         metadata,
         secrets,
@@ -622,6 +625,9 @@ fn json_core(
         outbox: std::collections::VecDeque::new(),
         leases: std::collections::BTreeMap::new(),
         primary_lease: None,
+        route_leases: std::collections::BTreeMap::new(),
+        ssh_pool: super::super::installed_ssh::Pool::default(),
+        ssh_binary: PathBuf::from("ssh"),
     }
 }
 fn wait_until(mut predicate: impl FnMut() -> bool, message: &str) {
@@ -978,7 +984,7 @@ fn stale_anonymous_editor_keeps_its_form_and_cannot_replace_another_windows_dest
     let (send, resolver, receive, done, worker) =
         retained_worker(json_core(file.path(), &secrets, &probe, &tunnels));
     let mut ui = Connections::new();
-    ui.network = Some(Network { send, receive });
+    ui.network = Some(Network::new(send, receive));
     ui.load();
     wait_until(
         || {

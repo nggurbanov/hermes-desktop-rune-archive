@@ -311,6 +311,8 @@ impl Notifications {
             return;
         }
         let scope = self.policy.active.clone().unwrap_or(DraftScope {
+            draft_origin: None,
+            profile_intent: crate::source::ProfileIntent::Backend,
             connection: 0,
             profile: "default".into(),
             session: None,

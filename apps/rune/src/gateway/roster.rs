@@ -69,47 +69,15 @@ pub(crate) struct Read {
 #[derive(Clone)]
 struct Http {
     base: Url,
-    token: Option<String>,
     profile: String,
+    prepared: super::prepared::PreparedTransport,
     client: reqwest::blocking::Client,
-    #[cfg(target_os = "linux")]
-    native: Option<local::Endpoint>,
 }
 impl Http {
     fn new(connection: &Connection, deadline: Instant) -> Result<Self, String> {
-        match connection {
-            Connection::Saved { inner, .. } => Self::new(inner, deadline),
-            Connection::Url { endpoint, token } => {
-                let (base, embedded) = endpoint_url(endpoint)?;
-                Self::build(base, token.clone().or(embedded), "default".into(), deadline)
-            }
-            Connection::Local { home } => {
-                #[cfg(target_os = "linux")]
-                {
-                    let endpoint = local::identify_until(home, deadline)?;
-                    let mut transport = Self::build(
-                        Url::parse(&endpoint.origin).map_err(|_| "Invalid local gateway origin")?,
-                        None,
-                        endpoint.profile_name(),
-                        deadline,
-                    )?;
-                    transport.native = Some(endpoint);
-                    Ok(transport)
-                }
-                #[cfg(not(target_os = "linux"))]
-                {
-                    let _ = home;
-                    Err("Passive local attachment is not available on this platform; use an existing gateway URL".into())
-                }
-            }
-        }
-    }
-    fn build(
-        base: Url,
-        token: Option<String>,
-        profile: String,
-        deadline: Instant,
-    ) -> Result<Self, String> {
+        let prepared = super::prepared::PreparedTransport::from_connection(connection, deadline)?;
+        let base = prepared.base().clone();
+        let profile = prepared.initial_profile().to_owned();
         let remaining = remaining(deadline)?;
         let mut builder = reqwest::blocking::Client::builder()
             .timeout(remaining)
@@ -126,13 +94,11 @@ impl Http {
         }
         Ok(Self {
             base,
-            token,
             profile,
+            prepared,
             client: builder
                 .build()
                 .map_err(|_| "Passive HTTP transport is unavailable")?,
-            #[cfg(target_os = "linux")]
-            native: None,
         })
     }
     fn get(&self, path: &str, deadline: Instant, cancelled: &AtomicBool) -> Result<Value, String> {
@@ -142,27 +108,18 @@ impl Http {
             .join(path)
             .map_err(|_| "Invalid passive roster route")?;
         url.query_pairs_mut().append_pair("profile", &self.profile);
-        let mut headers = reqwest::header::HeaderMap::new();
-        if let Some(token) = &self.token {
-            url.query_pairs_mut().append_pair("token", token);
-        }
-        #[cfg(target_os = "linux")]
-        if let Some(endpoint) = &self.native {
-            let ticket = endpoint.ticket_until(&endpoint.profile_id, "native-http", deadline)?;
-            headers.insert(
-                "X-Hermes-Gateway-Ticket",
-                ticket
-                    .parse()
-                    .map_err(|_| "Invalid passive native ticket")?,
-            );
-        }
-        let response = self
-            .client
-            .get(url)
-            .headers(headers)
-            .timeout(remaining(deadline)?)
-            .send()
-            .map_err(|_| "Roster read failed (network, TLS or deadline)")?;
+        let prepared =
+            self.prepared
+                .prepare_http_method(reqwest::Method::GET, url, None, deadline)?;
+        let response = self.prepared.send_http(prepared, deadline, true, |parts| {
+            check(cancelled, deadline)?;
+            self.client
+                .request(parts.method.clone(), parts.url.clone())
+                .headers(parts.headers.clone())
+                .timeout(remaining(deadline)?)
+                .send()
+                .map_err(|_| "Roster read failed (network, TLS or deadline)".into())
+        })?;
         if !response.status().is_success() {
             return Err(format!(
                 "Roster read refused (HTTP {})",

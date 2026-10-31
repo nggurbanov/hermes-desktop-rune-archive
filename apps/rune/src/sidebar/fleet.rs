@@ -51,6 +51,8 @@ impl SourceSidebar {
             state,
             network,
             scope: DraftScope {
+                draft_origin: None,
+                profile_intent: crate::source::ProfileIntent::Backend,
                 connection: epoch,
                 profile: "default".into(),
                 session: None,

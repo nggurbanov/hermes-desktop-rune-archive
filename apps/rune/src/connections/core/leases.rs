@@ -156,5 +156,6 @@ impl Core {
         for key in retire {
             self.leases.remove(&key);
         }
+        self.poll_route_leases();
     }
 }

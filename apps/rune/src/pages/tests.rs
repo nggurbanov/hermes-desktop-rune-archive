@@ -1,6 +1,8 @@
 use super::*;
 fn scope(connection: u64, profile: &str) -> DraftScope {
     DraftScope {
+        draft_origin: None,
+        profile_intent: crate::source::ProfileIntent::Backend,
         connection,
         profile: profile.into(),
         session: None,
@@ -166,4 +168,48 @@ fn retired_live_session_reads_are_skipped_before_transport_and_session_writes_st
     for method in ["session.delete", "session.rename", "session.send"] {
         assert!(!PageRequest::rpc(method, serde_json::json!({})).is_read_only());
     }
+}
+
+#[test]
+fn invalidated_queued_project_reads_do_not_connect() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let connection = Connection::Url {
+        endpoint: format!("http://{}", listener.local_addr().unwrap()),
+        token: Some("private-fixture".into()),
+    };
+    let (send, receive) = mpsc::channel();
+    let mut network = PageNetwork {
+        send: Some(send),
+        ..Default::default()
+    };
+    for (operation, method, body) in [
+        (
+            "tree",
+            "projects.tree",
+            serde_json::json!({"preview_limit":3}),
+        ),
+        (
+            "entered",
+            "projects.project_sessions",
+            serde_json::json!({"project_id":"same"}),
+        ),
+    ] {
+        network
+            .request(
+                &scope(1, "work"),
+                connection.clone(),
+                operation,
+                PageRequest::rpc(method, body),
+            )
+            .unwrap();
+    }
+    network.invalidate();
+    for _ in 0..2 {
+        assert!(receive.recv().unwrap().run(|_| {}).is_none());
+    }
+    assert_eq!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
 }

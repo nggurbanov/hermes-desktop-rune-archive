@@ -14,7 +14,42 @@ fn choice(label: &str, selected: bool, f: impl Fn(&mut Viewer) + 'static, k: &Ki
 }
 pub fn page(s: &Viewer, k: &Kit, layer: &mut Vec<El>) -> El {
     if s.settings.section == "connections" {
-        return crate::view::connections::panel(s, k, layer);
+        let tabs = row()
+            .w_full()
+            .gap(6.)
+            .px(20.)
+            .pt(16.)
+            .child(
+                choice(
+                    "Saved connections",
+                    !s.legacy_routing_settings,
+                    |s| s.set_legacy_routing_settings(false),
+                    k,
+                )
+                .key("connections-saved-tab"),
+            )
+            .child(
+                choice(
+                    "Profile routing",
+                    s.legacy_routing_settings,
+                    |s| s.set_legacy_routing_settings(true),
+                    k,
+                )
+                .key("connections-routing-tab"),
+            );
+        let panel = if s.legacy_routing_settings {
+            crate::view::legacy_settings::panel(s, k, layer)
+        } else {
+            crate::view::connections::panel(s, k, layer)
+        };
+        return col()
+            .key("connection-settings")
+            .w_full()
+            .h_full()
+            .min_h(0.)
+            .gap(10.)
+            .child(tabs)
+            .child(panel.grow(1.).min_h(0.));
     }
     let mut body = col()
         .key("client-preferences")

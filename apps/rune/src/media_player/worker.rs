@@ -33,8 +33,17 @@ pub(super) fn run(connection: Connection, target: Target, shared: Arc<Shared>) {
         let control = shared.controls.lock().unwrap();
         let generation = control.generation;
         let source_cancel = crate::gateway::stream::Cancel::default();
-        *shared.source_cancel.lock().unwrap() = Some(source_cancel.clone());
+        {
+            let mut source = shared.source_cancel.lock().unwrap();
+            *source = Some(source_cancel.clone());
+            if shared.cancel.cancelled() {
+                source_cancel.cancel();
+            }
+        }
         drop(control);
+        if source_cancel.cancelled() {
+            break;
+        }
         shared.playback_update(generation, |s| {
             s.state = State::Loading;
             s.error = None;
@@ -173,7 +182,11 @@ fn play(mut decoder: AudioDecoder, shared: &Arc<Shared>, generation: u64) -> Res
                 return Err("This stream has ended. Reload it to play again.".into());
             }
         }
-        if output.is_none() {
+        #[cfg(test)]
+        let null_output = shared.null_output;
+        #[cfg(not(test))]
+        let null_output = false;
+        if output.is_none() && !null_output {
             let stream = rodio::OutputStreamBuilder::open_default_stream()
                 .map_err(|_| "No audio output is available. Choose speakers in system settings.")?;
             let new_sink = rodio::Sink::connect_new(stream.mixer());
@@ -223,6 +236,10 @@ fn play(mut decoder: AudioDecoder, shared: &Arc<Shared>, generation: u64) -> Res
         }
         let mut ring = shared.ring.lock().unwrap();
         ring.paused = current.paused;
+        #[cfg(test)]
+        if null_output && !ring.paused {
+            let _ = super::output::consume(&mut ring, rate as usize * channels as usize / 100);
+        }
         let waiting = ring.queued == 0 && !ring.eof;
         if ring.eof && ring.queued == 0 {
             ended = true;
@@ -258,7 +275,7 @@ fn play(mut decoder: AudioDecoder, shared: &Arc<Shared>, generation: u64) -> Res
             progress = Instant::now();
         }
         previous = control;
-        if queued >= rate as usize * channels as usize / 2 || drained {
+        if null_output || queued >= rate as usize * channels as usize / 2 || drained {
             let c = shared.controls.lock().unwrap();
             if c.generation == generation {
                 let _ = shared

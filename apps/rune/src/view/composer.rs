@@ -583,7 +583,7 @@ fn model_picker(s: &Viewer, scope: &DraftScope, k: &Kit) -> El {
     }
     if visible.is_empty() {
         results = results.child(
-            text(if s.composer.catalog_loading {
+            text(if s.composer.catalog_loading_for(&scope) {
                 "Loading agent models…"
             } else if s.composer.favorites_only {
                 "No favorites yet. Star a model to keep it here."
@@ -592,6 +592,7 @@ fn model_picker(s: &Viewer, scope: &DraftScope, k: &Kit) -> El {
             } else {
                 "No matching models"
             })
+            .key("model-results-empty")
             .font(k.ty.ui)
             .color(k.c.text_muted)
             .wrap()
@@ -599,9 +600,10 @@ fn model_picker(s: &Viewer, scope: &DraftScope, k: &Kit) -> El {
             .py(16.0),
         );
     }
-    if let Some(error) = &s.composer.catalog_error {
+    if let Some(error) = s.composer.catalog_error_for(&scope) {
         results = results.child(
             text(error)
+                .key("model-results-error")
                 .role("alert")
                 .font(k.ty.small)
                 .color(k.c.danger.fg)
@@ -610,7 +612,7 @@ fn model_picker(s: &Viewer, scope: &DraftScope, k: &Kit) -> El {
     }
     let reload = Button::new("Refresh models")
         .variant(ButtonVariant::GhostMuted)
-        .disabled(s.composer.catalog_loading)
+        .disabled(s.composer.catalog_loading_for(&scope))
         .on_press(|s: &mut Viewer| s.reload_models())
         .build(k)
         .key("reload-models");

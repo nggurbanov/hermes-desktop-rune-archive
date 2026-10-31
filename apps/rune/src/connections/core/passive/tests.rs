@@ -492,6 +492,8 @@ fn pending_request_lifetime(invalidate_registry: bool) {
     let mut network = crate::pages::PageNetwork::default();
     network.init(Arc::new(|| {}));
     let scope = crate::composer::DraftScope {
+        draft_origin: None,
+        profile_intent: crate::source::ProfileIntent::Backend,
         connection: 9,
         profile: "default".into(),
         session: Some("original".into()),

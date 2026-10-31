@@ -3,6 +3,8 @@ use std::{net::TcpListener, sync::Arc, thread};
 use tungstenite::Message;
 fn scope(epoch: u64, profile: &str) -> DraftScope {
     DraftScope {
+        draft_origin: None,
+        profile_intent: crate::source::ProfileIntent::Backend,
         connection: epoch,
         profile: profile.into(),
         session: Some("parent".into()),
@@ -166,10 +168,11 @@ fn actual_socket_spectator_attaches_lazily_streams_and_closes_without_any_agent_
     let deadline = Instant::now() + Duration::from_secs(3);
     let mut finished = false;
     while Instant::now() < deadline {
-        let result = watch
-            .receive
-            .recv_timeout(Duration::from_millis(200))
-            .unwrap();
+        let result = match watch.receive.recv_timeout(Duration::from_millis(200)) {
+            Ok(result) => result,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(err) => panic!("spectator stopped before completion: {err}"),
+        };
         if !result.running
             && result
                 .messages

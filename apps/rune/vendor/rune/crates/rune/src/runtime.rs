@@ -452,6 +452,7 @@ pub(crate) struct Node {
     on_at_bottom: Option<crate::el::AtBottomFn>,
     on_far_from_bottom: Option<(f32, crate::el::AtBottomFn)>,
     on_visible_rows: Option<crate::el::VisibleRowsFn>,
+    on_mount_change: Option<crate::el::MountChangeFn>,
     on_layout: Option<crate::el::LayoutFn>,
     on_screen_layout: Option<crate::el::LayoutFn>,
     on_drawn_layout: Option<crate::el::DrawnLayoutFn>,
@@ -2183,8 +2184,8 @@ impl<S: 'static> Runtime<S> {
                 if !tx.scroll_to.is_empty() {
                     self.keeps.clear();
                     self.scroll_reveals.clear();
-                    for (scope, key) in std::mem::take(&mut tx.scroll_to) {
-                        self.reveal_row(scope.as_deref(), &key, tx.instant);
+                    for (scope, key, all) in std::mem::take(&mut tx.scroll_to) {
+                        self.reveal_requested(scope.as_deref(), &key, tx.instant, all);
                     }
                 }
             }
@@ -2259,7 +2260,7 @@ impl<S: 'static> Runtime<S> {
                 // intercept the reveal, including when this row is still virtual.
                 let scope = path.split('/').filter(|seg| !seg.starts_with('#')).collect::<Vec<_>>().join("/");
                 let key = if scope.is_empty() { key } else { format!("{scope}/{key}") };
-                scroll_to.push((None, key));
+                scroll_to.push((None, key, false));
             }
         }
         let mut scroll_bottom = std::mem::take(&mut tx.scroll_bottom);
@@ -2275,7 +2276,7 @@ impl<S: 'static> Runtime<S> {
             self.keeps.clear();
             self.scroll_reveals.clear();
         }
-        for (scope, key) in scroll_to { self.reveal_row(scope.as_deref(), &key, tx.instant); }
+        for (scope, key, all) in scroll_to { self.reveal_requested(scope.as_deref(), &key, tx.instant, all); }
         if !scroll_bottom.is_empty() || !scroll_pages.is_empty() || !scroll_offsets.is_empty() || follow {
             self.step_scroll(0.0);
         }
@@ -3052,8 +3053,8 @@ impl<S: 'static> Runtime<S> {
     /// [`Self::with_focused`] for an edit that needs the app state (an app's paste hook).
     fn with_focused_state(&mut self, f: impl FnOnce(crate::states::States<'_>, &crate::el::EditFn, &mut Tx) -> EditOutcome, tx: &mut Tx) -> bool {
         let Some(path) = self.focused.clone() else { return false };
-        let Some((access, submit, change, animate_layout, single_line, secure, revealed_override)) =
-            self.focused_input().map(|i| (i.access.clone(), i.submit.clone(), i.change.clone(), i.animate_layout, i.single_line, i.edit.is_secure(), i.revealed_override))
+        let Some((access, submit, change, display_change, animate_layout, single_line, secure, revealed_override)) =
+            self.focused_input().map(|i| (i.access.clone(), i.submit.clone(), i.change.clone(), i.display_change.clone(), i.animate_layout, i.single_line, i.edit.is_secure(), i.revealed_override))
         else {
             return false;
         };
@@ -3066,6 +3067,7 @@ impl<S: 'static> Runtime<S> {
             if let Some(rev) = revealed_override { edit.set_revealed(rev); }
         }
         let before = change.as_ref().map(|_| zeroize::Zeroizing::new(access(states!(self)).text.clone()));
+        let before_display = display_change.as_ref().map(|_| zeroize::Zeroizing::new(access(states!(self)).display().0));
         let mut out = f(states!(self), &access, tx);
         // Submit and Escape's blur act once per press; held keys still type, move and delete.
         if tx.key_repeat { out.submit = false; out.blur = false; }
@@ -3077,6 +3079,11 @@ impl<S: 'static> Runtime<S> {
         {
             change(states!(self), tx);
             access(states!(self)).mark_edited();
+        }
+        if let Some(display_change) = display_change
+            && before_display.as_ref().map(|s| s.as_str()) != Some(access(states!(self)).display().0.as_str())
+        {
+            display_change(states!(self), tx);
         }
         if let Some(c) = out.copy {
             tx.copy(c);
@@ -3740,7 +3747,39 @@ impl<S: 'static> Runtime<S> {
             measured = self.measure(tx);
             measured = self.settle_layout_reads(measured, tx);
         }
+        let previous: HashSet<_> = self
+            .nodes
+            .iter()
+            .filter(|n| n.on_mount_change.is_some())
+            .map(|n| n.id)
+            .collect();
+        let current: HashSet<_> = measured
+            .nodes
+            .iter()
+            .filter(|n| n.on_mount_change.is_some())
+            .map(|n| n.id)
+            .collect();
+        let retired: Vec<_> = self
+            .nodes
+            .iter()
+            .filter(|n| !current.contains(&n.id))
+            .filter_map(|n| n.on_mount_change.clone())
+            .collect();
+        let mounted: Vec<_> = measured
+            .nodes
+            .iter()
+            .filter(|n| !previous.contains(&n.id))
+            .filter_map(|n| n.on_mount_change.clone())
+            .collect();
         self.apply(measured, tx);
+        let mut changed = false;
+        for callback in retired {
+            changed |= callback(states!(self), false);
+        }
+        for callback in mounted {
+            changed |= callback(states!(self), true);
+        }
+        self.dirty |= changed;
         self.scene.keep_flights(false);
         self.memo.keep_since(self.memo_since);
         self.track_focused_rows();
@@ -3874,7 +3913,7 @@ impl<S: 'static> Runtime<S> {
             let revealing = self.virtuals.get(&nodes[c].path)
                 .is_some_and(|v| self.scroll_reveals.iter().any(|r| r.viewport == v.scroll_path));
             let revealed_now = self.virtuals.get(&nodes[c].path).is_some_and(|v| {
-                tx.scroll_to.iter().any(|(scope, key)| {
+                tx.scroll_to.iter().any(|(scope, key, _)| {
                     nodes.iter().enumerate().find(|(_, n)| n.named(key)
                         && n.parent.is_none_or(|p| in_scope(&nodes[p].path, scope.as_deref())))
                         .is_some_and(|(i, _)| {
@@ -4413,6 +4452,7 @@ impl<S: 'static> Runtime<S> {
             }
             old.parent = old_parent_id.and_then(|pid| self.node_index.get(&pid).copied());
             old.live.clear();
+            old.on_mount_change = None;
             // Exit visuals outlive their model. Never call an accessor captured by
             // a deleted row while normalizing a later focus change.
             if let Some(input) = &mut old.input {
@@ -4420,6 +4460,7 @@ impl<S: 'static> Runtime<S> {
                 input.access = None;
                 input.key = None;
                 input.change = None;
+                input.display_change = None;
                 input.edit.focused = false;
                 input.edit.clear_preedit();
                 input.edit.conceal();
@@ -5220,6 +5261,36 @@ impl<S: 'static> Runtime<S> {
     /// Scrolls so row `key` shows. A virtual row placed by estimates may measure differently
     /// once mounted, along with the rows around it, so this places it again from what the
     /// commit measured until it stays put. Those commits are `instant` when the request's was.
+    fn reveal_requested(&mut self, scope: Option<&str>, key: &str, instant: bool, all: bool) {
+        self.reveal_row(scope, key, instant);
+        if all { self.reveal_highlight_ancestors(scope, key); }
+    }
+
+    fn reveal_highlight_ancestors(&mut self, scope: Option<&str>, key: &str) {
+        let Some((target, [_, y0, _, y1])) = self.highlight_target_in(&self.nodes, scope, key) else { return };
+        let mut inner_offset = 0.0_f64;
+        for i in std::iter::successors(self.nodes[target].parent, |&p| self.nodes[p].parent).collect::<Vec<_>>() {
+            let n = &self.nodes[i];
+            if !in_scope(&n.path, scope) { break; }
+            if n.scroll.is_none() || !n.scroll_axes.y() { continue; }
+            let id = n.id;
+            let height = f64::from(n.local.h);
+            let top = f64::from(y0 - n.target[1]) - inner_offset;
+            let hit_height = f64::from((y1 - y0).max(0.0));
+            let margin = f64::from(n.scroll_edges.margin);
+            let max = self.scroll_overflow(i).max(0.0);
+            let Some(st) = self.scrolls.get_mut(&id) else { continue };
+            st.max = max;
+            st.offset = scroll_edge::reveal(st.offset, top, hit_height, height, margin).clamp(0.0, max);
+            st.v = 0.0;
+            st.glide = None;
+            st.glide_to = None;
+            st.pinned = false;
+            st.direct = true;
+            inner_offset += st.offset;
+        }
+    }
+
     fn reveal_row(&mut self, scope: Option<&str>, key: &str, instant: bool) {
         if self.reveal_row_once(scope, key, true, instant) {
             for _ in 0..8 {

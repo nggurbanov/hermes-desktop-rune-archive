@@ -57,6 +57,8 @@ impl Viewer {
         })
     }
     pub(super) fn poll_tools(&mut self, now: f64, tx: &mut Tx) -> bool {
+        self.consume_project_create_picker(tx);
+        self.consume_project_folders_picker(tx);
         let artifacts_changed = self.artifacts.poll();
         if let Some(url) = self.artifacts.take_open_url() {
             if url::Url::parse(&url).is_ok_and(|u| {
@@ -229,6 +231,13 @@ impl Viewer {
             return;
         }
         if owner.session.is_none() {
+            if let Some(id) = self
+                .composer
+                .draft(&owner)
+                .map(|draft| draft.policy_id.clone())
+            {
+                self.clear_project_draft_provenance(&id);
+            }
             let draft = self.composer.draft_mut(owner.clone());
             draft.cwd = Some(path.clone());
             draft.cwd_explicit = true;

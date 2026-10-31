@@ -13,23 +13,35 @@ impl Gateway {
     ) -> Result<Value, String> {
         valid_scope(profile)?;
         let deadline = Instant::now() + Duration::from_secs(request.timeout);
+        let provenance = request
+            .provenance
+            .as_ref()
+            .filter(|_| self.prepared.policy().is_some());
         if matches!(request.method, PageMethod::Rpc | PageMethod::PluginRpc) {
             let mut body = request
                 .body
                 .as_object()
                 .cloned()
                 .ok_or("Workspace RPC parameters must be an object")?;
-            body.insert("profile".into(), json!(profile));
+            let params = if let Some(provenance) = provenance {
+                self.rpc_params_for(provenance, Value::Object(body))?
+            } else {
+                body.insert("profile".into(), json!(profile));
+                Value::Object(body)
+            };
             return self.page_rpc_until(
                 &request.path,
-                Value::Object(body),
+                params,
                 deadline,
                 &mut on_event,
                 matches!(request.method, PageMethod::PluginRpc),
             );
         }
         #[cfg(target_os = "linux")]
-        if matches!(&self.auth, Auth::Native(_)) && !self.profile_homes.contains_key(profile) {
+        if provenance.is_none()
+            && matches!(&self.auth, Auth::Native(_))
+            && !self.profile_homes.contains_key(profile)
+        {
             self.profiles_until(deadline)?;
         }
         if !request.path.starts_with("/api/")
@@ -50,13 +62,14 @@ impl Gateway {
         if url.query_pairs().any(|(key, _)| key == "token") {
             return Err("Workspace route cannot contain credentials".into());
         }
-        if has_profile
+        if provenance.is_none()
+            && has_profile
             && !(matches!(request.method, PageMethod::Get)
                 && request.path.split('?').next() == Some("/api/profiles/sessions"))
         {
             return Err("Use the explicit request profile scope".into());
         }
-        if !has_profile {
+        if provenance.is_none() && !has_profile {
             url.query_pairs_mut().append_pair("profile", profile);
         }
         for (key, value) in &request.query {
@@ -73,33 +86,31 @@ impl Gateway {
             PageMethod::Delete => reqwest::Method::DELETE,
             PageMethod::Rpc | PageMethod::PluginRpc | PageMethod::LocalFs => unreachable!(),
         };
-        let mut headers = reqwest::header::HeaderMap::new();
-        match &self.auth {
-            Auth::Token(Some(token)) => {
-                url.query_pairs_mut().append_pair("token", token);
+        let prepared = if let Some(provenance) = provenance {
+            self.ensure_profile_scope(provenance)?;
+            let relative = url
+                .path()
+                .strip_prefix(self.base.path().trim_end_matches('/'))
+                .ok_or("The scoped request changed its API prefix")?;
+            let mut path = relative.to_owned();
+            if let Some(query) = url.query() {
+                path.push('?');
+                path.push_str(query);
             }
-            Auth::Token(None) => {}
+            let url = self.api_url_for(provenance, method.as_str(), &path)?;
             #[cfg(target_os = "linux")]
-            Auth::Native(endpoint) => {
-                let home = self
-                    .profile_homes
-                    .get(profile)
-                    .ok_or("Profile is not served by this gateway")?;
-                let ticket = endpoint.ticket_until(home, "native-http", deadline)?;
-                headers.insert(
-                    "X-Hermes-Gateway-Ticket",
-                    ticket.parse().map_err(|_| "Invalid native HTTP ticket")?,
-                );
+            if matches!(&self.auth, Auth::Native(_)) {
+                if let Some(name) = self.native_scope_profile(provenance, &url)? {
+                    if !self.profile_homes.contains_key(&name) {
+                        self.profiles_until(deadline)?;
+                    }
+                }
             }
-        }
-        let remaining = deadline
-            .checked_duration_since(Instant::now())
-            .ok_or("Workspace request timed out")?;
-        let mut operation = self
-            .http
-            .request(method, url)
-            .headers(headers)
-            .timeout(remaining);
+            self.http_parts_for_method(provenance, url, deadline, Some(method.clone()))?
+        } else {
+            self.http_parts_method(profile, url, deadline, Some(method.clone()))?
+        };
+        let mut content: Option<(String, Vec<u8>)> = None;
         if let Some(upload) = &request.upload {
             if !request.body.is_null()
                 || !matches!(
@@ -127,25 +138,34 @@ impl Gateway {
             let mut bytes=format!("--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\nContent-Type: {mime}\r\n\r\n").into_bytes();
             bytes.extend_from_slice(&upload.bytes);
             bytes.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
-            operation = operation
-                .header(
-                    "Content-Type",
-                    format!("multipart/form-data; boundary={boundary}"),
-                )
-                .body(bytes);
+            content = Some((format!("multipart/form-data; boundary={boundary}"), bytes));
         } else if !request.body.is_null() {
             let data =
                 serde_json::to_vec(&request.body).map_err(|_| "Invalid workspace request")?;
             if data.len() > MAX_BODY {
                 return Err("Workspace request exceeds the size limit".into());
             }
-            operation = operation
-                .header("Content-Type", "application/json")
-                .body(data);
+            content = Some(("application/json".into(), data));
         }
-        let response = operation
-            .send()
-            .map_err(|_| "Workspace request failed (network, TLS or timeout)")?;
+        let replay_safe = content.is_none();
+        let response = self
+            .prepared
+            .send_http(prepared, deadline, replay_safe, |parts| {
+                let remaining = deadline
+                    .checked_duration_since(Instant::now())
+                    .ok_or("Workspace request timed out")?;
+                let mut operation = self
+                    .http
+                    .request(parts.method.clone(), parts.url.clone())
+                    .headers(parts.headers.clone())
+                    .timeout(remaining);
+                if let Some((mime, data)) = content.take() {
+                    operation = operation.header("Content-Type", mime).body(data);
+                }
+                operation
+                    .send()
+                    .map_err(|_| "Workspace request failed (network, TLS or timeout)".into())
+            })?;
         if let Some(destination) = &request.destination {
             if !matches!(request.method, PageMethod::Get) || request.path != "/api/fs/download" {
                 return Err("Invalid native download request".into());
@@ -154,6 +174,7 @@ impl Gateway {
                 let mut fallback = PageRequest::get("/api/fs/read-data-url");
                 fallback.query = request.query.clone();
                 fallback.timeout = request.timeout;
+                fallback.provenance = request.provenance.clone();
                 let data = self.page_request(profile, &fallback)?;
                 let data = data
                     .as_str()
@@ -256,6 +277,13 @@ impl Gateway {
                     | "config.set"
                     | "process.list"
                     | "session.list"
+                    | "projects.tree"
+                    | "projects.project_sessions"
+                    | "projects.update"
+                    | "projects.create"
+                    | "projects.add_folder"
+                    | "projects.set_active"
+                    | "llm.oneshot"
                     | "process.kill"
             )
             || ["vault.", "billing.", "connectors.", "mcp.servers."]
@@ -370,3 +398,6 @@ fn save_download(
     }
     result
 }
+
+#[cfg(test)]
+mod tests;

@@ -73,12 +73,14 @@ pub struct PageRequest {
     pub body: Value,
     pub query: Vec<(String, String)>,
     pub profile: Option<String>,
+    pub provenance: Option<crate::gateway::prepared::ProfileProvenance>,
     pub timeout: u64,
     pub destination: Option<std::path::PathBuf>,
     pub connection: Option<Connection>,
     pub source_lease: Option<crate::connections::Lease>,
     // Hold the originating actor through the actual I/O and final receipt.
     pub source_resolver: Option<crate::connections::Resolver>,
+    pub source_keepers: Vec<crate::connections::Resolver>,
     pub upload: Option<PageUpload>,
     pub edit_claim: Option<Arc<crate::client::FileLock>>,
 }
@@ -91,11 +93,13 @@ impl PageRequest {
             body,
             query: vec![],
             profile: None,
+            provenance: None,
             timeout: 30,
             destination: None,
             connection: None,
             source_lease: None,
             source_resolver: None,
+            source_keepers: vec![],
             upload: None,
             edit_claim: None,
         }
@@ -130,6 +134,13 @@ impl PageRequest {
     }
     pub fn profile(mut self, profile: &str) -> Self {
         self.profile = Some(profile.into());
+        self
+    }
+    pub(crate) fn provenance(
+        mut self,
+        provenance: crate::gateway::prepared::ProfileProvenance,
+    ) -> Self {
+        self.provenance = Some(provenance);
         self
     }
     pub fn upload(
@@ -357,6 +368,8 @@ impl PageRequest {
                     | "mcp.catalog"
                     | "process.list"
                     | "session.list"
+                    | "projects.tree"
+                    | "projects.project_sessions"
                     | "session.context_breakdown"
                     | "pet.thumb"
             ),

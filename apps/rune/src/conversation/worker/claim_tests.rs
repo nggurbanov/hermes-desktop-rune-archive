@@ -21,6 +21,8 @@ fn two_workers_share_one_claim_and_only_the_owner_admits_the_saved_input() {
         token: Some("synthetic-token".into()),
     };
     let scope = DraftScope {
+        draft_origin: None,
+        profile_intent: crate::source::ProfileIntent::Backend,
         connection: 1,
         profile: "work".into(),
         session: Some("stored".into()),

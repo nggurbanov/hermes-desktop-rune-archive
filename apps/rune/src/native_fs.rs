@@ -176,6 +176,7 @@ pub fn execute(route: &str, body: &Value) -> Result<Value, String> {
             atomic_output(&real, content.as_bytes(), Some(metadata.permissions()))?;
             Ok(json!({"ok":true,"path":path}))
         }
+        "/api/fs/write-project-idea" => write_project_idea(&path, body),
         "/api/fs/rename" => {
             let name = body["name"].as_str().unwrap_or("").trim();
             if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\', '\0']) {
@@ -208,6 +209,29 @@ pub fn execute(route: &str, body: &Value) -> Result<Value, String> {
         }
         _ => Err("This native filesystem operation is unavailable".into()),
     }
+}
+fn write_project_idea(path: &Path, body: &Value) -> Result<Value, String> {
+    if path.file_name().and_then(|n| n.to_str()) != Some("IDEA.md") || sensitive(path) {
+        return Err("The project idea destination is invalid".into());
+    }
+    let content = body["content"].as_str().ok_or("The idea is missing")?;
+    if content.encode_utf16().count() > 1_000_000 {
+        return Err("The idea is too large".into());
+    }
+    let parent = fs::canonicalize(path.parent().ok_or("The project folder is invalid")?)
+        .map_err(|_| "The project folder could not be accessed")?;
+    if sensitive(&parent.join("IDEA.md")) || !parent.is_dir() {
+        return Err("The project folder is invalid".into());
+    }
+    let target = parent.join("IDEA.md");
+    let permissions = match fs::symlink_metadata(&target) {
+        Ok(meta) if meta.is_file() && meta.len() <= MAX_SOURCE => Some(meta.permissions()),
+        Ok(_) => return Err("The idea destination is not an editable regular file".into()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(_) => return Err("The idea destination could not be checked".into()),
+    };
+    atomic_output(&target, content.as_bytes(), permissions)?;
+    Ok(json!({"ok":true,"path":path}))
 }
 fn atomic_output(
     path: &Path,
@@ -356,5 +380,51 @@ mod tests {
         );
         assert!(!rows.iter().any(|r| r["name"] == ".git"));
         fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod project_idea_regression {
+    use super::*;
+
+    #[test]
+    fn local_create_idea_writes_fresh_file() {
+        let dir = std::env::temp_dir().join(format!("idea-red-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&dir).unwrap();
+        let path = dir.join("IDEA.md");
+        execute(
+            "/api/fs/write-project-idea",
+            &json!({"path": path, "content": "A real idea\n"}),
+        )
+        .unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"A real idea\n");
+        execute(
+            "/api/fs/write-project-idea",
+            &json!({"path": path, "content": "replacement\n"}),
+        )
+        .unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"replacement\n");
+        assert!(
+            execute(
+                "/api/fs/write-text",
+                &json!({"path": path, "content": "no snapshot"})
+            )
+            .is_err()
+        );
+        assert!(
+            execute(
+                "/api/fs/write-project-idea",
+                &json!({"path": dir.join("other.md"), "content": "bad"})
+            )
+            .is_err()
+        );
+        assert!(
+            execute(
+                "/api/fs/write-project-idea",
+                &json!({"path": path, "content": "x".repeat(1_000_001)})
+            )
+            .is_err()
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"replacement\n");
     }
 }

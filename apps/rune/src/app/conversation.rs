@@ -3,6 +3,8 @@ use super::*;
 mod chat;
 #[path = "conversation/policy.rs"]
 mod policy;
+#[path = "conversation/search.rs"]
+mod search;
 use crate::conversation::{AttachmentInput, SendInput, Update};
 impl Viewer {
     pub fn new_draft(&mut self) {
@@ -12,20 +14,46 @@ impl Viewer {
             self.compose_error = Some("Wait for the prepared send to bind its conversation".into());
             return;
         }
-        if self.prepare_window_new_session() {
+        let target = match self.project_draft_target() {
+            Ok(target) => target,
+            Err(error) => {
+                self.compose_error = Some(error);
+                return;
+            }
+        };
+        if !self.project_route_is_scoped() && self.prepare_window_new_session() {
+            self.set_window_project_target(target);
             return;
         }
-        if !self.has_pinned_window_default() && self.prepare_device_new_session() {
+        if !self.project_route_is_scoped()
+            && !self.has_pinned_window_default()
+            && self.prepare_device_new_session()
+        {
+            self.set_device_project_target(target);
             return;
         }
-        self.new_draft_on_current_source();
+        self.new_draft_with_project_target(target);
     }
     pub fn new_draft_on_current_source(&mut self) {
+        let target = match self.project_draft_target() {
+            Ok(target) => target,
+            Err(error) => {
+                self.compose_error = Some(error);
+                return;
+            }
+        };
+        self.new_draft_with_project_target(target);
+    }
+    pub(in crate::app) fn new_draft_with_project_target(
+        &mut self,
+        target: Option<crate::projects::DraftTarget>,
+    ) {
         let scope = self.composer_scope();
         if self.conversation.view(&scope).is_some_and(|v| v.preparing) {
             self.compose_error = Some("Wait for the prepared send to bind its conversation".into());
             return;
         }
+        self.retire_chat_search_reveals();
         self.cancel_device_route();
         self.layout.open("workspace");
         if self.route == crate::pages::Route::Settings {
@@ -33,6 +61,7 @@ impl Viewer {
         }
         self.route = crate::pages::Route::Chat;
         self.selected_session = None;
+        self.draft_origin = Some(crate::composer::DraftOrigin::new());
         self.ensure_editor();
         self.messages.clear();
         self.history_loading = false;
@@ -40,6 +69,7 @@ impl Viewer {
         self.bot_empty = false;
         self.pending_bot = None;
         self.compose_error = None;
+        self.apply_project_draft_target(target);
         self.composer.close();
     }
     pub fn send_draft(&mut self) {
@@ -88,6 +118,7 @@ impl Viewer {
                 return;
             }
         };
+        let (cwd, cwd_explicit) = self.project_send_cwd(&draft, self.bot_empty);
         let input = SendInput {
             replay,
             policy_stamp: Some(draft.policy_stamp()),
@@ -106,8 +137,8 @@ impl Viewer {
             reasoning: draft.reasoning.clone(),
             service_tier: draft.service_tier.clone(),
             approval_mode: draft.approval_mode.clone(),
-            cwd: draft.cwd.clone(),
-            cwd_explicit: draft.cwd_explicit,
+            cwd,
+            cwd_explicit,
             model_changed: draft.model_changed,
             reasoning_changed: draft.reasoning_changed,
             service_tier_changed: draft.service_tier_changed,
@@ -218,6 +249,7 @@ impl Viewer {
                 Update::Bound { origin, stored } => {
                     let destination = DraftScope {
                         session: Some(stored.clone()),
+                        draft_origin: None,
                         ..origin.clone()
                     };
                     let active = self.composer_scope() == origin;
@@ -270,6 +302,7 @@ impl Viewer {
                             self.history_truncated = view.truncated;
                             self.history_loading = false;
                         }
+                        self.refresh_chat_search();
                     }
                 }
                 Update::Admitted {
@@ -479,6 +512,8 @@ impl Viewer {
         read_only: bool,
     ) {
         let scope = DraftScope {
+            draft_origin: None,
+            profile_intent: crate::source::ProfileIntent::Backend,
             connection: self.connection_epoch,
             profile: profile.clone(),
             session: Some(id.clone()),

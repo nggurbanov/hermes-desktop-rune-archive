@@ -1,0 +1,70 @@
+name: Rune native distribution builds
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: ['apps/rune/**', '.github/workflows/rune-native-distribution.yml']
+permissions:
+  contents: read
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Linux native prerequisites
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev libasound2-dev libwebkit2gtk-4.1-dev libopus-dev cmake meson ninja-build libclang-dev llvm
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.95.0 --profile minimal --component rustfmt --target "${{ matrix.target }}"
+      - name: Verify source provenance and packaging fixtures
+        run: |
+          git diff --exit-code
+          python3 apps/rune/vendor/rune/scripts/verify-hermes-source.py
+          node --test apps/rune/scripts/package-recipes.test.mjs
+          cargo +1.95.0 fmt --manifest-path apps/rune/Cargo.toml --check
+      - name: Compile development, host test targets, and release
+        run: |
+          cargo +1.95.0 build --locked --manifest-path apps/rune/Cargo.toml --target "${{ matrix.target }}"
+          cargo +1.95.0 test --locked --no-run --manifest-path apps/rune/Cargo.toml --target "${{ matrix.target }}"
+          cargo +1.95.0 build --locked --release --manifest-path apps/rune/Cargo.toml --target "${{ matrix.target }}"
+      - name: Run nonhardware behavior tests
+        run: |
+          cargo +1.95.0 test --locked --manifest-path apps/rune/Cargo.toml --target "${{ matrix.target }}" draft_text_and_launch_choices_stay_with_the_connection_profile_and_session
+          cargo +1.95.0 test --locked --manifest-path apps/rune/Cargo.toml --target "${{ matrix.target }}" selecting_models_respects_availability_and_drops_unsupported_launch_options
+      # Native UI, devices and external services are excluded.
+      - name: Record source, toolchain, dependency provenance and artifact hashes
+        run: |
+          mkdir -p rune-evidence
+          git rev-parse HEAD > rune-evidence/commit.txt
+          git archive --format=tar --output=rune-evidence/source.tar HEAD
+          rustc +1.95.0 -vV > rune-evidence/rustc.txt
+          cargo +1.95.0 -V > rune-evidence/cargo.txt
+          git ls-files -s apps/rune > rune-evidence/local-sources-git-index.txt
+          cp apps/rune/THIRD_PARTY_NOTICES.md LICENSE rune-evidence/
+          if [ "$RUNNER_OS" = Linux ]; then uname -a > rune-evidence/host.txt; ldd apps/rune/target/${{ matrix.target }}/release/hermes-rune > rune-evidence/linkage.txt; fi
+          if [ "$RUNNER_OS" = macOS ]; then sw_vers > rune-evidence/host.txt; xcodebuild -version >> rune-evidence/host.txt; otool -L apps/rune/target/${{ matrix.target }}/release/hermes-rune > rune-evidence/linkage.txt; fi
+          if [ "$RUNNER_OS" = Windows ]; then cmd.exe /c ver > rune-evidence/host.txt; fi
+          cp apps/rune/target/${{ matrix.target }}/release/hermes-rune* rune-evidence/
+          node apps/rune/scripts/package-hashes.mjs rune-evidence
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: rune-native-${{ matrix.target }}
+          path: rune-evidence/
+          if-no-files-found: error

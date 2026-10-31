@@ -139,6 +139,43 @@ pub fn rows(s: &Viewer, k: &Kit, layer: &mut Vec<El>) -> Vec<El> {
             );
         }
         "workspace" => {
+            out.push(heading("Default project directory", k));
+            out.push(note(
+                s.client_settings
+                    .prefs
+                    .default_project_dir
+                    .as_deref()
+                    .unwrap_or("No default directory"),
+                k,
+            ));
+            out.push(
+                row()
+                    .w_full()
+                    .flex_wrap()
+                    .gap(6.)
+                    .child(
+                        Button::new("Choose default directory")
+                            .variant(ButtonVariant::Ghost)
+                            .disabled(s.is_fixture())
+                            .on_press(|s: &mut Viewer| {
+                                s.open_directory(crate::directories::Purpose::DefaultProject)
+                            })
+                            .build(k),
+                    )
+                    .child(
+                        Button::new("Clear default")
+                            .variant(ButtonVariant::Ghost)
+                            .disabled(s.client_settings.prefs.default_project_dir.is_none())
+                            .on_press(|s: &mut Viewer| {
+                                s.client_settings_action(Action::DefaultProjectDir(None))
+                            })
+                            .build(k),
+                    ),
+            );
+            out.push(note(
+                "New conversations use this directory unless a project or Home is selected.",
+                k,
+            ));
             out.push(heading("Current conversation workspace", k));
             out.push(note(
                 format!(

@@ -207,6 +207,11 @@ pub(crate) fn parse_script(list: Value) -> Vec<Ev> {
                 let path = e["path"].as_str().unwrap_or_else(|| die("file-dialog needs a \"path\" (file-dialog-cancel cancels)"));
                 out.push(Ev { t, kind: Kind::FileDialog(Some(path.into())), pos: Pos::Rel(0.0, 0.0) });
             }
+            "file-dialogs" => {
+                let paths = e["paths"].as_array().unwrap_or_else(|| die("file-dialogs needs a \"paths\" array"));
+                let paths = paths.iter().map(|p| p.as_str().unwrap_or_else(|| die("file-dialogs paths must be strings")).into()).collect();
+                out.push(Ev { t, kind: Kind::FileDialogs(paths), pos: Pos::Rel(0.0, 0.0) });
+            }
             "file-dialog-cancel" => out.push(Ev { t, kind: Kind::FileDialog(None), pos: Pos::Rel(0.0, 0.0) }),
             "mark" => {
                 let name = e["name"].as_str().filter(|n| !n.is_empty()).unwrap_or_else(|| die("a mark needs a \"name\""));

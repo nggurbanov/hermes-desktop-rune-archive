@@ -31,6 +31,28 @@ impl HostTerminal {
         attach: Option<&str>,
         close: bool,
     ) -> Result<Self, String> {
+        Self::connect_scoped(
+            connection,
+            profile,
+            crate::source::ProfileIntent::Backend,
+            cwd,
+            cols,
+            rows,
+            attach,
+            close,
+        )
+    }
+    pub(crate) fn connect_scoped(
+        connection: &Connection,
+        profile: &str,
+        intent: crate::source::ProfileIntent,
+        cwd: &str,
+        cols: u16,
+        rows: u16,
+        attach: Option<&str>,
+        close: bool,
+    ) -> Result<Self, String> {
+        let provenance = super::audio::provenance(connection, profile, intent)?;
         valid_scope(profile)?;
         if let Some(id) = attach {
             valid_scope(id)?;
@@ -40,10 +62,10 @@ impl HostTerminal {
         if matches!(gateway.auth, Auth::Native(_)) {
             gateway.profiles()?;
         }
-        let mut url = gateway
-            .base
-            .join("api/host-terminal")
-            .map_err(|_| "Invalid host terminal route")?;
+        gateway.ensure_profile_scope(&provenance)?;
+        let encoded: String = url::form_urlencoded::byte_serialize(profile.as_bytes()).collect();
+        let path = format!("/api/host-terminal?profile={encoded}");
+        let mut url = gateway.api_url_for(&provenance, "GET", &path)?;
         url.set_scheme(if gateway.base.scheme() == "https" {
             "wss"
         } else {
@@ -51,7 +73,6 @@ impl HostTerminal {
         })
         .map_err(|_| "Invalid host terminal scheme")?;
         url.query_pairs_mut()
-            .append_pair("profile", profile)
             .append_pair("cols", &cols.to_string())
             .append_pair("rows", &rows.to_string());
         if !cwd.is_empty() {
@@ -66,42 +87,59 @@ impl HostTerminal {
             }
             url.query_pairs_mut().append_pair("action", "close");
         }
-        let mut ticket = None;
-        match &gateway.auth {
-            Auth::Token(Some(token)) => {
-                url.query_pairs_mut().append_pair("token", token);
+        #[cfg(target_os = "linux")]
+        let home = if matches!(&gateway.auth, Auth::Native(_)) {
+            match &provenance {
+                super::prepared::ProfileProvenance::Backend(name) => Some(
+                    gateway
+                        .profile_homes
+                        .get(name)
+                        .ok_or("The terminal profile is not served by this gateway")?
+                        .as_path(),
+                ),
+                super::prepared::ProfileProvenance::NativeSelf => match gateway
+                    .prepared
+                    .policy()
+                    .and_then(|p| p.selected())
+                    .map(|s| s.target())
+                {
+                    Some(super::prepared::BackendTarget::Named(name)) => Some(
+                        gateway
+                            .profile_homes
+                            .get(name)
+                            .ok_or("The selected terminal profile is not served by this gateway")?
+                            .as_path(),
+                    ),
+                    Some(super::prepared::BackendTarget::Root(proof)) => {
+                        Some(std::path::Path::new(&proof.profile_id))
+                    }
+                    None => return Err("The Desktop route has no selected backend context".into()),
+                },
+                super::prepared::ProfileProvenance::Ambient(_) => {
+                    return Err("Terminal requires an explicit owner".into());
+                }
             }
-            Auth::Token(None) => {}
-            #[cfg(target_os = "linux")]
-            Auth::Native(endpoint) => {
-                let home = gateway
-                    .profile_homes
-                    .get(profile)
-                    .ok_or("The terminal profile is not served by this gateway")?;
-                ticket = Some(endpoint.ticket(home, "interactive")?);
-            }
-        }
-        let mut request = url
-            .as_str()
-            .into_client_request()
-            .map_err(|_| "Invalid host terminal request")?;
-        if let Some(ticket) = &ticket {
-            request.headers_mut().insert(
-                "Sec-WebSocket-Protocol",
-                format!("hermes-gateway-v1, hermes-gateway-ticket.{ticket}")
-                    .parse()
-                    .map_err(|_| "Invalid terminal ticket")?,
-            );
-        }
-        let stream = connect_tcp(&url)?;
+        } else {
+            None
+        };
+        #[cfg(not(target_os = "linux"))]
+        let home = None;
+        let handshake = gateway.prepared.prepare_ws(
+            url,
+            home,
+            super::prepared::WsPurpose::Interactive,
+            Instant::now() + Duration::from_secs(5),
+        )?;
+        let stream = connect_tcp(&handshake.url)?;
         let config = tungstenite::protocol::WebSocketConfig::default()
             .max_message_size(Some(2 * 1024 * 1024))
             .max_frame_size(Some(2 * 1024 * 1024));
         let (socket, response) =
-            tungstenite::client_tls_with_config(request, stream, Some(config), None).map_err(
-                |_| "The remote terminal connection failed (network, TLS or authentication)",
-            )?;
-        if ticket.is_some()
+            tungstenite::client_tls_with_config(handshake.request, stream, Some(config), None)
+                .map_err(
+                    |_| "The remote terminal connection failed (network, TLS or authentication)",
+                )?;
+        if handshake.private_protocol
             && response
                 .headers()
                 .get("Sec-WebSocket-Protocol")
@@ -182,6 +220,20 @@ pub fn stage(
     profile: &str,
     path: &std::path::Path,
 ) -> Result<String, String> {
+    stage_scoped(
+        connection,
+        profile,
+        crate::source::ProfileIntent::Backend,
+        path,
+    )
+}
+pub(crate) fn stage_scoped(
+    connection: &Connection,
+    profile: &str,
+    intent: crate::source::ProfileIntent,
+    path: &std::path::Path,
+) -> Result<String, String> {
+    let provenance = super::audio::provenance(connection, profile, intent)?;
     let metadata = std::fs::metadata(path).map_err(|_| "The dropped file is unavailable")?;
     if !metadata.is_file() || metadata.len() > 25 * 1024 * 1024 {
         return Err("Terminal drops require regular files up to 25 MiB".into());
@@ -196,7 +248,8 @@ pub fn stage(
         profile,
         &PageRequest::post("/api/chat/file-upload", Value::Null)
             .upload(name, "application/octet-stream", bytes)
-            .timeout_secs(180),
+            .timeout_secs(180)
+            .provenance(provenance),
     )?;
     result
         .get("path")

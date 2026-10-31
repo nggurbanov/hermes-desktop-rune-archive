@@ -6,12 +6,12 @@ use std::{
     sync::atomic::AtomicBool,
     thread::JoinHandle,
 };
-struct Peer {
-    connection: Connection,
+pub(crate) struct Peer {
+    pub(crate) connection: Connection,
     stop: Arc<AtomicBool>,
     stalled: Arc<AtomicBool>,
     cancelled: Arc<AtomicBool>,
-    requests: Arc<Mutex<Vec<String>>>,
+    pub(crate) requests: Arc<Mutex<Vec<String>>>,
     join: Option<JoinHandle<()>>,
 }
 impl Drop for Peer {
@@ -22,7 +22,7 @@ impl Drop for Peer {
         }
     }
 }
-fn peer(bytes: Vec<u8>) -> Peer {
+pub(crate) fn peer(bytes: Vec<u8>) -> Peer {
     let bytes = Arc::new(bytes);
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();

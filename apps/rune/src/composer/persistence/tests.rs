@@ -18,6 +18,8 @@ impl Drop for Files {
 }
 fn scope(epoch: u64, session: Option<&str>) -> DraftScope {
     DraftScope {
+        draft_origin: None,
+        profile_intent: crate::source::ProfileIntent::Backend,
         connection: epoch,
         profile: "work".into(),
         session: session.map(str::to_owned),
@@ -554,12 +556,16 @@ fn slot_identity_survives_profile_rename_rehome_and_delete_recreate() {
     let path = files.path();
     let window = EditorId::new();
     let fresh = Key {
+        draft_origin: None,
+        profile_intent: crate::source::ProfileIntent::Backend,
         profile: "old".into(),
         session: None,
     };
     let id = store::slot(&path, &window, &fresh, &window).unwrap();
     assert_eq!(store::slot(&path, &window, &fresh, &window).unwrap(), id);
     let stored = Key {
+        draft_origin: None,
+        profile_intent: crate::source::ProfileIntent::Backend,
         profile: "old".into(),
         session: Some("saved".into()),
     };
@@ -568,6 +574,8 @@ fn slot_identity_survives_profile_rename_rehome_and_delete_recreate() {
     assert_ne!(store::slot(&path, &window, &fresh, &window).unwrap(), id);
     store::rename_profile(&path, "old", "renamed").unwrap();
     let renamed = Key {
+        draft_origin: None,
+        profile_intent: crate::source::ProfileIntent::Backend,
         profile: "renamed".into(),
         session: Some("saved".into()),
     };
@@ -617,6 +625,8 @@ fn a_peer_binding_first_migrates_legacy_multimodal_input_only_to_the_durable_pri
             &path,
             peer_window.editor_id(),
             &Key {
+                draft_origin: None,
+                profile_intent: crate::source::ProfileIntent::Backend,
                 profile: "work".into(),
                 session: Some("saved".into()),
             },
@@ -671,4 +681,87 @@ fn a_peer_binding_first_migrates_legacy_multimodal_input_only_to_the_durable_pri
         assert_eq!(peer_entry.text, "peer's independent text");
         assert!(peer_entry.attachments.is_empty());
     }
+}
+
+#[test]
+fn selected_and_backend_drafts_and_slots_survive_reload_and_rehome() {
+    use crate::source::ProfileIntent;
+    let files = Files::new();
+    let path = files.path();
+    let window = EditorId::new();
+    let raw = scope(1, None);
+    let mut selected = raw.clone();
+    selected.profile_intent = ProfileIntent::NativeSelf;
+    let raw_key = Key {
+        draft_origin: None,
+        profile: raw.profile.clone(),
+        profile_intent: raw.profile_intent,
+        session: None,
+    };
+    let selected_key = Key {
+        draft_origin: None,
+        profile: selected.profile.clone(),
+        profile_intent: selected.profile_intent,
+        session: None,
+    };
+    let raw_editor = store::slot(&path, &window, &raw_key, &window).unwrap();
+    let selected_editor = store::slot(&path, &window, &selected_key, &window).unwrap();
+    assert_ne!(raw_editor, selected_editor);
+    let mut c = bind(selected_editor.clone(), &path, 1);
+    c.draft_mut(raw.clone()).text.replace_text("raw");
+    c.draft_mut(selected.clone()).text.replace_text("selected");
+    c.flush_storage().unwrap();
+    let adopted = DraftScope {
+        session: Some("same".into()),
+        draft_origin: None,
+        ..selected.clone()
+    };
+    c.rehome(&selected, adopted.clone());
+    c.flush_storage().unwrap();
+    let stored_key = Key {
+        draft_origin: None,
+        profile: adopted.profile.clone(),
+        profile_intent: adopted.profile_intent,
+        session: adopted.session.clone(),
+    };
+    store::rehome_slot(&path, &window, &selected_key, &stored_key, &selected_editor).unwrap();
+    assert_eq!(
+        store::slot(&path, &window, &stored_key, &window).unwrap(),
+        selected_editor
+    );
+    assert_eq!(
+        store::slot(&path, &window, &raw_key, &window).unwrap(),
+        raw_editor
+    );
+    drop(c);
+    let restored = load(&selected_editor, &path, 1);
+    assert_eq!(restored.draft(&raw).unwrap().text.text, "raw");
+    assert_eq!(restored.draft(&adopted).unwrap().text.text, "selected");
+    let json = std::fs::read_to_string(path).unwrap();
+    assert!(json.contains("\"profile_intent\":\"native_self\""));
+    let encoded =
+        serde_json::to_value(SavedDraft::capture(&raw, restored.draft(&raw).unwrap())).unwrap();
+    assert!(encoded.get("profile_intent").is_none());
+}
+
+#[test]
+fn distinct_fresh_origins_persist_with_independent_editor_slots() {
+    let files = Files::new();
+    let path = files.path();
+    let window = EditorId::new();
+    let first = Key {
+        profile: "work".into(),
+        profile_intent: crate::source::ProfileIntent::Backend,
+        session: None,
+        draft_origin: Some(crate::composer::DraftOrigin::new()),
+    };
+    let second = Key {
+        draft_origin: Some(crate::composer::DraftOrigin::new()),
+        ..first.clone()
+    };
+    let a = store::slot(&path, &window, &first, &window).unwrap();
+    let b = store::slot(&path, &window, &second, &window).unwrap();
+    assert_ne!(a, b);
+    assert_eq!(store::slot(&path, &window, &first, &window).unwrap(), a);
+    assert_eq!(store::slot(&path, &window, &second, &window).unwrap(), b);
 }

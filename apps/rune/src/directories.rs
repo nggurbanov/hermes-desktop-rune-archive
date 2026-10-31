@@ -5,10 +5,13 @@ use crate::{
 };
 use rune::TextEdit;
 use serde_json::{Value, json};
-#[derive(Clone)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Purpose {
     Workspace,
+    DefaultProject,
     Files,
+    Projects(u64, u64),
+    ProjectFolders(u64, u64),
 }
 pub struct Directories {
     pub owner: Option<DraftScope>,
@@ -59,18 +62,32 @@ impl Directories {
         } else {
             "/api/fs/list"
         };
+        let project_path = matches!(
+            self.purpose,
+            Purpose::Projects(..) | Purpose::ProjectFolders(..)
+        );
+        let path = if project_path {
+            self.path.text.as_str()
+        } else {
+            self.path.text.trim()
+        };
         let mut request = if self.local && route != "/api/fs/default-cwd" {
-            PageRequest::local_fs(route, json!({"path":self.path.text.trim()}))
+            PageRequest::local_fs(route, json!({"path":path}))
         } else {
             let mut r = PageRequest::get(route);
             if route == "/api/fs/list" {
-                r = r.query("path", self.path.text.trim());
+                r = r.query("path", path);
             }
             r
         }
         .profile(&owner.profile);
-        if let Some(id) = &owner.session {
-            request = request.query("session_id", id);
+        if !matches!(
+            self.purpose,
+            Purpose::Projects(..) | Purpose::ProjectFolders(..)
+        ) {
+            if let Some(id) = &owner.session {
+                request = request.query("session_id", id);
+            }
         }
         vec![(
             if route == "/api/fs/list" {
@@ -93,11 +110,17 @@ impl Directories {
                 self.error = Some("Choose an absolute directory on this agent".into());
             }
             Ok(v) => {
+                if let Some(error) = v["error"].as_str().filter(|error| !error.is_empty()) {
+                    self.entries.clear();
+                    self.error = Some(error.to_owned());
+                    return vec![];
+                }
                 match serde_json::from_value::<Vec<crate::files::Entry>>(v["entries"].clone()) {
                     Ok(entries) => {
                         self.entries = entries.into_iter().filter(|e| e.directory).collect()
                     }
                     Err(_) => {
+                        self.entries.clear();
                         self.error = Some("The agent did not return a directory listing".into())
                     }
                 }
@@ -109,8 +132,8 @@ impl Directories {
         }
         vec![]
     }
-    pub fn edit(&mut self, owner: &DraftScope) -> &mut TextEdit {
-        if self.owner.as_ref() == Some(owner) {
+    pub fn edit(&mut self, owner: &DraftScope, current: bool) -> &mut TextEdit {
+        if current && self.owner.as_ref() == Some(owner) {
             &mut self.path
         } else {
             &mut self.detached
@@ -122,7 +145,9 @@ impl crate::app::Viewer {
         let scope = self.composer_scope();
         let path = match purpose {
             Purpose::Workspace => self.workspace_cwd(),
+            Purpose::DefaultProject => self.client_settings.prefs.default_project_dir.clone(),
             Purpose::Files => Some(self.files.root.clone()),
+            Purpose::Projects(..) | Purpose::ProjectFolders(..) => None,
         }
         .unwrap_or_default();
         self.invalidate_page_requests("directories.");
@@ -131,6 +156,20 @@ impl crate::app::Viewer {
             .open(scope, self.is_local_connection(), path, purpose);
         self.page_requests(effects);
     }
+    pub(crate) fn directory_target_current(&self, owner: &DraftScope, purpose: Purpose) -> bool {
+        self.directories.owner.as_ref() == Some(owner)
+            && self.composer_scope() == *owner
+            && self.directories.purpose == purpose
+            && match purpose {
+                Purpose::Projects(dialog, pick) => {
+                    self.project_directory_target_current(dialog, pick)
+                }
+                Purpose::ProjectFolders(dialog, pick) => {
+                    self.project_folders_directory_current(dialog, pick)
+                }
+                _ => true,
+            }
+    }
     pub fn directory_load(&mut self, path: String) {
         if self.directories.owner.as_ref() != Some(&self.composer_scope()) {
             return;
@@ -138,7 +177,17 @@ impl crate::app::Viewer {
         self.invalidate_page_requests("directories.");
         self.directories.path.replace_text(path);
         let effects = self.directories.load();
-        self.page_requests(effects);
+        if matches!(
+            self.directories.purpose,
+            Purpose::Projects(..) | Purpose::ProjectFolders(..)
+        ) {
+            match self.directories.purpose {
+                Purpose::ProjectFolders(..) => self.project_folders_directory_requests(effects),
+                _ => self.project_directory_requests(effects),
+            }
+        } else {
+            self.page_requests(effects);
+        }
     }
     pub fn choose_directory(&mut self) {
         let Some(owner) = self.directories.owner.clone() else {
@@ -147,14 +196,34 @@ impl crate::app::Viewer {
         if owner != self.composer_scope() || self.directories.loading {
             return;
         }
-        let path = self.directories.path.text.trim().to_owned();
-        if path.is_empty() || self.directories.error.is_some() {
+        let path = if matches!(
+            self.directories.purpose,
+            Purpose::Projects(..) | Purpose::ProjectFolders(..)
+        ) {
+            self.directories.path.text.clone()
+        } else {
+            self.directories.path.text.trim().to_owned()
+        };
+        if path.trim().is_empty() || self.directories.error.is_some() {
             return;
         }
-        match self.directories.purpose {
+        match self.directories.purpose.clone() {
             Purpose::Workspace => self.change_workspace(owner, path),
+            Purpose::DefaultProject => self.client_settings_action(
+                crate::client_settings::Action::DefaultProjectDir(Some(path)),
+            ),
             Purpose::Files => self.files_action(crate::files::Action::Root(path)),
+            Purpose::Projects(dialog, pick) => {
+                self.project_directory_return(dialog, pick, Some(path))
+            }
+            Purpose::ProjectFolders(dialog, pick) => {
+                self.project_folders_directory_return(dialog, pick, Some(path))
+            }
         }
         self.directories.owner = None;
     }
 }
+
+#[cfg(test)]
+#[path = "directories_tests.rs"]
+mod tests;

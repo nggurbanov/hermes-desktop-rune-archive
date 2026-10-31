@@ -294,6 +294,7 @@ pub(crate) enum Kind {
     PopupMenu(Option<String>),
     /// Answers the open file dialog: the chosen path, or `None` to cancel it.
     FileDialog(Option<std::path::PathBuf>),
+    FileDialogs(Vec<std::path::PathBuf>),
     Physical(crate::PhysicalInput),
     /// A registered global shortcut, delivered only to its handler.
     Shortcut(crate::Shortcut),
@@ -403,6 +404,7 @@ impl Ev {
             Kind::Menu(item) => ScriptEvent::Menu(item.clone()),
             Kind::PopupMenu(picked) => ScriptEvent::PopupMenu(picked.clone()),
             Kind::FileDialog(path) => ScriptEvent::FileDialog(path.clone()),
+            Kind::FileDialogs(paths) => ScriptEvent::FileDialogs(paths.clone()),
             Kind::Physical(input) => ScriptEvent::Physical(*input),
             Kind::Shortcut(chord) => ScriptEvent::Shortcut(chord.clone()),
             Kind::Move => pointer(PointerAction::Move),
@@ -1094,6 +1096,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
                 Kind::Menu(item) => crate::native_menu::fire(&shared, item).unwrap_or_else(|e| die(&format!("script menu: {e}"))),
                 Kind::PopupMenu(picked) => rt.resolve_popup(picked.as_deref()).unwrap_or_else(|e| die(&format!("script pop-up menu: {e}"))),
                 Kind::FileDialog(path) => rt.resolve_file_dialog(path.clone()).unwrap_or_else(|e| die(&format!("script file dialog: {e}"))),
+                Kind::FileDialogs(paths) => rt.resolve_file_dialogs(Some(paths.clone())).unwrap_or_else(|e| die(&format!("script file dialog: {e}"))),
                 Kind::Move => rt.pointer_move(x, y),
                 Kind::Down => {
                     last_down = (x, y);
@@ -1467,3 +1470,7 @@ fn report_traffic_light_overlaps<S>(rt: &Runtime<S>, lights: &[[f32; 4]; 3]) {
 #[cfg(test)]
 #[path = "tooling/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tooling/multifolder_driver_tests.rs"]
+mod multifolder_driver_tests;

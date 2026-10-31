@@ -4,6 +4,8 @@ mod decode;
 #[cfg(test)]
 mod malformed_tests;
 mod output;
+#[cfg(test)]
+mod range_read_tests;
 mod save;
 mod tempo;
 #[cfg(test)]
@@ -96,6 +98,15 @@ struct Shared {
     save_cancel: Mutex<Option<Cancel>>,
     ring: Mutex<output::Ring>,
     waker: rune::Waker,
+    #[cfg(test)]
+    null_output: bool,
+    #[cfg(test)]
+    packet_error: Mutex<Option<(u64, String)>>,
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_PLAYER: std::cell::RefCell<std::sync::Weak<Shared>> = std::cell::RefCell::new(std::sync::Weak::new());
 }
 impl Shared {
     fn update(&self, change: impl FnOnce(&mut Snapshot)) {
@@ -166,6 +177,8 @@ pub struct MediaPlayers {
     players: HashMap<PlayerId, Player>,
     sequence: u64,
     waker: Option<rune::Waker>,
+    #[cfg(test)]
+    null_output: bool,
 }
 impl Default for MediaPlayers {
     fn default() -> Self {
@@ -178,12 +191,33 @@ impl MediaPlayers {
             players: HashMap::new(),
             sequence: 0,
             waker: None,
+            #[cfg(test)]
+            null_output: false,
         }
+    }
+    #[cfg(test)]
+    pub(crate) fn use_null_output(&mut self) {
+        self.null_output = true;
     }
     pub fn init(&mut self, waker: rune::Waker) {
         self.waker = Some(waker);
     }
     pub fn open(&mut self, connection: Connection, target: Target) -> Result<PlayerId, String> {
+        self.open_inner(connection, target, true)
+    }
+    pub(crate) fn open_inline(
+        &mut self,
+        connection: Connection,
+        target: Target,
+    ) -> Result<PlayerId, String> {
+        self.open_inner(connection, target, false)
+    }
+    fn open_inner(
+        &mut self,
+        connection: Connection,
+        target: Target,
+        limited: bool,
+    ) -> Result<PlayerId, String> {
         if target.kind != crate::preview::Kind::Audio {
             return Err("This player opens audio files".into());
         }
@@ -191,7 +225,7 @@ impl MediaPlayers {
             .waker
             .clone()
             .ok_or("Audio previews are not initialized")?;
-        if self.players.len() >= 8 {
+        if limited && self.players.len() >= 8 {
             return Err("Close an audio preview before opening another".into());
         }
         self.sequence = self
@@ -228,12 +262,20 @@ impl MediaPlayers {
             save_cancel: Mutex::new(None),
             ring: Mutex::new(output::Ring::new()),
             waker,
+            #[cfg(test)]
+            null_output: self.null_output,
+            #[cfg(test)]
+            packet_error: Mutex::new(None),
         });
         let child = shared.clone();
         let worker_connection = connection.clone();
         std::thread::Builder::new()
             .name("hermes-audio-preview".into())
-            .spawn(move || worker::run(worker_connection, target, child))
+            .spawn(move || {
+                #[cfg(test)]
+                TEST_PLAYER.with(|slot| *slot.borrow_mut() = Arc::downgrade(&child));
+                worker::run(worker_connection, target, child)
+            })
             .map_err(|_| "The audio preview worker could not start")?;
         self.players.insert(
             id,

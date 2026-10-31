@@ -1,0 +1,1 @@
+- Add an opt-in scoped text-highlight reveal through nested vertical scroll viewports.

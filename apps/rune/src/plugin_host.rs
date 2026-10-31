@@ -33,6 +33,19 @@ pub struct HostProcess {
     closed: bool,
 }
 impl HostProcess {
+    pub fn alive(&mut self) -> bool {
+        if self.closed {
+            return false;
+        }
+        match self.child.try_wait() {
+            Ok(None) => true,
+            Ok(Some(_)) => {
+                self.closed = true;
+                false
+            }
+            Err(_) => false,
+        }
+    }
     pub fn send(&mut self, value: Value) -> Result<(), String> {
         let bytes = serde_json::to_vec(&value).map_err(|_| "Invalid host command")?;
         if bytes.len() > MAX_FRAME {

@@ -12,6 +12,7 @@ impl Stager {
         &self,
         connection: Connection,
         profile: String,
+        profile_intent: crate::source::ProfileIntent,
         paths: Vec<PathBuf>,
         cancel: Arc<AtomicBool>,
     ) {
@@ -23,9 +24,10 @@ impl Stager {
                     if cancel.load(Ordering::Acquire) {
                         return Err("The terminal file drop was cancelled".into());
                     }
-                    output.push(crate::gateway::terminal::stage(
+                    output.push(crate::gateway::terminal::stage_scoped(
                         &connection,
                         &profile,
+                        profile_intent,
                         &path,
                     )?);
                 }

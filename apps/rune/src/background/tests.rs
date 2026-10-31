@@ -3,6 +3,8 @@ use crate::gateway::Connection;
 use serde_json::json;
 fn scope() -> DraftScope {
     DraftScope {
+        draft_origin: None,
+        profile_intent: crate::source::ProfileIntent::Backend,
         connection: 7,
         profile: "work".into(),
         session: Some("stored-one".into()),

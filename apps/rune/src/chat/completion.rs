@@ -158,6 +158,8 @@ mod tests {
     #[test]
     fn completion_replies_cannot_replace_newer_query_other_profile_or_closed_view() {
         let first = DraftScope {
+            draft_origin: None,
+            profile_intent: crate::source::ProfileIntent::Backend,
             connection: 4,
             profile: "work".into(),
             session: Some("same-id".into()),

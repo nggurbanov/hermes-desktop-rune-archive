@@ -6,9 +6,11 @@ impl Viewer {
             return None;
         }
         let stored = owner.session.as_deref()?;
-        self.tabs
-            .iter()
-            .position(|tab| tab.profile == owner.profile && tab.session == stored)
+        self.tabs.iter().position(|tab| {
+            tab.profile == owner.profile
+                && tab.profile_intent == owner.profile_intent
+                && tab.session == stored
+        })
     }
     pub fn activate_tab_owned(&mut self, owner: &DraftScope) {
         if let Some(index) = self.captured_tab_index(owner) {
@@ -33,6 +35,7 @@ mod tests {
     fn tab(title: &str, id: &str) -> ConversationTab {
         ConversationTab {
             profile: "default".into(),
+            profile_intent: crate::source::ProfileIntent::Backend,
             session: id.into(),
             title: title.into(),
             bot: false,
@@ -113,5 +116,132 @@ mod tests {
         assert!(s.route == crate::pages::Route::Settings);
         assert_eq!(s.intent, intent);
         assert_eq!(s.tabs[0].session, "other");
+    }
+}
+
+#[cfg(test)]
+mod intent_tests {
+    use super::*;
+    use crate::source::ProfileIntent;
+    #[test]
+    fn captured_tab_lookup_distinguishes_selected_from_backend_with_same_id() {
+        let mut viewer = Viewer::empty();
+        viewer.connection_epoch = 7;
+        viewer.tabs = [ProfileIntent::Backend, ProfileIntent::NativeSelf]
+            .into_iter()
+            .map(|profile_intent| ConversationTab {
+                profile: "default".into(),
+                profile_intent,
+                session: "same".into(),
+                title: "chat".into(),
+                bot: false,
+            })
+            .collect();
+        let raw = DraftScope {
+            draft_origin: None,
+            connection: 7,
+            profile: "default".into(),
+            profile_intent: ProfileIntent::Backend,
+            session: Some("same".into()),
+        };
+        let selected = DraftScope {
+            profile_intent: ProfileIntent::NativeSelf,
+            ..raw.clone()
+        };
+        assert_eq!(viewer.captured_tab_index(&raw), Some(0));
+        assert_eq!(viewer.captured_tab_index(&selected), Some(1));
+        viewer.tabs.remove(1);
+        assert_eq!(viewer.captured_tab_index(&selected), None);
+    }
+}
+
+#[cfg(test)]
+mod selected_target_tests {
+    use super::*;
+    use crate::{
+        gateway::prepared::{BackendTarget, SelectedContext, WirePolicy},
+        source::{ProfileIntent, RouteOwner},
+    };
+    #[test]
+    fn equal_named_raw_target_keeps_a_separate_selected_tab_and_editor_owner() {
+        let mut s = Viewer::empty();
+        crate::app::reader_scene(&mut s);
+        s.draft_storage_available = false;
+        let profiles = crate::gateway::route::ProfilePolicy::new(
+            "default",
+            crate::gateway::route::RouteOptions {
+                profile_remote_override: true,
+                backend_profile: Some("dixie".into()),
+                override_kind: crate::gateway::route::OverrideKind::Url,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let policy = WirePolicy::token(profiles, Default::default())
+            .unwrap()
+            .with_selected(
+                SelectedContext::new("default", BackendTarget::Named("dixie".into())).unwrap(),
+            )
+            .unwrap();
+        s.connection = Some(Connection::Routed {
+            actual: Box::new(Connection::Url {
+                endpoint: "https://private.fixture.invalid".into(),
+                token: Some("private".into()),
+            }),
+            policy: std::sync::Arc::new(policy),
+            owner: std::sync::Arc::new(RouteOwner::legacy("private-route").unwrap()),
+        });
+        s.connection_epoch = windows::source_epoch();
+        s.profile = "default".into();
+        s.profile_intent = ProfileIntent::NativeSelf;
+        s.selected_session = Some("same".into());
+        s.tabs = vec![ConversationTab {
+            profile: "default".into(),
+            profile_intent: ProfileIntent::NativeSelf,
+            session: "same".into(),
+            title: "Selected".into(),
+            bot: false,
+        }];
+        s.init_editors(std::sync::Arc::new(|| {}));
+        assert!(s.ensure_editor());
+        let selected = s.composer_scope();
+        s.composer
+            .draft_mut(selected.clone())
+            .text
+            .replace_text("selected draft");
+        s.chrome.writing = true;
+        s.open_target(
+            ConversationTarget::Session {
+                profile: "default".into(),
+                profile_intent: ProfileIntent::Backend,
+                id: "same".into(),
+                title: "Raw".into(),
+            },
+            true,
+        );
+        assert_eq!(s.composer_scope(), selected);
+        assert_eq!(s.tabs.len(), 1);
+        assert!(s.client_error.is_some());
+        s.chrome.writing = false;
+        s.client_error = None;
+        s.open_target(
+            ConversationTarget::Session {
+                profile: "default".into(),
+                profile_intent: ProfileIntent::Backend,
+                id: "same".into(),
+                title: "Raw".into(),
+            },
+            true,
+        );
+        assert_eq!(s.composer_scope().profile_intent, ProfileIntent::Backend);
+        assert_eq!(s.tabs.len(), 2);
+        assert_eq!(s.active_tab().unwrap().title, "Raw");
+        s.activate_tab(0);
+        assert_eq!(s.composer_scope(), selected);
+        assert_eq!(s.active_tab().unwrap().title, "Selected");
+        assert_eq!(
+            s.composer.draft(&selected).unwrap().text.text,
+            "selected draft"
+        );
     }
 }

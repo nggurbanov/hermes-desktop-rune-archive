@@ -1,494 +1,3 @@
---- /dev/null
-+++ b/HERMES.md
-@@ -0,0 +1,92 @@
-+# Hermes native-window patch
-+
-+All upstream runtime, kit, motion, Mermaid, staging and OpenCode theme sources
-+come from the same exact revision recorded in `HERMES_PATCH.json`. The snapshot
-+includes their workspace members, tests, examples, fonts and original licenses.
-+The manifest records each original file and every modified/added source hash.
-+`python3 scripts/verify-hermes-source.py` verifies it offline. `HERMES.patch` is
-+a zero-context source patch for that exact baseline; apply with
-+`git apply --unidiff-zero` only after checking the recorded original hashes.
-+No build modifies
-+Cargo's global checkout or downloads a replacement framework source.
-+
-+## Public additions
-+
-+`Tx::spawn_window(WindowSpec<S>) -> Result<SpawnedWindow<S>, WindowSpawnError>`
-+queues an event-thread local specification. The returned object exposes `app`,
-+`window` and `creation`; `creation.status()` reports Queued, Registered, Created
-+or Failed(error). Registered means a host exists; a windowless app opens later.
-+Created means native creation ran. `window.is_ready()` additionally checks the
-+first presented frame, and `app.window_error()` reports later native failures.
-+
-+A state may contain `Rc` or other non-Send values. A background caller uses the
-+existing `AppHandle::update` to build the specification on the event thread.
-+Queue limits are backpressure for unprocessed creation requests, not a fixed
-+pool or a lifetime window limit. Requests are consumed only once across cloned
-+transactions, propagate through frame actions, and report an error when their
-+owning runtime disappears or cannot host native windows. Single-runtime
-+headless tooling explicitly reports unsupported. Native requests default to no
-+inherited command-line script/scene; explicitly offscreen child arguments are
-+rejected rather than counted as a native window.
-+
-+Each ordinary dynamic host retains the event loop independently. Closing its
-+opener does not close the peer. Closing a peer drops its state, menu/shortcut
-+guards and native resources. A live-host map uses monotonically unique routing
-+identities: closed IDs are removed and are never rebound to another state,
-+including when a new window reuses the old public key. Keys must be nonempty
-+and unique among live hosts. All guards in a window group are attached before
-+any native creation callback runs. The existing GPU weak pool remains shared.
-+
-+`WindowHandle::geometry()` snapshots physical outer position when available,
-+physical inner size, scale, maximization and current monitor bounds. Winit does
-+not provide reserved work-area bounds; Wayland generally does not expose outer
-+position. These fields must not be presented as a portable Dock/taskbar work-area
-+or placement guarantee.
-+
-+`App::on_close_requested(fn(&mut S, &mut Tx) -> bool)` (also a WindowSpec builder)
-+runs before a local close and its existing `on_close` hook. False retains the
-+window and commits guard UI changes. Explicit global Quit and OS termination
-+retain upstream's non-veto behavior. An application-wide dirty-window Quit
-+preflight remains separate work; this patch does not claim to provide one.
-+
-+## Local acceptance
-+
-+The focused `hermes_dynamic_windows` public integration contracts run against the
-+production library with `CARGO_PROFILE_TEST_DEBUG=0` to omit debug symbols without
-+changing debug assertions or behavior. They exercise actual Runtime commits,
-+non-Send inputs, consumed-once transactions, bounded queues, dropped requests,
-+headless errors and absent native geometry. The synthetic native example
-+`hermes_dynamic_windows` uses real native hosts and explicit creation/first-frame
-+readiness. Its checker requires a private Xvfb display and xdotool. It verifies
-+more than 64 create/close cycles, duplicate-live-key rejection, stale-route
-+isolation, geometry, a local close veto, a peer surviving its opener, creation
-+from that surviving peer and global Quit. The example uses no agent, provider,
-+audio device or user state. Evidence is produced in a caller-selected private
-+directory. The separate windowless failure mode uses an actual process with no
-+Vulkan ICD: the native surface creation fails, its error is returned and the
-+initialized child state is dropped before Quit. There is no injected fake host
-+or native-error test API. Native Linux results do not establish macOS or Windows
-+acceptance.
-+
-+The pinned upstream tooltip test invokes a macOS-only native-help method. Its
-+existing test now has the matching macOS cfg so Linux can compile the library
-+test harness; its assertions and macOS behavior remain unchanged.
-+
-+
-+Linux acceptance on 2026-10-29 passed all five public integration contracts and
-+the private native lifecycle checker with 80 close/recreate cycles. The latter
-+confirmed two real initial windows, a rejected live duplicate, old-route isolation,
-+physical geometry, a local veto preceding the one accepted close hook, a peer
-+surviving its opener, a new window from that surviving peer, and global Quit.
-+The no-ICD surface failure case also passed with initialized state released.
-+The native example binary SHA-256 was
-+`479c30fefcde36cad3da6a0ca269ffbc20428630c97802d8ee26271708574c37`.
-+The public integration target compiles the production library, rather than the
-+entire unrelated upstream library-unit-test harness.
-+
-+Two real native failures found and fixed during this work were an action Tx
-+merge dropping the new request and a timer-driven close leaving stale published
-+visibility. These are covered by the Runtime poll contract and native opener-close
-+sequence respectively. Initial native creation failure also retires its owned
-+hosts, so an invisible failed peer cannot retain its state or the event loop.
-+The complete Hermes window integration has its own separate acceptance suite.
---- /dev/null
-+++ b/changelog/unreleased/2026-10-29-dynamic-hermes-windows.md
-@@ -0,0 +1 @@
-+- Add event-thread dynamic ordinary windows with independent lifetime, explicit creation receipts, bounded pending requests and stale-route isolation; expose native geometry and local close-request guards for Hermes peer windows.
---- /dev/null
-+++ b/crates/rune/examples/hermes_dynamic_windows.rs
-@@ -0,0 +1,389 @@
-+//! Private synthetic native proof: no backend, provider, audio or user files.
-+use rune::{
-+    App, AppHandle, AppSpec, Cx, El, SpawnedWindow, Tx, WindowHandle, WindowSpawnStatus, WindowSpec,
-+};
-+use std::{
-+    cell::RefCell,
-+    path::PathBuf,
-+    rc::Rc,
-+    time::{Duration, Instant},
-+};
-+
-+struct World {
-+    output: PathBuf,
-+    root: Option<AppHandle<State>>,
-+    current: Option<SpawnedWindow<State>>,
-+    duplicate: Option<SpawnedWindow<State>>,
-+    stale: Option<AppHandle<State>>,
-+    grandchild: Option<SpawnedWindow<State>>,
-+    phase: u32,
-+    cycles: u32,
-+    vetoes: u32,
-+    root_close_hooks: u32,
-+    initial_geometry: bool,
-+    parent_survived_veto: bool,
-+    peer_survived_parent: bool,
-+    duplicate_rejected: bool,
-+    since: Instant,
-+    start: Instant,
-+}
-+struct State {
-+    world: Rc<RefCell<World>>,
-+    id: u32,
-+    ready: bool,
-+    allow_close: bool,
-+    native: Option<WindowHandle>,
-+}
-+fn unused() -> State {
-+    panic!("proof always supplies its state explicitly")
-+}
-+fn view(state: &State, _: &mut Cx<State>) -> El {
-+    let world = state.world.borrow();
-+    rune::col()
-+        .w_full()
-+        .h_full()
-+        .padding(20.)
-+        .gap(14.)
-+        .fill(rune::oklch(0.25, 0.015, 250.))
-+        .child(
-+            rune::text(format!("Native dynamic window {}", state.id))
-+                .color(rune::oklch(0.91, 0.012, 250.)),
-+        )
-+        .child(
-+            rune::text(format!(
-+                "Independent Rc state · phase {} · cycle {}",
-+                world.phase, world.cycles
-+            ))
-+            .color(rune::oklch(0.73, 0.025, 250.)),
-+        )
-+}
-+fn guard(state: &mut State, _: &mut Tx) -> bool {
-+    if state.id == 0 && !state.allow_close {
-+        state.world.borrow_mut().vetoes += 1;
-+        false
-+    } else {
-+        true
-+    }
-+}
-+fn write(world: &World, phase: &str) {
-+    let data = serde_json::json!({"phase":phase,"cycles":world.cycles,"vetoes":world.vetoes,"root_close_hooks":world.root_close_hooks,"initial_geometry":world.initial_geometry,"duplicate_rejected":world.duplicate_rejected,"parent_survived_veto":world.parent_survived_veto,"peer_survived_parent":world.peer_survived_parent,"pid":std::process::id()});
-+    std::fs::write(
-+        world.output.join("inspection.json"),
-+        serde_json::to_vec(&data).unwrap(),
-+    )
-+    .unwrap();
-+}
-+fn window(world: Rc<RefCell<World>>, id: u32, key: &str) -> WindowSpec<State> {
-+    let app = App::new(AppSpec {
-+        poll: Some(poll),
-+        fonts: &[include_bytes!(
-+            "../../../themes/opencode/assets/fonts/InterVariable.ttf"
-+        )],
-+        families: ("Inter", "Inter"),
-+        ..AppSpec::new("Rune dynamic-window proof", (420., 260.), unused, view)
-+    })
-+    .args(Vec::<String>::new())
-+    .init(move || State {
-+        world,
-+        id,
-+        ready: false,
-+        allow_close: id != 0,
-+        native: None,
-+    })
-+    .on_close_requested(guard)
-+    .on_close(|state, _| {
-+        if state.id == 0 {
-+            state.world.borrow_mut().root_close_hooks += 1;
-+        }
-+    });
-+    let handle = app.handle();
-+    WindowSpec::from_app(key, app)
-+        .options(rune::WindowOptions {
-+            position: Some((40 + (id as i32 % 2) * 460, 60)),
-+            ..Default::default()
-+        })
-+        .on_ready(move |native| {
-+            let native = native.clone();
-+            handle.update(move |state, tx| {
-+                state.ready = true;
-+                state.native = Some(native);
-+                tx.instant();
-+            });
-+        })
-+}
-+fn poll(state: &mut State, _: f64, tx: &mut Tx) -> bool {
-+    tx.wake_after(Duration::from_millis(20));
-+    let mut world = state.world.borrow_mut();
-+    assert!(
-+        world.start.elapsed() < Duration::from_secs(75),
-+        "native lifecycle proof timed out at phase {} / cycle {}",
-+        world.phase,
-+        world.cycles
-+    );
-+    if !state.ready {
-+        return false;
-+    }
-+    if state.id == 0 {
-+        if let Some(current) = &world.current {
-+            if let WindowSpawnStatus::Failed(error) = current.creation.status() {
-+                panic!("dynamic peer creation failed: {error}");
-+            }
-+        }
-+        match world.phase {
-+            0 => {
-+                world.initial_geometry = state
-+                    .native
-+                    .as_ref()
-+                    .and_then(WindowHandle::geometry)
-+                    .is_some_and(|g| {
-+                        g.inner_size.0 > 0 && g.scale_factor > 0. && g.monitor.is_some()
-+                    });
-+                let spec = window(state.world.clone(), 1, "reused-peer");
-+                world.current = Some(tx.spawn_window(spec).unwrap());
-+                world.phase = 1;
-+            }
-+            1 if world.current.as_ref().unwrap().window.is_ready() => {
-+                assert!(matches!(
-+                    world.current.as_ref().unwrap().creation.status(),
-+                    WindowSpawnStatus::Created
-+                ));
-+                world.duplicate = Some(
-+                    tx.spawn_window(window(state.world.clone(), 999, "reused-peer"))
-+                        .unwrap(),
-+                );
-+                world.phase = 2;
-+                world.since = Instant::now();
-+                write(&world, "two-native-windows");
-+            }
-+            2 if world.since.elapsed() > Duration::from_millis(500) => {
-+                assert!(matches!(
-+                    world.duplicate.as_ref().unwrap().creation.status(),
-+                    WindowSpawnStatus::Failed(_)
-+                ));
-+                world.duplicate_rejected = true;
-+                world.current.as_ref().unwrap().app.close();
-+                world.phase = 3;
-+            }
-+            3 if world.current.as_ref().unwrap().window.geometry().is_none() => {
-+                let old = world.current.take().unwrap();
-+                world.stale = Some(old.app);
-+                world.cycles += 1;
-+                let spec = window(state.world.clone(), world.cycles + 1, "reused-peer");
-+                world.current = Some(tx.spawn_window(spec).unwrap());
-+                world.phase = 4;
-+            }
-+            4 if world.current.as_ref().unwrap().window.is_ready() => {
-+                world.stale.as_ref().unwrap().close();
-+                world.since = Instant::now();
-+                world.phase = 5;
-+            }
-+            5 if world.since.elapsed() > Duration::from_millis(25) => {
-+                assert!(
-+                    world.current.as_ref().unwrap().app.is_visible(),
-+                    "an old route closed its replacement"
-+                );
-+                if world.cycles < 80 {
-+                    world.current.as_ref().unwrap().app.close();
-+                    world.phase = 3;
-+                } else {
-+                    world.phase = 6;
-+                    tx.close_window();
-+                }
-+            }
-+            6 if world.vetoes == 1 => {
-+                world.parent_survived_veto = world.root.as_ref().unwrap().is_visible()
-+                    && state.native.as_ref().unwrap().geometry().is_some();
-+                assert!(world.parent_survived_veto);
-+                assert_eq!(
-+                    world.root_close_hooks, 0,
-+                    "veto must run before the existing close hook"
-+                );
-+                state.allow_close = true;
-+                world.phase = 7;
-+                world.since = Instant::now();
-+                tx.close_window();
-+            }
-+            _ => return false,
-+        }
-+    } else if state.id == world.cycles + 1
-+        && world.phase == 7
-+        && world.since.elapsed() > Duration::from_millis(500)
-+    {
-+        world.peer_survived_parent =
-+            !world.root.as_ref().unwrap().is_visible() && state.native.as_ref().unwrap().is_ready();
-+        assert!(
-+            world.peer_survived_parent,
-+            "root_visible={} peer_ready={}",
-+            world.root.as_ref().unwrap().is_visible(),
-+            state.native.as_ref().unwrap().is_ready()
-+        );
-+        assert_eq!(world.root_close_hooks, 1);
-+        write(&world, "peer-survived-parent");
-+        world.grandchild = Some(
-+            tx.spawn_window(window(state.world.clone(), 1000, "after-parent"))
-+                .unwrap(),
-+        );
-+        world.phase = 8;
-+        world.since = Instant::now();
-+    } else if state.id == 1000
-+        && world.phase == 8
-+        && state.ready
-+        && world.since.elapsed() > Duration::from_millis(500)
-+    {
-+        assert!(world.current.as_ref().unwrap().app.is_visible());
-+        assert!(world.grandchild.as_ref().unwrap().window.is_ready());
-+        write(&world, "complete");
-+        world.phase = 9;
-+        tx.quit();
-+    } else {
-+        return false;
-+    }
-+    tx.instant();
-+    true
-+}
-+fn main() {
-+    if std::env::args().nth(1).as_deref() == Some("--failure") {
-+        failure::run(
-+            std::env::args_os()
-+                .nth(2)
-+                .map(PathBuf::from)
-+                .expect("private failure output directory"),
-+        );
-+        return;
-+    }
-+    let output = std::env::args_os()
-+        .nth(1)
-+        .map(PathBuf::from)
-+        .expect("absolute private proof output directory");
-+    assert!(output.is_absolute());
-+    std::fs::create_dir_all(&output).unwrap();
-+    let world = Rc::new(RefCell::new(World {
-+        output,
-+        root: None,
-+        current: None,
-+        duplicate: None,
-+        stale: None,
-+        grandchild: None,
-+        phase: 0,
-+        cycles: 0,
-+        vetoes: 0,
-+        root_close_hooks: 0,
-+        initial_geometry: false,
-+        parent_survived_veto: false,
-+        peer_survived_parent: false,
-+        duplicate_rejected: false,
-+        since: Instant::now(),
-+        start: Instant::now(),
-+    }));
-+    let root = window(world.clone(), 0, "root");
-+    world.borrow_mut().root = Some(root.app.handle());
-+    root.app.run();
-+    assert_eq!(
-+        world.borrow().phase,
-+        9,
-+        "native loop ended before independent peer finished"
-+    );
-+}
-+
-+// A windowless driver can observe a real native creation failure when the caller
-+// starts this separate process with no Vulkan ICD. No test-only runtime API exists.
-+mod failure {
-+    use super::*;
-+    use std::cell::Cell;
-+    struct Token {
-+        drops: Rc<Cell<u32>>,
-+        setup: Rc<Cell<bool>>,
-+    }
-+    impl Drop for Token {
-+        fn drop(&mut self) {
-+            self.drops.set(self.drops.get() + 1);
-+        }
-+    }
-+    struct Driver {
-+        output: PathBuf,
-+        child: Option<SpawnedWindow<Token>>,
-+        drops: Rc<Cell<u32>>,
-+        setup: Rc<Cell<bool>>,
-+        start: Instant,
-+    }
-+    fn unused_driver() -> Driver {
-+        panic!("driver supplies captured state")
-+    }
-+    fn unused_token() -> Token {
-+        panic!("child supplies captured state")
-+    }
-+    fn poll(driver: &mut Driver, _: f64, tx: &mut Tx) -> bool {
-+        assert!(
-+            driver.start.elapsed() < Duration::from_secs(20),
-+            "native failure did not settle"
-+        );
-+        tx.wake_after(Duration::from_millis(20));
-+        if driver.child.is_none() {
-+            let token = Token {
-+                drops: driver.drops.clone(),
-+                setup: driver.setup.clone(),
-+            };
-+            let spec = WindowSpec::new(
-+                "failed-peer",
-+                AppSpec {
-+                    setup: Some(|token: &mut Token, _| token.setup.set(true)),
-+                    ..AppSpec::new("failed native peer", (420., 400.), unused_token, |_, _| {
-+                        rune::el()
-+                    })
-+                },
-+            )
-+            .state(token);
-+            driver.child = Some(tx.spawn_window(spec).unwrap());
-+            return true;
-+        }
-+        let child = driver.child.as_ref().unwrap();
-+        match child.creation.status() {
-+            WindowSpawnStatus::Failed(error) => {
-+                assert!(
-+                    driver.setup.get(),
-+                    "failure must follow actual host initialization"
-+                );
-+                assert_eq!(
-+                    driver.drops.get(),
-+                    1,
-+                    "failed native creation retained its owned state"
-+                );
-+                assert!(child.window.geometry().is_none());
-+                assert!(child.app.window_error().is_some());
-+                let data = serde_json::json!({"native_creation_failed":true,"host_initialized":true,"owned_state_dropped":true,"error":error});
-+                std::fs::write(
-+                    driver.output.join("failure.json"),
-+                    serde_json::to_vec(&data).unwrap(),
-+                )
-+                .unwrap();
-+                tx.quit();
-+                true
-+            }
-+            _ => false,
-+        }
-+    }
-+    pub(super) fn run(output: PathBuf) {
-+        assert!(output.is_absolute());
-+        std::fs::create_dir_all(&output).unwrap();
-+        let app = App::new(AppSpec {
-+            setup: Some(|_: &mut Driver, wake| wake()),
-+            poll: Some(poll),
-+            ..AppSpec::new(
-+                "windowless failure driver",
-+                (420., 400.),
-+                unused_driver,
-+                |_, _| rune::el(),
-+            )
-+        })
-+        .args(Vec::<String>::new())
-+        .init(move || Driver {
-+            output,
-+            child: None,
-+            drops: Rc::new(Cell::new(0)),
-+            setup: Rc::new(Cell::new(false)),
-+            start: Instant::now(),
-+        })
-+        .windowless();
-+        app.run();
-+    }
-+}
 --- a/crates/rune/src/app.rs
 +++ b/crates/rune/src/app.rs
 @@ -49,0 +50 @@
@@ -504,206 +13,11 @@
 +    /// Explicit global Quit and OS termination retain their existing non-veto behavior.
 +    pub fn on_close_requested(mut self, f: fn(&mut S, &mut Tx) -> bool) -> Self {
 +        self.on_close_requested = Some(f);
---- /dev/null
-+++ b/crates/rune/src/dynamic_windows.rs
-@@ -0,0 +1,195 @@
-+//! Event-thread requests for ordinary windows created after the loop has started.
-+use crate::{AppHandle, WindowHandle, WindowSpec};
-+use std::{
-+    cell::RefCell,
-+    rc::Rc,
-+    sync::{Arc, Mutex},
-+};
-+
-+const MAX_PENDING: usize = 64;
-+
-+#[derive(Clone, Debug, PartialEq, Eq)]
-+pub enum WindowSpawnStatus {
-+    Queued,
-+    /// The independent host is registered; a windowless app has not opened yet.
-+    Registered,
-+    /// Native creation completed. `WindowHandle::is_ready` additionally checks its first frame.
-+    Created,
-+    Failed(String),
-+}
-+
-+#[derive(Clone)]
-+pub struct WindowCreation(Arc<Mutex<Receipt>>);
-+struct Receipt {
-+    status: WindowSpawnStatus,
-+    wake: Option<crate::Waker>,
-+}
-+impl std::fmt::Debug for WindowCreation {
-+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-+        self.status().fmt(f)
-+    }
-+}
-+impl WindowCreation {
-+    pub fn status(&self) -> WindowSpawnStatus {
-+        self.0.lock().unwrap().status.clone()
-+    }
-+    fn new() -> Self {
-+        Self(Arc::new(Mutex::new(Receipt {
-+            status: WindowSpawnStatus::Queued,
-+            wake: None,
-+        })))
-+    }
-+    fn set(&self, status: WindowSpawnStatus) {
-+        let wake = {
-+            let mut s = self.0.lock().unwrap();
-+            s.status = status;
-+            s.wake.clone()
-+        };
-+        if let Some(wake) = wake {
-+            wake();
-+        }
-+    }
-+}
-+
-+pub struct SpawnedWindow<S: 'static> {
-+    pub app: AppHandle<S>,
-+    pub window: WindowHandle,
-+    pub creation: WindowCreation,
-+}
-+
-+#[derive(Clone, Debug, PartialEq, Eq)]
-+pub struct WindowSpawnError(pub String);
-+impl std::fmt::Display for WindowSpawnError {
-+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-+        f.write_str(&self.0)
-+    }
-+}
-+impl std::error::Error for WindowSpawnError {}
-+
-+impl crate::Tx {
-+    /// Create an independent ordinary window on this event loop. State and factories may
-+    /// capture `Rc` and other non-Send data. A background caller enters the event thread
-+    /// through `AppHandle::update` and constructs its spec there.
-+    ///
-+    /// Closing the caller does not close this window; Quit remains application-wide. The
-+    /// queue limit is temporary backpressure, never a fixed lifetime window pool. Dynamic
-+    /// windows use their own App arguments, or no tooling arguments by default. A single
-+    /// offscreen runtime reports Failed explicitly rather than pretending a host exists.
-+    pub fn spawn_window<S: 'static>(
-+        &mut self,
-+        mut spec: WindowSpec<S>,
-+    ) -> Result<SpawnedWindow<S>, WindowSpawnError> {
-+        if spec.key.is_empty() {
-+            return Err(WindowSpawnError(
-+                "A dynamic window requires a nonempty key".into(),
-+            ));
-+        }
-+        if self.window_spawns.len() >= MAX_PENDING {
-+            return Err(WindowSpawnError(
-+                "The window creation queue is full; try again after this event".into(),
-+            ));
-+        }
-+        let app = spec.app.handle();
-+        let window = WindowHandle::new(&spec.key);
-+        let creation = WindowCreation::new();
-+        let ready = creation.clone();
-+        let original = spec.on_created.take();
-+        spec.on_created = Some(Box::new(move |handle| {
-+            ready.set(WindowSpawnStatus::Created);
-+            if let Some(original) = original {
-+                original(handle);
-+            }
-+        }));
-+        let error_app = app.clone();
-+        let publish_app = app.clone();
-+        let request = Request {
-+            spec: Some(crate::AnyWindowSpec::dynamic(spec, window.clone())),
-+            creation: creation.clone(),
-+            error: Box::new(move || error_app.window_error()),
-+            publish_error: Box::new(move |error| {
-+                *publish_app.shared.window_error.lock().unwrap() = Some(error)
-+            }),
-+        };
-+        self.window_spawns
-+            .push(Call(Rc::new(RefCell::new(Some(request)))));
-+        Ok(SpawnedWindow {
-+            app,
-+            window,
-+            creation,
-+        })
-+    }
-+}
-+
-+#[derive(Clone)]
-+pub(crate) struct Call(Rc<RefCell<Option<Request>>>);
-+impl std::fmt::Debug for Call {
-+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-+        f.write_str("WindowSpawn")
-+    }
-+}
-+impl Call {
-+    fn take(&self) -> Option<Request> {
-+        self.0.borrow_mut().take()
-+    }
-+}
-+
-+pub(crate) struct Request {
-+    spec: Option<crate::AnyWindowSpec>,
-+    creation: WindowCreation,
-+    error: Box<dyn Fn() -> Option<String>>,
-+    publish_error: Box<dyn Fn(String)>,
-+}
-+impl Request {
-+    pub(crate) fn take_spec(&mut self) -> crate::AnyWindowSpec {
-+        self.spec.take().unwrap()
-+    }
-+    pub(crate) fn fail(&self, error: impl Into<String>) {
-+        let error = error.into();
-+        (self.publish_error)(error.clone());
-+        self.creation.set(WindowSpawnStatus::Failed(error));
-+    }
-+    pub(crate) fn registered(&self) {
-+        self.creation.set(WindowSpawnStatus::Registered);
-+    }
-+    pub(crate) fn check_error(&self) -> bool {
-+        if let Some(error) = (self.error)() {
-+            self.fail(error);
-+            true
-+        } else {
-+            false
-+        }
-+    }
-+}
-+impl Drop for Request {
-+    fn drop(&mut self) {
-+        if self.spec.is_some() && self.creation.status() == WindowSpawnStatus::Queued {
-+            self.fail("The creating runtime closed before the window was registered");
-+        }
-+    }
-+}
-+
-+#[derive(Default)]
-+pub(crate) struct Queue {
-+    pending: Vec<Request>,
-+    wake: Option<crate::Waker>,
-+}
-+impl Queue {
-+    pub(crate) fn enable(&mut self, wake: crate::Waker) {
-+        self.wake = Some(wake);
-+    }
-+    pub(crate) fn latch(&mut self, calls: &mut Vec<Call>) {
-+        for request in calls.drain(..).filter_map(|call| call.take()) {
-+            request.creation.0.lock().unwrap().wake = self.wake.clone();
-+            if self.wake.is_none() {
-+                request.fail("Dynamic native windows are unavailable in this offscreen runtime");
-+            } else if self.pending.len() >= MAX_PENDING {
-+                request.fail("The window creation queue is full; try again after this event");
-+            } else {
-+                self.pending.push(request);
-+            }
-+        }
-+    }
-+    pub(crate) fn take(&mut self) -> Vec<Request> {
-+        std::mem::take(&mut self.pending)
-+    }
-+}
 --- a/crates/rune/src/el_tx.rs
 +++ b/crates/rune/src/el_tx.rs
+@@ -39 +39 @@
+-    pub(crate) scroll_to: Vec<(Option<String>, String)>,
++    pub(crate) scroll_to: Vec<(Option<String>, String, bool)>,
 @@ -57,0 +58 @@
 +    pub(crate) window_spawns: Vec<crate::dynamic_windows::Call>,
 --- a/crates/rune/src/lib.rs
@@ -713,18 +27,21 @@
 @@ -195,0 +197,2 @@
 +pub use dynamic_windows::{SpawnedWindow, WindowCreation, WindowSpawnError, WindowSpawnStatus};
 +pub use window::geometry::{MonitorGeometry, WindowGeometry};
+@@ -214 +217 @@
+-pub use file_dialog::{FileDialogError, FileDialogKind, FileDialogOptions, FileDialogResult, FileDialogs, ScriptedFileDialog};
++pub use file_dialog::{FileDialogError, FileDialogKind, FileDialogOptions, FileDialogResult, MultiFileDialogResult, FileDialogs, ScriptedFileDialog};
 --- a/crates/rune/src/runtime.rs
 +++ b/crates/rune/src/runtime.rs
 @@ -94,0 +95,2 @@
 +#[path = "runtime/requests.rs"]
 +mod requests;
-@@ -1263,0 +1266 @@
+@@ -452,0 +455 @@
++    on_mount_change: Option<crate::el::MountChangeFn>,
+@@ -1263,0 +1267 @@
 +    pub(crate) window_spawns: crate::dynamic_windows::Queue,
-@@ -1602,0 +1606 @@
+@@ -1602,0 +1607 @@
 +            window_spawns: Default::default(),
-@@ -1901,56 +1904,0 @@
--    }
--
+@@ -1903,56 +1907,0 @@
 -    /// Latches a Tx's shell and clipboard requests for the shell, so `update`, a hidden poll
 -    /// and `on_close` reach the clipboard without a frame, and applies clipboard requests to a
 -    /// memory clipboard at once. A secret clear drops an earlier secret copy not yet written.
@@ -779,78 +96,115 @@
 -            self.window_frame = Some(self.window_frame.unwrap_or_default().merge(request));
 -        }
 -        crate::clipboard::flush_memory(self);
+-    }
+-
+@@ -2238,2 +2187,2 @@
+-                    for (scope, key) in std::mem::take(&mut tx.scroll_to) {
+-                        self.reveal_row(scope.as_deref(), &key, tx.instant);
++                    for (scope, key, all) in std::mem::take(&mut tx.scroll_to) {
++                        self.reveal_requested(scope.as_deref(), &key, tx.instant, all);
+@@ -2314 +2263 @@
+-                scroll_to.push((None, key));
++                scroll_to.push((None, key, false));
+@@ -2330 +2279 @@
+-        for (scope, key) in scroll_to { self.reveal_row(scope.as_deref(), &key, tx.instant); }
++        for (scope, key, all) in scroll_to { self.reveal_requested(scope.as_deref(), &key, tx.instant, all); }
+@@ -3107,2 +3056,2 @@
+-        let Some((access, submit, change, animate_layout, single_line, secure, revealed_override)) =
+-            self.focused_input().map(|i| (i.access.clone(), i.submit.clone(), i.change.clone(), i.animate_layout, i.single_line, i.edit.is_secure(), i.revealed_override))
++        let Some((access, submit, change, display_change, animate_layout, single_line, secure, revealed_override)) =
++            self.focused_input().map(|i| (i.access.clone(), i.submit.clone(), i.change.clone(), i.display_change.clone(), i.animate_layout, i.single_line, i.edit.is_secure(), i.revealed_override))
+@@ -3120,0 +3070 @@
++        let before_display = display_change.as_ref().map(|_| zeroize::Zeroizing::new(access(states!(self)).display().0));
+@@ -3131,0 +3082,5 @@
++        }
++        if let Some(display_change) = display_change
++            && before_display.as_ref().map(|s| s.as_str()) != Some(access(states!(self)).display().0.as_str())
++        {
++            display_change(states!(self), tx);
+@@ -3794,0 +3750,24 @@
++        let previous: HashSet<_> = self
++            .nodes
++            .iter()
++            .filter(|n| n.on_mount_change.is_some())
++            .map(|n| n.id)
++            .collect();
++        let current: HashSet<_> = measured
++            .nodes
++            .iter()
++            .filter(|n| n.on_mount_change.is_some())
++            .map(|n| n.id)
++            .collect();
++        let retired: Vec<_> = self
++            .nodes
++            .iter()
++            .filter(|n| !current.contains(&n.id))
++            .filter_map(|n| n.on_mount_change.clone())
++            .collect();
++        let mounted: Vec<_> = measured
++            .nodes
++            .iter()
++            .filter(|n| !previous.contains(&n.id))
++            .filter_map(|n| n.on_mount_change.clone())
++            .collect();
+@@ -3795,0 +3775,8 @@
++        let mut changed = false;
++        for callback in retired {
++            changed |= callback(states!(self), false);
++        }
++        for callback in mounted {
++            changed |= callback(states!(self), true);
++        }
++        self.dirty |= changed;
+@@ -3929 +3916 @@
+-                tx.scroll_to.iter().any(|(scope, key)| {
++                tx.scroll_to.iter().any(|(scope, key, _)| {
+@@ -4467,0 +4455 @@
++            old.on_mount_change = None;
+@@ -4474,0 +4463 @@
++                input.display_change = None;
+@@ -5274,0 +5264,30 @@
++    fn reveal_requested(&mut self, scope: Option<&str>, key: &str, instant: bool, all: bool) {
++        self.reveal_row(scope, key, instant);
++        if all { self.reveal_highlight_ancestors(scope, key); }
++    }
++
++    fn reveal_highlight_ancestors(&mut self, scope: Option<&str>, key: &str) {
++        let Some((target, [_, y0, _, y1])) = self.highlight_target_in(&self.nodes, scope, key) else { return };
++        let mut inner_offset = 0.0_f64;
++        for i in std::iter::successors(self.nodes[target].parent, |&p| self.nodes[p].parent).collect::<Vec<_>>() {
++            let n = &self.nodes[i];
++            if !in_scope(&n.path, scope) { break; }
++            if n.scroll.is_none() || !n.scroll_axes.y() { continue; }
++            let id = n.id;
++            let height = f64::from(n.local.h);
++            let top = f64::from(y0 - n.target[1]) - inner_offset;
++            let hit_height = f64::from((y1 - y0).max(0.0));
++            let margin = f64::from(n.scroll_edges.margin);
++            let max = self.scroll_overflow(i).max(0.0);
++            let Some(st) = self.scrolls.get_mut(&id) else { continue };
++            st.max = max;
++            st.offset = scroll_edge::reveal(st.offset, top, hit_height, height, margin).clamp(0.0, max);
++            st.v = 0.0;
++            st.glide = None;
++            st.glide_to = None;
++            st.pinned = false;
++            st.direct = true;
++            inner_offset += st.offset;
++        }
++    }
++
 --- a/crates/rune/src/runtime/action.rs
 +++ b/crates/rune/src/runtime/action.rs
+@@ -47 +47 @@
+-    FileDialog(u64, crate::file_dialog::FileDialogResult),
++    FileDialog(u64, crate::file_dialog::MultiFileDialogResult),
 @@ -155,0 +156 @@
 +    tx.window_spawns.extend(one.window_spawns);
 --- a/crates/rune/src/runtime/on_key_tests.rs
 +++ b/crates/rune/src/runtime/on_key_tests.rs
 @@ -242,0 +243 @@
 +#[cfg(target_os = "macos")]
---- /dev/null
-+++ b/crates/rune/src/runtime/requests.rs
-@@ -0,0 +1,61 @@
-+//! Side effects latch independently of visible frames, including window creation.
-+use super::*;
-+impl<S: 'static> Runtime<S> {
-+    /// Latches a Tx's shell and clipboard requests for the shell, so `update`, a hidden poll
-+    /// and `on_close` reach the clipboard without a frame, and applies clipboard requests to a
-+    /// memory clipboard at once. A secret clear drops an earlier secret copy not yet written.
-+    pub(super) fn latch_requests(&mut self, tx: &mut Tx) {
-+        self.run_pick_reads(tx);
-+        self.shell_request = self.shell_request.max(tx.shell.take());
-+        self.minimize_request |= std::mem::take(&mut tx.minimize);
-+        self.latch_playground(tx);
-+        self.window_spawns.latch(&mut tx.window_spawns);
-+        if !tx.open_urls.is_empty() { self.open_urls(std::mem::take(&mut tx.open_urls)); }
-+        if std::mem::take(&mut tx.clear_secret) {
-+            if self.copy_request.as_ref().is_some_and(crate::ClipboardWrite::is_secret) { self.copy_request = None; }
-+            self.clear_secret_request = true;
-+            self.pill_copy = None;
-+        }
-+        if let Some(copy) = tx.copy.take() {
-+            self.pill_copy = (!copy.is_secret())
-+                .then(|| copy.content().html())
-+                .flatten()
-+                .filter(|h| h.contains("<span data-pill="))
-+                .map(|h| {
-+                    let frag = crate::TextEdit::from_html(h);
-+                    (
-+                        zeroize::Zeroizing::new(copy.content().text().to_owned()),
-+                        frag.pills().map(|(r, id)| (r, id.to_owned())).collect::<Vec<_>>(),
-+                    )
-+                })
-+                .filter(|(_, pills)| !pills.is_empty());
-+            self.copy_request = Some(copy);
-+        }
-+        if std::mem::take(&mut tx.paste) { self.paste_request = Some(self.paste_target()); }
-+        for read in tx.clipboard_reads.drain(..).filter_map(|read| read.take()) {
-+            self.next_clipboard_read += 1;
-+            self.clipboard_reads.push((self.next_clipboard_read, read));
-+            self.read_requests.push(self.next_clipboard_read);
-+        }
-+        self.popups.extend(tx.popups.drain(..).filter_map(|call| call.take()));
-+        for request in tx.file_dialogs.drain(..).filter_map(|call| call.take()) {
-+            self.request_file_dialog(request);
-+        }
-+        if let Some(srgb) = tx.srgb_blend.take() { self.set_srgb_blend(srgb); }
-+        if std::mem::take(&mut tx.blur) {
-+            if self.focused.is_some() {
-+                self.set_focus(None, self.keyboard_focus);
-+                self.dirty = true;
-+            }
-+            // An explicit blur is not the temporary pointer-down blur of a scrim.
-+            self.last_focused = None;
-+        }
-+        if let Some(title) = tx.title.take() { self.window_title.set(title); }
-+        if let Some(mut request) = tx.window_frame.take() {
-+            request.spring = (request.animate && !tx.instant && !self.reduced_motion).then(|| tx.motion.unwrap_or(motion::DEFAULT));
-+            self.window_frame = Some(self.window_frame.unwrap_or_default().merge(request));
-+        }
-+        crate::clipboard::flush_memory(self);
-+    }
-+
-+}
 --- a/crates/rune/src/window.rs
 +++ b/crates/rune/src/window.rs
 @@ -5 +5,7 @@
@@ -1096,413 +450,11 @@
 +        self.timed_events(event_loop, cause);
 +        // A timer can close/hide without passing through user_event/window_event.
 +        self.publish();
---- /dev/null
-+++ b/crates/rune/src/window/close_guard.rs
-@@ -0,0 +1,21 @@
-+//! Local close can retain a dirty window; global Quit remains explicitly separate.
-+use super::*;
-+impl<S: 'static> Host<S> {
-+    pub(super) fn allow_local_close(&mut self) -> bool {
-+        let Some(guard) = self.on_close_requested else {
-+            return true;
-+        };
-+        let mut allowed = true;
-+        self.rt.update(|state, tx| allowed = guard(state, tx));
-+        self.clipboard.flush(&mut self.rt);
-+        if !allowed {
-+            if self.rt.shell_request == Some(Shell::Close) {
-+                self.rt.shell_request = None;
-+            }
-+            if let Some(window) = &self.win {
-+                window.window.request_redraw();
-+            }
-+        }
-+        allowed
-+    }
-+}
---- /dev/null
-+++ b/crates/rune/src/window/collection.rs
-@@ -0,0 +1,147 @@
-+//! Live native host collection, dispatch and independent loop lifetimes.
-+use super::*;
-+
-+pub(super) struct Windows {
-+    pub(super) factory: Option<Factory>,
-+    pub(super) args: Args,
-+    pub(super) proxy: EventLoopProxy<WakeEvent>,
-+    pub(super) hosts: BTreeMap<usize, Box<dyn AnyHost>>,
-+    pub(super) next_host: usize,
-+    // Weak pool preserves release_gpu_when_closed when the last GPU owner closes.
-+    pub(super) gpu: Rc<RefCell<Weak<Gpu>>>,
-+}
-+impl Windows {
-+    fn cleanup(&mut self, event_loop: &ActiveEventLoop) {
-+        self.spawn_pending(event_loop);
-+        self.hosts.retain(|_, host| {
-+            if host.finished() { host.cancel_menus(); false } else { true }
-+        });
-+        // Another window's quit: a menu still tracking would hold the loop open.
-+        if event_loop.exiting() {
-+            for host in self.hosts.values_mut() { host.cancel_menus(); }
-+        }
-+        if !self.hosts.values().any(|h| h.keeps_loop()) {
-+            // The app ends with its last main window: windows still open close as their close
-+            // button would. A quit already asked to exit and skips their hooks.
-+            if !event_loop.exiting() {
-+                for host in self.hosts.values_mut() { host.terminate(); }
-+            }
-+            event_loop.exit();
-+        }
-+    }
-+
-+    /// The app was reopened: every `on_reopen` hook runs, then, unless one handled it or the
-+    /// app is an accessory, the default brings back a window when none shows (`reopen::target`).
-+    fn reopen(&mut self, event_loop: &ActiveEventLoop) {
-+        let candidates = |hosts: &BTreeMap<usize, Box<dyn AnyHost>>| -> Vec<_> {
-+            hosts.values().map(|h| h.reopen_candidate()).collect()
-+        };
-+        let has_visible = crate::reopen::has_visible(&candidates(&self.hosts));
-+        let mut handled = false;
-+        for host in self.hosts.values_mut() {
-+            handled |= host.reopen_hook(event_loop, has_visible);
-+        }
-+        if handled || event_loop.exiting() { return; }
-+        #[cfg(target_os = "macos")]
-+        if crate::reopen::accessory() { return; }
-+        // The default sees what the hooks did, to other windows too.
-+        for host in self.hosts.values_mut() { host.apply_pending(event_loop); }
-+        if event_loop.exiting() { return; }
-+        #[cfg(target_os = "macos")]
-+        crate::reopen::unhide();
-+        let target = crate::reopen::target(&candidates(&self.hosts)).and_then(|i| self.hosts.keys().nth(i).copied());
-+        if let Some(host) = target.and_then(|id| self.hosts.get_mut(&id)) { host.reopen(event_loop); }
-+    }
-+}
-+
-+
-+impl ApplicationHandler<WakeEvent> for Windows {
-+    fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) {
-+        for host in self.hosts.values_mut() { host.new_events(event_loop, cause); }
-+        // Before resumed there are no hosts to clean up.
-+        if self.factory.is_none() { self.cleanup(event_loop); }
-+    }
-+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-+        let Some(factory) = self.factory.take() else { return };
-+        let primary = event_loop.primary_monitor();
-+        let displays: Vec<_> = event_loop.available_monitors().map(|m| Display {
-+            id: Some(crate::DisplayId::from_monitor(m.clone(), is_wayland(event_loop))),
-+            name: m.name(), position: (m.position().x, m.position().y),
-+            size: (m.size().width, m.size().height), scale: m.scale_factor(), primary: primary.as_ref() == Some(&m),
-+        }).collect();
-+        let specs = crate::windows::flatten(factory(&displays));
-+        crate::windows::validate(&specs).expect("window keys");
-+        let trace_window = self.args.window.clone().or_else(|| specs.first().map(|s| s.key().to_owned()));
-+        let mut overlays = Vec::new();
-+        let wayland = is_wayland(event_loop);
-+        self.next_host = specs.len();
-+        self.hosts = start_all(specs, |slot, spec| {
-+            let traced = trace_window.as_deref() == Some(spec.key());
-+            spec.start(self.args.clone(), Start { proxy: self.proxy.clone(), slot, gpu: self.gpu.clone(), wayland, traced, overlays: &mut overlays })
-+        }, |host| host.resumed(event_loop)).into_iter().enumerate().filter_map(|(id, host)| host.map(|host| (id, host))).collect();
-+        for mut overlay in overlays {
-+            let (slot, proxy) = (self.allocate_host(), self.proxy.clone());
-+            let frame_proxy = proxy.clone();
-+            overlay.connect(Arc::new(move || { let _ = proxy.send_event(WakeEvent::App(slot)); }),
-+                Arc::new(move || { let _ = frame_proxy.send_event(WakeEvent::DisplayTick(slot)); }), self.gpu.clone());
-+            overlay.resumed(event_loop);
-+            self.hosts.insert(slot, overlay);
-+        }
-+        #[cfg(target_os = "macos")]
-+        {
-+            let proxy = self.proxy.clone();
-+            crate::reopen::install(move || proxy.send_event(WakeEvent::Reopen).is_ok());
-+        }
-+        crate::open_url_in::settle();
-+        // A window opened at launch took it; a GPU kept for a later one would sit idle until then.
-+        crate::render::discard_prewarm();
-+        self.cleanup(event_loop);
-+    }
-+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: WakeEvent) {
-+        let slot = match &event {
-+            WakeEvent::DisplayTick(i) | WakeEvent::App(i) | WakeEvent::Live(i) | WakeEvent::Window(i, _) | WakeEvent::Focus(i)
-+                | WakeEvent::Position(i, _) | WakeEvent::Level(i, _) | WakeEvent::Place(i, _) | WakeEvent::Frame(i, _) => *i,
-+            WakeEvent::Reopen => {
-+                self.reopen(event_loop);
-+                self.cleanup(event_loop);
-+                return;
-+            }
-+        };
-+        if let Some(host) = self.hosts.get_mut(&slot) {
-+            host.user_event(event_loop, event);
-+        }
-+        self.cleanup(event_loop);
-+    }
-+    fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
-+        if let Some(host) = self.hosts.values_mut().find(|h| h.owns(id)) {
-+            let _input = crate::input_time::arrived(&event);
-+            host.window_event(event_loop, id, event);
-+        }
-+        self.cleanup(event_loop);
-+    }
-+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-+        crate::os_cursor::make_pending(event_loop);
-+        let mut animating = false;
-+        for host in self.hosts.values_mut() {
-+            animating |= host.about_to_wait(event_loop);
-+        }
-+        if self.factory.is_none() { self.cleanup(event_loop); }
-+        // Layer surfaces have no redraw events: keep turning while one animates (its vsync
-+        // paces the loop). Hosts whose only motion is an ambient loop sleep until its next step.
-+        let deadline = self.hosts.values().filter_map(|host| host.wake_deadline()).min();
-+        event_loop.set_control_flow(if animating { ControlFlow::Poll }
-+            else { deadline.map_or(ControlFlow::Wait, ControlFlow::WaitUntil) });
-+    }
-+    fn exiting(&mut self, event_loop: &ActiveEventLoop) {
-+        // Rune didn't ask to exit, so the OS is ending the app: macOS Quit, Cmd-Q, the Dock's
-+        // Quit, logout. Windows close as their close button would, before the clipboard stops.
-+        if !event_loop.exiting() {
-+            for host in self.hosts.values_mut() { host.terminate(); }
-+        }
-+        for host in self.hosts.values_mut() { host.cancel_menus(); }
-+        // Surfaces go while winit's display connection is still open (layer surfaces live on it).
-+        self.hosts.clear();
-+        crate::clipboard::shutdown();
-+    }
-+}
-+
---- /dev/null
-+++ b/crates/rune/src/window/dynamic.rs
-@@ -0,0 +1,103 @@
-+//! The event thread registers independent hosts before retiring their creator.
-+use super::*;
-+impl Windows {
-+    pub(super) fn allocate_host(&mut self) -> usize {
-+        let id = self.next_host;
-+        self.next_host = id
-+            .checked_add(1)
-+            .expect("native host routing identity exhausted");
-+        id
-+    }
-+    pub(super) fn spawn_pending(&mut self, event_loop: &ActiveEventLoop) {
-+        let requests: Vec<_> = self
-+            .hosts
-+            .values_mut()
-+            .flat_map(|host| host.take_new_windows())
-+            .collect();
-+        for mut request in requests {
-+            if event_loop.exiting() {
-+                request.fail("The application is quitting");
-+                continue;
-+            }
-+            let specs = crate::windows::flatten([request.take_spec()]);
-+            if let Err(error) = crate::windows::validate(&specs) {
-+                request.fail(error);
-+                continue;
-+            }
-+            if specs.iter().any(|spec| {
-+                self.hosts
-+                    .values()
-+                    .any(|host| !host.finished() && host.key() == Some(spec.key()))
-+            }) {
-+                request.fail("A live window already owns this key");
-+                continue;
-+            }
-+            // A peer is a new ordinary app, not a replay of its opener's CLI script.
-+            let prepared: Vec<_> = specs
-+                .into_iter()
-+                .map(|mut spec| {
-+                    let args = spec.resolve_args(Args {
-+                        fps: 60.0,
-+                        every: 1,
-+                        cols: 10,
-+                        ..Default::default()
-+                    });
-+                    (spec, args)
-+                })
-+                .collect();
-+            if prepared.iter().any(|(_, args)| args.headless()) {
-+                request.fail("A dynamic native window cannot use offscreen tooling arguments");
-+                continue;
-+            }
-+            request.registered();
-+            let mut overlays = Vec::new();
-+            let mut hosts = Vec::new();
-+            for (spec, inherited) in prepared {
-+                let slot = self.allocate_host();
-+                if let Some(host) = spec.start(
-+                    inherited,
-+                    Start {
-+                        proxy: self.proxy.clone(),
-+                        slot,
-+                        gpu: self.gpu.clone(),
-+                        wayland: is_wayland(event_loop),
-+                        traced: false,
-+                        overlays: &mut overlays,
-+                    },
-+                ) {
-+                    hosts.push((slot, host));
-+                }
-+            }
-+            // All shortcut/menu guards exist before any creation callback runs.
-+            let registered: Vec<_> = hosts.iter().map(|(slot, _)| *slot).collect();
-+            for (slot, mut host) in hosts {
-+                host.resumed(event_loop);
-+                self.hosts.insert(slot, host);
-+            }
-+            // Failed initial native creation must not leave an invisible host
-+            // retaining its state and keeping the loop alive after its opener closes.
-+            if request.check_error() {
-+                for slot in registered {
-+                    self.hosts.remove(&slot);
-+                }
-+                continue;
-+            }
-+            for mut overlay in overlays {
-+                let slot = self.allocate_host();
-+                let proxy = self.proxy.clone();
-+                let frame_proxy = proxy.clone();
-+                overlay.connect(
-+                    Arc::new(move || {
-+                        let _ = proxy.send_event(WakeEvent::App(slot));
-+                    }),
-+                    Arc::new(move || {
-+                        let _ = frame_proxy.send_event(WakeEvent::DisplayTick(slot));
-+                    }),
-+                    self.gpu.clone(),
-+                );
-+                overlay.resumed(event_loop);
-+                self.hosts.insert(slot, overlay);
-+            }
-+        }
-+    }
-+}
 --- a/crates/rune/src/window/event_loop.rs
 +++ b/crates/rune/src/window/event_loop.rs
 @@ -75 +75 @@
 -    let mut windows = Windows { factory: Some(factory), args, proxy, hosts: Vec::new(), gpu: Rc::default() };
 +    let mut windows = Windows { factory: Some(factory), args, proxy, hosts: Default::default(), next_host: 0, gpu: Rc::default() };
---- /dev/null
-+++ b/crates/rune/src/window/geometry.rs
-@@ -0,0 +1,40 @@
-+//! Immutable physical geometry for native cascade/restore decisions.
-+#[derive(Clone, Debug, PartialEq)]
-+pub struct WindowGeometry {
-+    /// Outer-frame position when the platform exposes it. Wayland generally does not.
-+    pub position: Option<(i32, i32)>,
-+    pub inner_size: (u32, u32),
-+    pub scale_factor: f64,
-+    pub maximized: bool,
-+    /// Current monitor bounds, not the platform's reserved desktop work area.
-+    pub monitor: Option<MonitorGeometry>,
-+}
-+#[derive(Clone, Debug, PartialEq, Eq)]
-+pub struct MonitorGeometry {
-+    pub position: (i32, i32),
-+    pub size: (u32, u32),
-+}
-+impl super::WindowHandle {
-+    /// Request the native maximized state. The window manager decides whether to honor it.
-+    pub fn set_maximized(&self, maximized: bool) -> Result<(), String> {
-+        self.window()?.set_maximized(maximized);
-+        Ok(())
-+    }
-+
-+    /// Snapshot a live native window. Returns None before creation and after destruction.
-+    /// Monitor bounds exclude no taskbar/Dock area; callers must not claim work-area support.
-+    pub fn geometry(&self) -> Option<WindowGeometry> {
-+        let window = self.window().ok()?;
-+        let size = window.inner_size();
-+        Some(WindowGeometry {
-+            position: window.outer_position().ok().map(|p| (p.x, p.y)),
-+            inner_size: (size.width, size.height),
-+            scale_factor: window.scale_factor(),
-+            maximized: window.is_maximized(),
-+            monitor: window.current_monitor().map(|m| MonitorGeometry {
-+                position: (m.position().x, m.position().y),
-+                size: (m.size().width, m.size().height),
-+            }),
-+        })
-+    }
-+}
---- /dev/null
-+++ b/crates/rune/src/window/timed_events.rs
-@@ -0,0 +1,76 @@
-+//! Timer-driven native lifecycle changes publish through the same host boundary.
-+use super::*;
-+impl<S: 'static> Host<S> {
-+    pub(super) fn timed_events(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) {
-+        #[cfg(target_os = "macos")]
-+        if let Some(shadow) = self.win.as_ref().and_then(|w| w.shadow.as_ref()) { shadow.turn(); }
-+        self.meter.turn(matches!(cause, StartCause::ResumeTimeReached { .. } | StartCause::Poll), crate::surface_stats::slept(cause));
-+        if matches!(cause, StartCause::ResumeTimeReached { .. }) && let Some(w) = &self.win { w.cursor.reassert(); }
-+        if let Some(w) = &mut self.win && let Some((retry, until)) = w.first_frame.deadline && retry <= Instant::now() {
-+            if until <= Instant::now() {
-+                let notified = w.first_frame.notified;
-+                if w.first_frame.expire() {
-+                    self.show_cached();
-+                    self.shell(event_loop);
-+                    if let Some(w) = &self.win { w.window.request_redraw(); }
-+                    self.publish();
-+                } else if !notified {
-+                    *self.shared.window_error.lock().unwrap() = Some("launcher first frame was not ready within two seconds".into());
-+                }
-+            } else {
-+                // Bounded retries while the frame prepares, whatever stops each one (occlusion,
-+                // no drawable). A retry left due would turn the loop at once until it gives up.
-+                w.first_frame.deadline = Some((Instant::now() + Duration::from_millis(16), until));
-+                w.window.request_redraw();
-+            }
-+        }
-+        let launcher = self.launcher();
-+        if let Some(w) = &mut self.win && w.retry.is_some_and(|retry| retry <= Instant::now()) {
-+            w.retry = None;
-+            // A missed frame marked it occluded; look at the surface again.
-+            w.occluded = false;
-+            if launcher || w.visible { w.window.request_redraw(); }
-+        }
-+        if let Some(w) = &mut self.win && !w.visible && w.hidden_pace.take_due(Instant::now()) {
-+            w.window.request_redraw();
-+        }
-+        if matches!(cause, StartCause::ResumeTimeReached { .. } | StartCause::Poll)
-+            && timer_deadline(&self.rt).is_some_and(|deadline| deadline <= Instant::now())
-+        {
-+            let hidden = self.win.as_ref().is_none_or(|w| !w.visible);
-+            if hidden && !(launcher && self.hidden_launcher_renders()) {
-+                // Hidden or windowless: poll and due timers run, and the view waits for the
-+                // frame that shows the window. A launcher's cached frame follows, paced.
-+                let changed = self.rt.hidden_wake();
-+                self.clipboard.flush(&mut self.rt);
-+                self.shell(event_loop);
-+                if changed && launcher { self.refresh_hidden(); }
-+            // A redraw while the window backs off would draw nothing and leave the timer due.
-+            } else if self.win.as_ref().is_some_and(|w| (launcher || (w.visible && !w.occluded)) && !w.minimized()
-+                && !w.backing_off(Instant::now())) {
-+                // A resting window polls first and draws only for what that changed.
-+                let rests = self.idle && !composing(self.comp.as_deref()) && self.win.as_ref().is_some_and(Win::rests);
-+                let frame = match rests.then(|| self.rt.resting_wake()).flatten() {
-+                    Some(stale) => {
-+                        self.clipboard.flush(&mut self.rt);
-+                        self.shell(event_loop);
-+                        // A close the poll asked for may have hidden the window.
-+                        let frame = (stale || self.rt.stale()) && self.win.as_ref().is_some_and(|w| w.visible);
-+                        self.rt.resting_wake_frame(frame);
-+                        frame
-+                    }
-+                    None => true,
-+                };
-+                if frame && let Some(w) = &mut self.win {
-+                    w.quiet = true;
-+                    w.window.request_redraw();
-+                }
-+            } else {
-+                covered_step(&mut self.rt);
-+                self.clipboard.flush(&mut self.rt);
-+                self.shell(event_loop);
-+            }
-+        }
-+    }
-+
-+}
 --- a/crates/rune/src/windows.rs
 +++ b/crates/rune/src/windows.rs
 @@ -249,0 +250 @@
@@ -1512,211 +464,759 @@
 +        Self(Box::new(Erased { spec, handle: Some(handle), secondary: false }))
 +    }
 +
---- /dev/null
-+++ b/crates/rune/tests/hermes_dynamic_windows.rs
-@@ -0,0 +1,137 @@
-+//! Public contracts against the production library; positive hosts use the native example.
-+use rune::{AppSpec, Env, Runtime, Tx, WindowCreation, WindowSpawnStatus, WindowSpec};
-+use std::rc::Rc;
-+fn spec(key: &str, captured: Rc<String>) -> WindowSpec<Rc<String>> {
-+    WindowSpec::new(
-+        key,
-+        AppSpec::new(
-+            "local-state",
-+            (200., 200.),
-+            || Rc::new(String::new()),
-+            |_, _| rune::el(),
-+        ),
-+    )
-+    .state(captured)
-+}
-+fn failed_offscreen(creation: &WindowCreation) {
-+    assert!(
-+        matches!(creation.status(), WindowSpawnStatus::Failed(ref reason) if reason.contains("offscreen")),
-+        "{:?}",
-+        creation.status()
-+    );
-+}
-+#[test]
-+fn runtime_updates_report_unsupported_instead_of_silently_dropping_the_request() {
-+    let mut runtime = Runtime::new(
-+        None,
-+        |_: &Option<WindowCreation>, _| rune::el(),
-+        (200., 200.),
-+        Env::new(false, 1.),
-+    );
-+    runtime.update(|state, tx| {
-+        *state = Some(
-+            tx.spawn_window(spec("child", Rc::new(String::new())))
-+                .unwrap()
-+                .creation,
-+        )
-+    });
-+    failed_offscreen(runtime.state.as_ref().unwrap());
-+}
-+#[test]
-+fn poll_actions_propagate_their_request_through_the_actual_frame_transaction() {
-+    let mut runtime = Runtime::new(
-+        None,
-+        |_: &Option<WindowCreation>, _| rune::el(),
-+        (200., 200.),
-+        Env::new(false, 1.),
-+    );
-+    runtime.poll = Some(|state, _, tx| {
-+        if state.is_some() {
-+            return false;
+--- a/crates/rune/src/el.rs
++++ b/crates/rune/src/el.rs
+@@ -167,0 +168 @@
++    pub(crate) display_change: Option<PressFn>,
+@@ -759,0 +761 @@
++pub(crate) type MountChangeFn = Rc<dyn Fn(crate::states::States<'_>, bool) -> bool>;
+@@ -819,0 +822 @@
++    pub(crate) on_mount_change: Option<MountChangeFn>,
+@@ -911,0 +915 @@
++        on_mount_change: None,
+@@ -1074,0 +1079 @@
++        display_change: None,
+@@ -1243,0 +1249,7 @@
++    /// Called when the displayed input text changes, including IME preedit.
++    pub fn on_input_display_change<S: 'static>(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
++        if let Some(input) = &mut self.input {
++            input.display_change = Some(Rc::new(move |s, tx| f(s.cast::<S>().expect("input display change state type"), tx)));
 +        }
-+        *state = Some(
-+            tx.spawn_window(spec("poll-child", Rc::new(String::new())))
-+                .unwrap()
-+                .creation,
-+        );
-+        true
-+    });
-+    runtime.frame(0.);
-+    // Without the Tx merge seam this is an owner-dropped error instead.
-+    failed_offscreen(runtime.state.as_ref().unwrap());
++        self
++    }
+@@ -1539,0 +1552,9 @@
++        self
++    }
++
++    /// Called after a node enters or leaves the mounted tree. Return true if view state changed.
++    pub fn on_mount_change<S: 'static>(
++        mut self,
++        f: impl Fn(&mut S, bool) -> bool + 'static,
++    ) -> Self {
++        self.on_mount_change = Some(Rc::new(move |s, mounted| f(downcast::<S>(s), mounted)));
+--- a/crates/rune/src/focus.rs
++++ b/crates/rune/src/focus.rs
+@@ -339 +339 @@
+-            tx.scroll_to.push((None, path));
++            tx.scroll_to.push((None, path, false));
+@@ -391 +391 @@
+-                tx.scroll_to.push((None, path));
++                tx.scroll_to.push((None, path, false));
+--- a/crates/rune/src/runtime/playground.rs
++++ b/crates/rune/src/runtime/playground.rs
+@@ -171 +171 @@
+-                one.scroll_to.push((None, path));
++                one.scroll_to.push((None, path, false));
+--- a/crates/rune/src/tx_scroll.rs
++++ b/crates/rune/src/tx_scroll.rs
+@@ -19 +19 @@
+-        self.scroll_to.push((None, key.into()));
++        self.scroll_to.push((None, key.into(), false));
+@@ -25 +25,6 @@
+-        self.scroll_to.push((Some(scope.into()), key.into()));
++        self.scroll_to.push((Some(scope.into()), key.into(), false));
++    }
++    /// Reveal a keyed text highlight through every enclosing vertical scroll viewport
++    /// inside `scope`, from the innermost outward. The target must already be mounted.
++    pub fn scroll_highlight_into_view_all_in(&mut self, scope: impl Into<String>, key: impl Into<String>) {
++        self.scroll_to.push((Some(scope.into()), key.into(), true));
+--- a/crates/rune/src/runtime/flatten.rs
++++ b/crates/rune/src/runtime/flatten.rs
+@@ -131,0 +132 @@
++        on_mount_change,
+@@ -268,0 +270 @@
++        on_mount_change,
+--- a/crates/rune-kit/src/markdown.rs
++++ b/crates/rune-kit/src/markdown.rs
+@@ -112 +112,9 @@
+-pub(super) struct SpanMap(pub(super) Vec<(Range<usize>, Range<usize>)>);
++pub(super) struct SpanMap(pub(super) Vec<(Range<usize>, Range<usize>)>, Vec<LinkOccurrence>);
++
++/// An authored parser link and its label range in the containing rendered inline text.
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub struct LinkOccurrence {
++    pub source: Range<usize>,
++    pub destination: String,
++    pub label: Range<usize>,
 +}
-+#[test]
-+fn a_cloned_transaction_releases_its_non_send_factory_once_and_backpressure_recovers() {
-+    let captured = Rc::new("owned local state".to_owned());
-+    let mut pending = Tx::default();
-+    let mut creations = Vec::new();
-+    let mut full = false;
-+    for i in 0..1024 {
-+        match pending.spawn_window(spec(&format!("peer-{i}"), captured.clone())) {
-+            Ok(spawned) => creations.push(spawned.creation),
-+            Err(error) => {
-+                assert!(error.to_string().contains("queue"));
-+                full = true;
-+                break;
+@@ -150,0 +159,4 @@
++        }
++        for occurrence in &mut self.1 {
++            occurrence.source.start += offset;
++            occurrence.source.end += offset;
+@@ -262,0 +275 @@
++    source: Option<Range<usize>>,
+@@ -328,0 +342,4 @@
++            for occurrence in &mut map.1 {
++                occurrence.label.start = occurrence.label.start.min(trimmed);
++                occurrence.label.end = occurrence.label.end.min(trimmed);
++            }
+@@ -350 +367 @@
+-            if inl.text.is_empty() {
++            if inl.text.is_empty() && map.1.is_empty() {
+@@ -732,4 +749,4 @@
+-                Tag::Strong => open(&mut b, Style::Strong, None),
+-                Tag::Emphasis => open(&mut b, Style::Em, None),
+-                Tag::Strikethrough => open(&mut b, Style::Strike, None),
+-                Tag::Link { dest_url, .. } => open(&mut b, Style::Link, Some(dest_url.into_string())),
++                Tag::Strong => open(&mut b, Style::Strong, None, None),
++                Tag::Emphasis => open(&mut b, Style::Em, None, None),
++                Tag::Strikethrough => open(&mut b, Style::Strike, None, None),
++                Tag::Link { dest_url, .. } => open(&mut b, Style::Link, Some(dest_url.into_string()), Some(range)),
+@@ -946 +963 @@
+-fn open(b: &mut Builder, style: Style, url: Option<String>) {
++fn open(b: &mut Builder, style: Style, url: Option<String>, source: Option<Range<usize>>) {
+@@ -949 +966 @@
+-    inl.2.push(Open { start, style, url });
++    inl.2.push(Open { start, style, url, source });
+@@ -953 +970 @@
+-    let (_, inl, open, _) = b.inline();
++    let (_, inl, open, map) = b.inline();
+@@ -954,0 +972,3 @@
++        if let (Some(source), Some(destination)) = (&o.source, &o.url) {
++            map.1.push(LinkOccurrence { source: source.clone(), destination: destination.clone(), label: o.start..inl.text.len() });
++        }
+@@ -997,0 +1018,21 @@
++}
++
++/// Returns authored parser links from the cached document used for rendering.
++/// Label ranges are UTF-8 bytes local to the containing inline text. Bare URLs
++/// added by Rune's separate GFM linkification are not parser link events.
++pub fn link_occurrences_cached(src: &str) -> Vec<LinkOccurrence> {
++    fn collect(map: &BlockMap, out: &mut Vec<LinkOccurrence>) {
++        match map {
++            BlockMap::Inline(m) => out.extend(m.1.iter().cloned()),
++            BlockMap::List(items) => for item in items { for map in item { collect(map, out); } },
++            BlockMap::Quote(maps) => for map in maps { collect(map, out); },
++            BlockMap::Table { head, rows } => {
++                for map in head.iter().chain(rows.iter().flatten()) { out.extend(map.1.iter().cloned()); }
++            }
++            BlockMap::Code(_) | BlockMap::None => {}
++        }
++    }
++    let doc = doc_cached(src);
++    let mut out = Vec::new();
++    for map in doc.4.iter() { collect(map, &mut out); }
++    out
+@@ -1140,0 +1182,2 @@
++type EmbedLink = Rc<dyn Fn(&LinkOccurrence, &str) -> Option<El>>;
++
+@@ -1161,0 +1205 @@
++    embed_links: Option<EmbedLink>,
+@@ -1167 +1211,8 @@
+-            on_task: None, tasks_read_only: false, selectable: false, copy_source: false, scroll_wide: false, highlighter: Highlighter::builtin() }
++            on_task: None, tasks_read_only: false, selectable: false, copy_source: false, scroll_wide: false, highlighter: Highlighter::builtin(), embed_links: None }
++    }
++    /// Replaces selected authored link labels in paragraphs and headings, in document order.
++    /// Embedded elements occupy their own rows; other labels remain ordinary links.
++    /// Table cells use their existing text rendering and are not replaced.
++    pub fn embed_links(mut self, f: impl Fn(&LinkOccurrence, &str) -> Option<El> + 'static) -> Self {
++        self.embed_links = Some(Rc::new(f));
++        self
+@@ -1331,2 +1382,2 @@
+-            highlighter: self.highlighter, sources, next_source: Cell::new(0), tasks, next_task: Cell::new(0),
+-            current_block_key: RefCell::new("b0".into()) };
++            highlighter: self.highlighter, embed_links: self.embed_links, sources, next_source: Cell::new(0), tasks, next_task: Cell::new(0),
++            current_block_key: RefCell::new("b0".into()), embedded_blocks: RefCell::new(Vec::new()) };
+@@ -1337 +1388,2 @@
+-        root.selection_copy(move |sel| source_copy(&src, &starts, &names, sel))
++        let embedded = r.embedded_blocks.into_inner();
++        root.selection_copy(move |sel| source_copy(&src, &starts, &names, &embedded, sel))
+@@ -1355,0 +1408 @@
++    embed_links: Option<EmbedLink>,
+@@ -1362,0 +1416 @@
++    embedded_blocks: RefCell<Vec<String>>,
+@@ -1373 +1427 @@
+-fn source_copy(src: &str, starts: &[usize], names: &[String], sel: &rune::TextSelection) -> Option<String> {
++fn source_copy(src: &str, starts: &[usize], names: &[String], embedded: &[String], sel: &rune::TextSelection) -> Option<String> {
+@@ -1383,0 +1438 @@
++    if (first..=last).any(|i| embedded.contains(&names[i])) { return None; }
+@@ -1561,0 +1617,29 @@
++        if let (Some(embed), Some(map)) = (&self.embed_links, map) {
++            let mut replacements = Vec::new();
++            let mut end = 0;
++            for occurrence in &map.1 {
++                let range = &occurrence.label;
++                if range.start < end || range.start > range.end || range.end > inl.text.len()
++                    || !inl.text.is_char_boundary(range.start) || !inl.text.is_char_boundary(range.end) { continue; }
++                if let Some(el) = embed(occurrence, &inl.text[range.clone()]) {
++                    end = range.end;
++                    replacements.push((occurrence, el));
++                }
++            }
++            if !replacements.is_empty() {
++                self.embedded_blocks.borrow_mut().push(self.current_block_key.borrow().to_string());
++                let mut result = col().w_full();
++                let mut start = 0;
++                for (occurrence, el) in replacements {
++                    if start < occurrence.label.start {
++                        result = result.child(self.inline_fragment(inl, map, start..occurrence.label.start, style, color));
++                    }
++                    result = result.child(el.key(format!("md-embed-{}", occurrence.source.start)));
++                    start = occurrence.label.end;
++                }
++                if start < inl.text.len() {
++                    result = result.child(self.inline_fragment(inl, map, start..inl.text.len(), style, color));
++                }
++                return result;
 +            }
 +        }
+@@ -1563,0 +1648,25 @@
 +    }
-+    assert!(
-+        full && !creations.is_empty(),
-+        "pending creation work has a finite bound"
-+    );
-+    assert!(Rc::strong_count(&captured) > 1);
-+    let duplicate = pending.clone();
-+    let mut runtime = Runtime::new((), |_, _| rune::el(), (200., 200.), Env::new(false, 1.));
-+    runtime.update(|_, tx| *tx = pending);
-+    assert_eq!(
-+        Rc::strong_count(&captured),
-+        1,
-+        "even a retained Tx clone cannot keep consumed factories alive"
-+    );
-+    for creation in &creations {
-+        failed_offscreen(creation);
-+    }
-+    runtime.update(|_, tx| *tx = duplicate);
-+    assert_eq!(Rc::strong_count(&captured), 1);
-+    runtime.update(|_, tx| {
-+        let spawned = tx
-+            .spawn_window(spec("next-event", captured.clone()))
-+            .unwrap();
-+        assert_eq!(spawned.creation.status(), WindowSpawnStatus::Queued);
-+    });
-+    assert_eq!(
-+        Rc::strong_count(&captured),
-+        1,
-+        "backpressure does not become a lifetime limit"
-+    );
-+}
-+#[test]
-+fn cancelling_before_registration_is_observable_and_releases_owned_state() {
-+    let captured = Rc::new("cancelled local factory".to_owned());
-+    let spawned = {
-+        let mut tx = Tx::default();
-+        tx.spawn_window(spec("orphan", captured.clone())).unwrap()
-+    };
-+    assert_eq!(Rc::strong_count(&captured), 1);
-+    assert!(
-+        matches!(spawned.creation.status(),WindowSpawnStatus::Failed(ref reason) if reason.contains("before the window was registered"))
-+    );
-+    assert!(
-+        spawned
-+            .app
-+            .window_error()
-+            .unwrap()
-+            .contains("before the window was registered")
-+    );
-+    assert!(spawned.window.geometry().is_none());
-+    assert!(!spawned.window.is_ready());
-+    assert!(spawned.window.set_maximized(true).is_err());
-+}
-+#[test]
-+fn an_empty_key_is_rejected_without_retaining_the_factory() {
-+    let captured = Rc::new("invalid local factory".to_owned());
-+    let mut tx = Tx::default();
-+    assert!(tx.spawn_window(spec("", captured.clone())).is_err());
-+    assert_eq!(Rc::strong_count(&captured), 1);
-+}
---- /dev/null
-+++ b/scripts/check-hermes-dynamic-windows.mjs
-@@ -0,0 +1,37 @@
-+#!/usr/bin/env node
-+// Run inside a private Xvfb display. All windows/state are synthetic, without backend or audio.
-+import assert from 'node:assert/strict'
-+import fs from 'node:fs'
-+import path from 'node:path'
-+import {spawn, spawnSync, execFileSync} from 'node:child_process'
-+const [binary, output] = process.argv.slice(2)
-+assert.ok(binary && output && path.isAbsolute(output), 'Pass binary and absolute evidence directory')
-+fs.mkdirSync(output, {recursive:true})
-+const child=spawn(binary,[output],{stdio:['ignore','ignore','pipe']})
-+let stderr='', completed=false, screenshots=false, windowCount=0
-+child.stderr.on('data', b=>stderr+=b)
-+const ended = new Promise(resolve=>child.on('exit',(code,signal)=>resolve({code,signal})))
-+const deadline=Date.now()+90000
-+const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms))
-+function inspection(){try{return JSON.parse(fs.readFileSync(path.join(output,'inspection.json'),'utf8'))}catch{return {}}}
-+function windows(){const r=spawnSync('xdotool',['search','--onlyvisible','--pid',String(child.pid)],{encoding:'utf8'});return r.status===0?r.stdout.trim().split('\n').filter(Boolean):[]}
-+function capture(){execFileSync('/usr/bin/python3',['-c',`import gi,os,sys;gi.require_version('Gdk','3.0');from gi.repository import Gdk;d=Gdk.Display.open(os.environ['DISPLAY']);r=d.get_default_screen().get_root_window();p=Gdk.pixbuf_get_from_window(r,0,0,r.get_width(),r.get_height());p.savev(sys.argv[1],'png',[],[])`,path.join(output,'two-windows.png')])}
-+try {
-+ while(Date.now()<deadline){
-+  const s=inspection()
-+  if(s.phase==='two-native-windows'&&!screenshots){windowCount=windows().length;assert.equal(windowCount,2,'Live duplicate key must not create a third native window');capture();screenshots=true}
-+  if(s.phase==='complete'){completed=true;break}
-+  if(child.exitCode!==null)throw new Error(`Native proof exited early: ${stderr.slice(-6000)}`)
-+  await delay(25)
-+ }
-+ assert.ok(completed,`Native proof did not complete: ${JSON.stringify(inspection())}\n${stderr.slice(-6000)}`)
-+ const exit=await ended
-+ assert.deepEqual(exit,{code:0,signal:null},stderr.slice(-6000))
-+ const s=inspection()
-+ assert.ok(s.cycles>=80&&s.vetoes===1&&s.root_close_hooks===1&&s.initial_geometry&&s.duplicate_rejected&&s.parent_survived_veto&&s.peer_survived_parent)
-+ assert.ok(screenshots)
-+ const result={...s,private_display:true,non_send_state:true,stale_route_isolation:true,native_window_count:windowCount,global_quit:true}
-+ fs.writeFileSync(path.join(output,'result.json'),JSON.stringify(result,null,2)+'\n')
-+ fs.writeFileSync(path.join(output,'stderr.log'),stderr)
-+ console.log(JSON.stringify(result))
-+}finally{if(child.exitCode===null&&child.signalCode===null){child.kill('SIGTERM');await Promise.race([ended,delay(2000)]);if(child.exitCode===null&&child.signalCode===null){child.kill('SIGKILL');await ended}}}
---- /dev/null
-+++ b/scripts/verify-hermes-source.py
-@@ -0,0 +1,25 @@
-+#!/usr/bin/env python3
-+"""Verify the pinned source snapshot and every declared local patch, offline."""
-+from pathlib import Path
-+import hashlib
-+import json
 +
-+root = Path(__file__).resolve().parents[1]
-+manifest = json.loads((root / 'HERMES_PATCH.json').read_text())
-+digest = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
-+expected = set(manifest['upstream_files']) | set(manifest['added']) | {'HERMES_PATCH.json'}
-+for name, original in manifest['upstream_files'].items():
-+    patched = manifest['modified'].get(name)
-+    if patched:
-+        assert patched['upstream_sha256'] == original, name
-+        assert digest(root / name) == patched['patched_sha256'], name
-+    else:
-+        assert digest(root / name) == original, name
-+for name, record in manifest['added'].items():
-+    assert digest(root / name) == record['sha256'], name
-+for path in root.rglob('*'):
-+    if path.is_file() and not {'target', '.git'}.intersection(path.relative_to(root).parts):
-+        assert path.relative_to(root).as_posix() in expected, f'Unrecorded source: {path.relative_to(root)}'
-+assert digest(root / manifest['license_file']) == manifest['upstream_files'][manifest['license_file']]
-+print(f"Rune {manifest['revision']}: {len(manifest['upstream_files'])} original inputs, "
-+      f"{len(manifest['modified'])} declared source patches, {len(manifest['added'])} additions; verified")
++    fn inline_fragment(&self, inl: &Inline, map: &SpanMap, range: Range<usize>, style: TextStyle, color: Color) -> El {
++        let clip = |a: usize, b: usize| {
++            let a = a.max(range.start);
++            let b = b.min(range.end);
++            (a < b).then_some((a.saturating_sub(range.start), b.saturating_sub(range.start)))
++        };
++        let part = Inline {
++            text: inl.text[range.clone()].to_owned(),
++            spans: inl.spans.iter().filter_map(|&(a,b,s)| clip(a,b).map(|(a,b)| (a,b,s))).collect(),
++            links: inl.links.iter().filter_map(|(a,b,d)| clip(*a,*b).map(|(a,b)| (a,b,d.clone()))).collect(),
++        };
++        let sliced = SpanMap(map.0.iter().filter_map(|(src,out)| {
++            clip(out.start,out.end).map(|(a,b)| {
++                let mut source = src.clone();
++                if src.len() == out.len() {
++                    source.start += range.start.saturating_sub(out.start);
++                    source.end -= out.end.saturating_sub(range.end);
++                }
++                (source, a..b)
++            })
++        }).collect(), Vec::new());
++        let e = rich(part.text.clone(), self.spans(&part, style.size)).font(style).color(color).reveal(self.reveal).w_full();
++        self.select_inline(e, &part, Some(&sliced))
+@@ -1568,0 +1678 @@
++        let mut rendered = false;
+@@ -1573 +1683 @@
+-            let top = if i == 0 { 0.0 } else { mt.max(prev_mb) };
++            let top = if rendered { mt.max(prev_mb) } else { 0.0 };
+@@ -1577 +1687,6 @@
+-            c = c.child(self.block(b, maps.get(i).unwrap_or(&empty)).key(key).mt(top));
++            let before = self.embedded_blocks.borrow().len();
++            let child = self.block(b, maps.get(i).unwrap_or(&empty));
++            let empty_inline = matches!(b, Block::Para(inl) | Block::Heading(_, inl) if inl.text.is_empty());
++            if empty_inline && self.embedded_blocks.borrow().len() == before { continue; }
++            c = c.child(child.key(key).mt(top));
++            rendered = true;
+@@ -1829,2 +1944,2 @@
+-            tasks_read_only: false, selectable: false, scroll_wide: false, highlighter, sources: sources.clone(),
+-            next_source: Cell::new(0), tasks, next_task: Cell::new(0), current_block_key: RefCell::new("b0".into()) };
++            tasks_read_only: false, selectable: false, scroll_wide: false, highlighter, embed_links: None, sources: sources.clone(),
++            next_source: Cell::new(0), tasks, next_task: Cell::new(0), current_block_key: RefCell::new("b0".into()), embedded_blocks: RefCell::new(Vec::new()) };
+@@ -2081,2 +2196,2 @@
+-            tasks_read_only: false, selectable: false, scroll_wide: false, highlighter: Highlighter::builtin(), sources,
+-            next_source: Cell::new(0), tasks, next_task: Cell::new(0), current_block_key: RefCell::new("b0".into()) };
++            tasks_read_only: false, selectable: false, scroll_wide: false, highlighter: Highlighter::builtin(), embed_links: None, sources,
++            next_source: Cell::new(0), tasks, next_task: Cell::new(0), current_block_key: RefCell::new("b0".into()), embedded_blocks: RefCell::new(Vec::new()) };
+--- a/crates/rune/src/desktop.rs
++++ b/crates/rune/src/desktop.rs
+@@ -83,0 +84 @@
++    fn resolve_file_dialogs(&mut self, paths: Vec<std::path::PathBuf>) -> Result<(), crate::FileDialogError>;
+@@ -344 +345 @@
+-            Kind::Mark(_) | Kind::Reopen | Kind::Menu(_) | Kind::PopupMenu(_) | Kind::FileDialog(_) | Kind::Shortcut(_) => {}
++            Kind::Mark(_) | Kind::Reopen | Kind::Menu(_) | Kind::PopupMenu(_) | Kind::FileDialog(_) | Kind::FileDialogs(_) | Kind::Shortcut(_) => {}
+@@ -381,0 +383 @@
++    fn resolve_file_dialogs(&mut self, paths: Vec<std::path::PathBuf>) -> Result<(), crate::FileDialogError> { self.rt.resolve_file_dialogs(Some(paths)) }
+@@ -765,0 +768,5 @@
++                }
++                Kind::FileDialogs(paths) => {
++                    let open = desk.key.into_iter().chain(desk.z.iter().rev().copied()).find(|&i| desk.members[i].file_dialog_open());
++                    let i = open.or(desk.key).unwrap_or(selected);
++                    desk.members[i].resolve_file_dialogs(paths.clone()).unwrap_or_else(|e| die(&format!("script file dialog: {e}")));
+--- a/crates/rune/src/file_dialog/portal.rs
++++ b/crates/rune/src/file_dialog/portal.rs
+@@ -5 +5 @@
+-use super::portal_format::{filters, outcome, parent_window, path_bytes};
++use super::portal_format::{filters, outcome_many, parent_window, path_bytes};
+@@ -50 +50 @@
+-    if !filters.is_empty() && kind != FileDialogKind::Folder { map.insert("filters", Variant::from(filters)); }
++    if !filters.is_empty() && !matches!(kind, FileDialogKind::Folder | FileDialogKind::Folders) { map.insert("filters", Variant::from(filters)); }
+@@ -54 +54,2 @@
+-    if kind == FileDialogKind::Folder { map.insert("directory", Variant::from(true)); }
++    if matches!(kind, FileDialogKind::Folder | FileDialogKind::Folders) { map.insert("directory", Variant::from(true)); }
++    if kind == FileDialogKind::Folders { map.insert("multiple", Variant::from(true)); }
+@@ -65 +66 @@
+-pub(super) async fn show(kind: FileDialogKind, options: FileDialogOptions) -> Result<Option<PathBuf>, FileDialogError> {
++pub(super) async fn show(kind: FileDialogKind, options: FileDialogOptions) -> Result<Option<Vec<PathBuf>>, FileDialogError> {
+@@ -78 +79 @@
+-async fn run(kind: FileDialogKind, options: FileDialogOptions, parent: String, mut reply: oneshot::Sender<Result<Option<PathBuf>, FileDialogError>>) {
++async fn run(kind: FileDialogKind, options: FileDialogOptions, parent: String, mut reply: oneshot::Sender<Result<Option<Vec<PathBuf>>, FileDialogError>>) {
+@@ -96 +97 @@
+-        let method = match kind { FileDialogKind::Open | FileDialogKind::Folder => "OpenFile", FileDialogKind::Save => "SaveFile" };
++        let method = match kind { FileDialogKind::Open | FileDialogKind::Folder | FileDialogKind::Folders => "OpenFile", FileDialogKind::Save => "SaveFile" };
+@@ -116 +117 @@
+-                    .and_then(|(status, results)| outcome(status, &uris(&results))),
++                    .and_then(|(status, results)| outcome_many(status, &uris(&results), kind == FileDialogKind::Folders)),
+@@ -130,0 +132 @@
++    use super::super::portal_format::outcome;
+@@ -154,0 +157,3 @@
++        let folders = request_options(FileDialogKind::Folders, &options, "t5");
++        assert_eq!(folders.get("multiple"), Some(&Variant::from(true)));
++        assert_eq!(folders.get("directory"), Some(&Variant::from(true)));
+--- a/crates/rune/src/file_dialog/portal_format.rs
++++ b/crates/rune/src/file_dialog/portal_format.rs
+@@ -44,0 +45,10 @@
++        1 | 2 => Ok(None),
++        n => Err(FileDialogError(format!("file dialog portal response {n}"))),
++    }
++}
++
++/// Preserve all portal selections for multi-folder requests; legacy requests keep the first.
++pub(super) fn outcome_many(status: u32, uris: &[String], multiple: bool) -> Result<Option<Vec<PathBuf>>, FileDialogError> {
++    if !multiple { return outcome(status, uris).map(|path| path.map(|p| vec![p])); }
++    match status {
++        0 => uris.iter().map(|uri| uri_path(uri)).collect::<Result<Vec<_>, _>>().map(Some),
+@@ -97,0 +108,7 @@
++    fn multiple_folder_outcome_preserves_order_and_empty() {
++        assert_eq!(outcome_many(0, &uris(&["file:///one", "file:///two"]), true).unwrap(), Some(vec!["/one".into(), "/two".into()]));
++        assert_eq!(outcome_many(0, &[], true).unwrap(), Some(vec![]));
++        assert_eq!(outcome_many(1, &[], true).unwrap(), None);
++        assert!(outcome_many(0, &uris(&["file:///one", "https://invalid"]), true).is_err());
++    }
++    #[test]
+--- a/crates/rune/src/file_dialog_dispatch.rs
++++ b/crates/rune/src/file_dialog_dispatch.rs
+@@ -2 +2 @@
+-use crate::file_dialog::{FileDialogError, FileDialogKind, FileDialogOptions, FileDialogResult, Pending, Request};
++use crate::file_dialog::{FileDialogError, FileDialogKind, FileDialogOptions, MultiFileDialogResult, Pending, Request};
+@@ -16 +16,11 @@
+-        self.answer_file_dialog(id, Ok(path));
++        if path.is_some() && self.file_dialog.as_ref().is_some_and(|d| d.kind == FileDialogKind::Folders) { return Err(FileDialogError("multiple folders require resolve_file_dialogs".into())); }
++        self.answer_file_dialog(id, Ok(path.map(|p| vec![p])));
++        Ok(())
++    }
++
++    /// Answer a multi-folder dialog in headless drivers, retaining selection order.
++    pub fn resolve_file_dialogs(&mut self, paths: Option<Vec<std::path::PathBuf>>) -> Result<(), FileDialogError> {
++        let dialog = self.file_dialog.as_ref().ok_or_else(|| FileDialogError("no file dialog is open".into()))?;
++        if dialog.kind != FileDialogKind::Folders { return Err(FileDialogError("dialog does not select multiple folders".into())); }
++        let id = dialog.id;
++        self.answer_file_dialog(id, Ok(paths));
+@@ -48 +58 @@
+-    pub(crate) fn answer_file_dialog(&mut self, id: u64, result: FileDialogResult) {
++    pub(crate) fn answer_file_dialog(&mut self, id: u64, result: MultiFileDialogResult) {
+@@ -60 +70 @@
+-    pub(super) fn run_file_dialog(&mut self, id: u64, result: FileDialogResult, one: &mut Tx) -> bool {
++    pub(super) fn run_file_dialog(&mut self, id: u64, result: MultiFileDialogResult, one: &mut Tx) -> bool {
+--- a/crates/rune/src/headless_run.rs
++++ b/crates/rune/src/headless_run.rs
+@@ -136,0 +137,2 @@
++    /// Ordered multi-folder answer: `{"type": "file-dialogs", "paths": [...]}`.
++    FileDialogs(Vec<std::path::PathBuf>),
+--- a/crates/rune/src/tooling.rs
++++ b/crates/rune/src/tooling.rs
+@@ -296,0 +297 @@
++    FileDialogs(Vec<std::path::PathBuf>),
+@@ -405,0 +407 @@
++            Kind::FileDialogs(paths) => ScriptEvent::FileDialogs(paths.clone()),
+@@ -1096,0 +1099 @@
++                Kind::FileDialogs(paths) => rt.resolve_file_dialogs(Some(paths.clone())).unwrap_or_else(|e| die(&format!("script file dialog: {e}"))),
+@@ -1469,0 +1473,4 @@
++
++#[cfg(test)]
++#[path = "tooling/multifolder_driver_tests.rs"]
++mod multifolder_driver_tests;
+--- a/crates/rune/src/tooling/args.rs
++++ b/crates/rune/src/tooling/args.rs
+@@ -214 +214 @@
+-                        file-dialog with a \"path\" and file-dialog-cancel a file dialog
++                        file-dialog with a \"path\", file-dialogs with a \"paths\" array, and file-dialog-cancel a file dialog
+--- a/crates/rune/src/tooling/parser_tests.rs
++++ b/crates/rune/src/tooling/parser_tests.rs
+@@ -191,0 +192,15 @@
++
++#[test]
++fn script_multi_folder_answer_preserves_order_and_empty_selection() {
++    let events = parse_script(json!([
++        {"type": "file-dialogs", "paths": ["/first", "/second"]},
++        {"type": "file-dialogs", "paths": []}
++    ]));
++    let paths: Vec<_> = events.into_iter().map(|e| {
++        let ScriptEvent::FileDialogs(public) = e.public().event else { panic!("public event lost multi answer") };
++        let Kind::FileDialogs(paths) = e.kind else { panic!("wrong event") };
++        assert_eq!(public, paths);
++        paths
++    }).collect();
++    assert_eq!(paths, vec![vec![std::path::PathBuf::from("/first"), "/second".into()], vec![]]);
++}
+--- a/crates/rune/src/tooling/script.rs
++++ b/crates/rune/src/tooling/script.rs
+@@ -209,0 +210,5 @@
++            "file-dialogs" => {
++                let paths = e["paths"].as_array().unwrap_or_else(|| die("file-dialogs needs a \"paths\" array"));
++                let paths = paths.iter().map(|p| p.as_str().unwrap_or_else(|| die("file-dialogs paths must be strings")).into()).collect();
++                out.push(Ev { t, kind: Kind::FileDialogs(paths), pos: Pos::Rel(0.0, 0.0) });
++            }
+--- /dev/null
++++ b/crates/rune/src/file_dialog/multifolder_tests.rs
+@@ -0,0 +1,144 @@
++use super::*;
++use crate::{Cx, El, Env, Runtime, el};
++use std::cell::RefCell;
++use std::rc::Rc;
++
++#[derive(Default)]
++struct State {
++    received: Vec<MultiFileDialogResult>,
++    single: Vec<FileDialogResult>,
++}
++fn view(_: &State, _: &mut Cx<State>) -> El {
++    el()
++}
++fn runtime() -> Runtime<State> {
++    let mut rt = Runtime::new(State::default(), view, (200.0, 100.0), Env::new(true, 1.0));
++    rt.frame(0.0);
++    rt
++}
++fn presenter() -> Presenter {
++    Presenter::new(Arc::new(|| {}))
++}
++fn request(rt: &mut Runtime<State>) {
++    rt.update(|_, tx| {
++        tx.open_folders(FileDialogOptions::default(), |s: &mut State, result, _| {
++            s.received.push(result)
++        })
++    });
++}
++struct Controlled(Rc<RefCell<Option<MultiFileDialogResult>>>);
++impl Future for Controlled {
++    type Output = MultiFileDialogResult;
++    fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
++        match self.0.borrow_mut().take() {
++            Some(result) => Poll::Ready(result),
++            None => Poll::Pending,
++        }
++    }
++}
++fn attach(
++    p: &mut Presenter,
++    rt: &mut Runtime<State>,
++) -> (u64, Rc<RefCell<Option<MultiFileDialogResult>>>) {
++    let result = Rc::new(RefCell::new(None));
++    let id = p.open_test(rt, Controlled(result.clone()));
++    (id, result)
++}
++#[test]
++fn presenter_completes_only_its_runtime_once_and_ignores_late_ids() {
++    let (mut a, mut b) = (runtime(), runtime());
++    let (mut pa, mut pb) = (presenter(), presenter());
++    request(&mut a);
++    request(&mut b);
++    let (id_a, result_a) = attach(&mut pa, &mut a);
++    let (id_b, result_b) = attach(&mut pb, &mut b);
++    assert_eq!(id_a, id_b);
++    *result_a.borrow_mut() = Some(Ok(Some(vec!["/one".into(), "/two".into()])));
++    assert!(pa.answer(&mut a));
++    assert!(!pa.answer(&mut a));
++    a.answer_file_dialog(id_a, Ok(Some(vec!["/duplicate".into()])));
++    a.answer_file_dialog(id_a + 100, Ok(None));
++    a.frame(0.1);
++    b.frame(0.1);
++    assert_eq!(
++        a.state.received,
++        vec![Ok(Some(vec!["/one".into(), "/two".into()]))]
++    );
++    assert!(b.state.received.is_empty());
++    *result_b.borrow_mut() = Some(Ok(Some(vec![])));
++    assert!(pb.answer(&mut b));
++    b.frame(0.2);
++    assert_eq!(b.state.received, vec![Ok(Some(vec![]))]);
++}
++#[test]
++fn dropped_window_and_cancelled_presenter_cannot_deliver_late_result() {
++    let (mut a, mut b) = (runtime(), runtime());
++    let (mut pa, mut pb) = (presenter(), presenter());
++    request(&mut a);
++    request(&mut b);
++    let (_, late) = attach(&mut pa, &mut a);
++    let (_, current) = attach(&mut pb, &mut b);
++    drop(pa);
++    drop(a);
++    *late.borrow_mut() = Some(Ok(Some(vec!["/late".into()])));
++    assert!(!pb.answer(&mut b));
++    *current.borrow_mut() = Some(Ok(None));
++    assert!(pb.answer(&mut b));
++    b.frame(0.1);
++    assert_eq!(b.state.received, vec![Ok(None)]);
++    request(&mut b);
++    let (_, cancelled) = attach(&mut pb, &mut b);
++    pb.cancel(&mut b);
++    *cancelled.borrow_mut() = Some(Ok(Some(vec!["/late".into()])));
++    assert!(!pb.answer(&mut b));
++    b.frame(0.2);
++    assert_eq!(b.state.received, vec![Ok(None), Ok(None)]);
++}
++#[test]
++fn completion_callback_can_open_another_dialog_and_errors_are_delivered() {
++    let mut rt = runtime();
++    let mut p = presenter();
++    rt.update(|_, tx| {
++        tx.open_folders(FileDialogOptions::default(), |s: &mut State, result, tx| {
++            s.received.push(result);
++            tx.open_folders(FileDialogOptions::default(), |s: &mut State, result, _| {
++                s.received.push(result)
++            });
++        })
++    });
++    let (old, first) = attach(&mut p, &mut rt);
++    *first.borrow_mut() = Some(Ok(None));
++    assert!(p.answer(&mut rt));
++    rt.frame(0.1);
++    let (next, second) = attach(&mut p, &mut rt);
++    assert_ne!(old, next);
++    rt.answer_file_dialog(old, Ok(Some(vec!["/late".into()])));
++    *second.borrow_mut() = Some(Err(FileDialogError("no portal".into())));
++    assert!(p.answer(&mut rt));
++    rt.frame(0.2);
++    assert_eq!(
++        rt.state.received,
++        vec![Ok(None), Err(FileDialogError("no portal".into()))]
++    );
++}
++#[test]
++fn single_folder_rejects_multi_result_and_cancel_remains_generic() {
++    let mut rt = runtime();
++    rt.update(|_, tx| {
++        tx.open_folder(FileDialogOptions::default(), |s: &mut State, answer, _| {
++            s.single.push(answer)
++        })
++    });
++    assert!(
++        rt.resolve_file_dialogs(Some(vec!["/one".into(), "/two".into()]))
++            .is_err()
++    );
++    rt.resolve_file_dialog(Some("/one".into())).unwrap();
++    rt.frame(0.1);
++    assert_eq!(rt.state.single, vec![Ok(Some("/one".into()))]);
++    request(&mut rt);
++    assert!(rt.resolve_file_dialog(Some("/single".into())).is_err());
++    rt.resolve_file_dialog(None).unwrap();
++    rt.frame(0.2);
++    assert_eq!(rt.state.received, vec![Ok(None)]);
++}
+--- /dev/null
++++ b/crates/rune/src/tooling/multifolder_driver_tests.rs
+@@ -0,0 +1,128 @@
++//! End-to-end script dispatch through the two offscreen driver loops.
++use super::*;
++use std::cell::RefCell;
++use std::rc::Rc;
++use std::sync::atomic::{AtomicUsize, Ordering};
++
++#[derive(Default)]
++struct Observed {
++    answers: Vec<crate::MultiFileDialogResult>,
++    busy: Vec<crate::MultiFileDialogResult>,
++    keys: usize,
++}
++struct State {
++    observed: Rc<RefCell<Observed>>,
++    opened: bool,
++}
++thread_local! {
++    static OBSERVED: RefCell<Option<Rc<RefCell<Observed>>>> = const { RefCell::new(None) };
++}
++fn init() -> State {
++    State {
++        observed: OBSERVED.with(|o| o.borrow().as_ref().unwrap().clone()),
++        opened: false,
++    }
++}
++fn view(_: &State, _: &mut Cx<State>) -> crate::El {
++    crate::el().size(120.0, 80.0)
++}
++fn key(state: &mut State, _: &KeyEvent, tx: &mut Tx) -> bool {
++    if !state.opened {
++        state.opened = true;
++        tx.open_folders(
++            crate::FileDialogOptions::default(),
++            |s: &mut State, answer, _| {
++                s.observed.borrow_mut().answers.push(answer);
++            },
++        );
++        // A second request is refused asynchronously; it must not stop the script.
++        tx.open_folders(
++            crate::FileDialogOptions::default(),
++            |s: &mut State, answer, _| {
++                s.observed.borrow_mut().busy.push(answer);
++            },
++        );
++    } else {
++        state.observed.borrow_mut().keys += 1;
++    }
++    true
++}
++fn spec() -> AppSpec<State> {
++    let mut spec = AppSpec::new("Script test", (120.0, 80.0), init, view);
++    spec.on_key = Some(key);
++    spec
++}
++fn run_case(desktop: bool, cancel: bool) {
++    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
++    static NEXT: AtomicUsize = AtomicUsize::new(0);
++    let _guard = SERIAL.lock().unwrap();
++    let observed = Rc::new(RefCell::new(Observed::default()));
++    OBSERVED.with(|o| *o.borrow_mut() = Some(observed.clone()));
++    let dir = std::env::temp_dir().join(format!(
++        "rune-dialog-driver-{}-{}",
++        std::process::id(),
++        NEXT.fetch_add(1, Ordering::Relaxed)
++    ));
++    std::fs::create_dir(&dir).unwrap();
++    let answer = if cancel {
++        json!({"t": 0.2, "type": "file-dialog-cancel"})
++    } else {
++        json!({"t": 0.2, "type": "file-dialogs", "paths": ["/second", "/first"]})
++    };
++    let script = json!([
++        {"t": 0.0, "type": "type", "text": "a"},
++        answer,
++        {"t": 0.4, "type": "type", "text": "b"}
++    ]);
++    let script_path = dir.join("script.json");
++    std::fs::write(&script_path, script.to_string()).unwrap();
++    let mut args = Args {
++        script: Some(script_path),
++        fps: 10.0,
++        scale: Some(1.0),
++        size: Some((120.0, 80.0)),
++        at: Some(0.5),
++        every: 1,
++        ..Default::default()
++    };
++    if desktop {
++        let backdrop = dir.join("backdrop.png");
++        ::image::RgbaImage::new(120, 80).save(&backdrop).unwrap();
++        args.desktop = Some(backdrop);
++        crate::desktop::run(
++            vec![crate::WindowSpec::new("requester", spec()).into()],
++            0,
++            args,
++            false,
++        );
++    } else {
++        headless_configured(crate::app::App::new(spec()), args, false);
++    }
++    OBSERVED.with(|o| *o.borrow_mut() = None);
++    let result = observed.borrow();
++    let expected = if cancel {
++        None
++    } else {
++        Some(vec!["/second".into(), "/first".into()])
++    };
++    assert_eq!(result.answers, vec![Ok(expected)]);
++    assert_eq!(result.busy.len(), 1);
++    assert!(result.busy[0].is_err());
++    assert_eq!(result.keys, 1, "script continued to its next key");
++}
++#[test]
++fn tooling_loop_delivers_ordered_folders() {
++    run_case(false, false);
++}
++#[test]
++fn tooling_loop_cancels_and_continues() {
++    run_case(false, true);
++}
++#[test]
++fn desktop_loop_delivers_ordered_folders() {
++    run_case(true, false);
++}
++#[test]
++fn desktop_loop_cancels_and_continues() {
++    run_case(true, true);
++}
+--- a/crates/rune/Cargo.toml
++++ b/crates/rune/Cargo.toml
+@@ -10,0 +11,2 @@
++# Controlled Presenter backend for integration tests; not enabled by production builds.
++test-presenter = []
+--- a/crates/rune/src/file_dialog.rs
++++ b/crates/rune/src/file_dialog.rs
+@@ -46 +46 @@
+-pub enum FileDialogKind { Open, Save, Folder }
++pub enum FileDialogKind { Open, Save, Folder, Folders }
+@@ -49 +49 @@
+-    fn name(self) -> &'static str { match self { Self::Open => "open", Self::Save => "save", Self::Folder => "folder" } }
++    fn name(self) -> &'static str { match self { Self::Open => "open", Self::Save => "save", Self::Folder => "folder", Self::Folders => "folders" } }
+@@ -106 +106 @@
+-            Backend::Native => native(kind, options).await,
++            Backend::Native => native(kind, options).await.map(|paths| paths.and_then(|paths| paths.into_iter().next())),
+@@ -112 +112 @@
+-async fn native(kind: FileDialogKind, options: FileDialogOptions) -> Result<Option<PathBuf>, FileDialogError> {
++async fn native(kind: FileDialogKind, options: FileDialogOptions) -> MultiFileDialogResult {
+@@ -125,7 +125,10 @@
+-fn rfd_show(dialog: rfd::AsyncFileDialog, kind: FileDialogKind) -> impl Future<Output = Result<Option<PathBuf>, FileDialogError>> {
+-    let file: Pin<Box<dyn Future<Output = Option<rfd::FileHandle>> + Send>> = match kind {
+-        FileDialogKind::Open => Box::pin(dialog.pick_file()),
+-        FileDialogKind::Save => Box::pin(dialog.save_file()),
+-        FileDialogKind::Folder => Box::pin(dialog.pick_folder()),
+-    };
+-    async move { Ok(file.await.map(|file| file.path().to_path_buf())) }
++fn rfd_show(dialog: rfd::AsyncFileDialog, kind: FileDialogKind) -> impl Future<Output = MultiFileDialogResult> {
++    async move {
++        let paths = match kind {
++            FileDialogKind::Folders => dialog.pick_folders().await.map(|files| files.into_iter().map(|f| f.path().to_path_buf()).collect()),
++            FileDialogKind::Open => dialog.pick_file().await.map(|f| vec![f.path().to_path_buf()]),
++            FileDialogKind::Save => dialog.save_file().await.map(|f| vec![f.path().to_path_buf()]),
++            FileDialogKind::Folder => dialog.pick_folder().await.map(|f| vec![f.path().to_path_buf()]),
++        };
++        Ok(paths)
++    }
+@@ -134 +137 @@
+-async fn native(_: FileDialogKind, _: FileDialogOptions) -> Result<Option<PathBuf>, FileDialogError> {
++async fn native(_: FileDialogKind, _: FileDialogOptions) -> MultiFileDialogResult {
+@@ -140,0 +144,2 @@
++/// Multiple chosen folders, cancellation, or an error. An empty successful selection is distinct from cancellation.
++pub type MultiFileDialogResult = Result<Option<Vec<PathBuf>>, FileDialogError>;
+@@ -142 +147 @@
+-pub(crate) type AnswerFn = Box<dyn FnOnce(crate::states::States<'_>, FileDialogResult, &mut Tx)>;
++pub(crate) type AnswerFn = Box<dyn FnOnce(crate::states::States<'_>, MultiFileDialogResult, &mut Tx)>;
+@@ -221,0 +227,11 @@
++        self.multi_file_dialog(kind, options, move |s: &mut S, result, tx| {
++            on_answer(s, result.map(|paths| paths.and_then(|paths| paths.into_iter().next())), tx);
++        });
++    }
++
++    /// Pick multiple local folders in one nonblocking native dialog.
++    pub fn open_folders<S: 'static>(&mut self, options: FileDialogOptions, on_answer: impl FnOnce(&mut S, MultiFileDialogResult, &mut Tx) + 'static) {
++        self.multi_file_dialog(FileDialogKind::Folders, options, on_answer);
++    }
++
++    fn multi_file_dialog<S: 'static>(&mut self, kind: FileDialogKind, options: FileDialogOptions, on_answer: impl FnOnce(&mut S, MultiFileDialogResult, &mut Tx) + 'static) {
+@@ -234 +250 @@
+-    showing: Option<(u64, Pin<Box<dyn Future<Output = FileDialogResult>>>)>,
++    showing: Option<(u64, Pin<Box<dyn Future<Output = MultiFileDialogResult>>>)>,
+@@ -283,0 +300,8 @@
++    #[cfg(test)]
++    fn open_test<S: 'static>(&mut self, rt: &mut crate::Runtime<S>, future: impl Future<Output = MultiFileDialogResult> + 'static) -> u64 {
++        assert!(self.showing.is_none());
++        let (id, _, _) = rt.take_file_dialog().expect("a dialog is pending");
++        self.showing = Some((id, Box::pin(future)));
++        id
++    }
++
+@@ -304,0 +329,15 @@
++/// Test-only access to the real per-window Presenter with an injected asynchronous backend.
++#[cfg(feature = "test-presenter")]
++pub struct TestPresenter(Presenter);
++#[cfg(feature = "test-presenter")]
++impl TestPresenter {
++    pub fn new(wake: Waker) -> Self { Self(Presenter::new(wake)) }
++    pub fn open<S: 'static>(&mut self, rt: &mut crate::Runtime<S>, future: impl Future<Output = MultiFileDialogResult> + 'static) -> (u64, FileDialogKind, FileDialogOptions) {
++        assert!(self.0.showing.is_none(), "presenter is busy");
++        let (id, kind, options) = rt.take_file_dialog().expect("a dialog is pending");
++        self.0.showing = Some((id, Box::pin(future)));
++        (id, kind, options)
++    }
++    pub fn answer<S: 'static>(&mut self, rt: &mut crate::Runtime<S>) -> bool { self.0.answer(rt) }
++}
++
+@@ -309 +348 @@
+-fn show_over(kind: FileDialogKind, options: FileDialogOptions, window: &winit::window::Window) -> Pin<Box<dyn Future<Output = FileDialogResult>>> {
++fn show_over(kind: FileDialogKind, options: FileDialogOptions, window: &winit::window::Window) -> Pin<Box<dyn Future<Output = MultiFileDialogResult>>> {
+@@ -482,0 +522,3 @@
++
++#[cfg(test)]
++mod multifolder_tests;

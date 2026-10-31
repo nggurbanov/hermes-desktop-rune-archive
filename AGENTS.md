@@ -48,6 +48,13 @@ Hermes/Telegram for tasks started manually in T3 unless explicitly asked.
 
 ## Rune port
 
+Use one active build environment and one persistent Cargo target at a time.
+Keep the latest verified checkpoint and unique data needed to continue work.
+After checking references and preserving needed data, remove unused temporary
+builds, unpacked duplicates and obsolete checkpoints. Routine cleanup is already
+authorized by the user. Monitor target allocation and free space before, during,
+and after builds; stop before resource pressure threatens the host.
+
 Read PRODUCT.md, DESIGN.md and apps/rune/README.md. Native Rune code is separate
 from the Electron baseline. Keep Rune/runtime/kit/theme pinned to one Git revision
 and commit the Cargo lockfile. Reuse upstream OpenCode components and selected

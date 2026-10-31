@@ -187,6 +187,7 @@ mod tests {
         }];
         s.selected_session = Some("foreground".into());
         s.tabs = vec![ConversationTab {
+            profile_intent: crate::source::ProfileIntent::Backend,
             profile: "default".into(),
             session: "foreground".into(),
             title: "Keep this tab".into(),
@@ -199,6 +200,8 @@ mod tests {
             plugin: None,
             principal: crate::client::connection_key(s.connection.as_ref().unwrap()).unwrap(),
             scope: DraftScope {
+                draft_origin: None,
+                profile_intent: crate::source::ProfileIntent::Backend,
                 connection: 123,
                 profile: "default".into(),
                 session: Some("bot-chat".into()),

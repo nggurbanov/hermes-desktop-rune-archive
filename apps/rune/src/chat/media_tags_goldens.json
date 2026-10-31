@@ -1,0 +1,231 @@
+{
+  "normalization": [
+    {
+      "id": "plain",
+      "input": "MEDIA:/tmp/voice.mp3",
+      "expected": "[Audio: voice.mp3](#media:%2Ftmp%2Fvoice.mp3)"
+    },
+    {
+      "id": "single",
+      "input": "MEDIA:'/tmp/a b.mp3'",
+      "expected": "[Audio: a b.mp3](#media:%2Ftmp%2Fa%20b.mp3)"
+    },
+    {
+      "id": "double",
+      "input": "MEDIA:\"/tmp/a b.mp3\"",
+      "expected": "[Audio: a b.mp3](#media:%2Ftmp%2Fa%20b.mp3)"
+    },
+    {
+      "id": "spaces",
+      "input": "Before MEDIA:/tmp/a b.mp3 after",
+      "expected": "Before [Audio: a b.mp3](#media:%2Ftmp%2Fa%20b.mp3) after"
+    },
+    {
+      "id": "punct",
+      "input": "MEDIA:/tmp/a.mp3.",
+      "expected": "[Audio: a.mp3](#media:%2Ftmp%2Fa.mp3)."
+    },
+    {
+      "id": "comma",
+      "input": "MEDIA:/tmp/a.mp3, next",
+      "expected": "[Audio: a.mp3](#media:%2Ftmp%2Fa.mp3), next"
+    },
+    {
+      "id": "paren",
+      "input": "(MEDIA:/tmp/a.mp3)",
+      "expected": "([Audio: a.mp3](#media:%2Ftmp%2Fa.mp3))"
+    },
+    {
+      "id": "newline",
+      "input": "MEDIA:\n/tmp/a.mp3\nnext",
+      "expected": "[Audio: a.mp3](#media:%2Ftmp%2Fa.mp3)\nnext"
+    },
+    {
+      "id": "unicode",
+      "input": "MEDIA:/tmp/привет мир.mp3",
+      "expected": "[Audio: привет мир.mp3](#media:%2Ftmp%2F%D0%BF%D1%80%D0%B8%D0%B2%D0%B5%D1%82%20%D0%BC%D0%B8%D1%80.mp3)"
+    },
+    {
+      "id": "ext-mp3",
+      "input": "MEDIA:/tmp/a.mp3",
+      "expected": "[Audio: a.mp3](#media:%2Ftmp%2Fa.mp3)"
+    },
+    {
+      "id": "upper-query-mp3",
+      "input": "MEDIA:/tmp/a.MP3?x=1#t",
+      "expected": "[Audio: a.MP3?x=1#t](#media:%2Ftmp%2Fa.MP3%3Fx%3D1%23t)"
+    },
+    {
+      "id": "ext-wav",
+      "input": "MEDIA:/tmp/a.wav",
+      "expected": "[Audio: a.wav](#media:%2Ftmp%2Fa.wav)"
+    },
+    {
+      "id": "upper-query-wav",
+      "input": "MEDIA:/tmp/a.WAV?x=1#t",
+      "expected": "[Audio: a.WAV?x=1#t](#media:%2Ftmp%2Fa.WAV%3Fx%3D1%23t)"
+    },
+    {
+      "id": "ext-ogg",
+      "input": "MEDIA:/tmp/a.ogg",
+      "expected": "[Audio: a.ogg](#media:%2Ftmp%2Fa.ogg)"
+    },
+    {
+      "id": "upper-query-ogg",
+      "input": "MEDIA:/tmp/a.OGG?x=1#t",
+      "expected": "[Audio: a.OGG?x=1#t](#media:%2Ftmp%2Fa.OGG%3Fx%3D1%23t)"
+    },
+    {
+      "id": "ext-opus",
+      "input": "MEDIA:/tmp/a.opus",
+      "expected": "[Audio: a.opus](#media:%2Ftmp%2Fa.opus)"
+    },
+    {
+      "id": "upper-query-opus",
+      "input": "MEDIA:/tmp/a.OPUS?x=1#t",
+      "expected": "[Audio: a.OPUS?x=1#t](#media:%2Ftmp%2Fa.OPUS%3Fx%3D1%23t)"
+    },
+    {
+      "id": "ext-m4a",
+      "input": "MEDIA:/tmp/a.m4a",
+      "expected": "[Audio: a.m4a](#media:%2Ftmp%2Fa.m4a)"
+    },
+    {
+      "id": "upper-query-m4a",
+      "input": "MEDIA:/tmp/a.M4A?x=1#t",
+      "expected": "[Audio: a.M4A?x=1#t](#media:%2Ftmp%2Fa.M4A%3Fx%3D1%23t)"
+    },
+    {
+      "id": "ext-flac",
+      "input": "MEDIA:/tmp/a.flac",
+      "expected": "[Audio: a.flac](#media:%2Ftmp%2Fa.flac)"
+    },
+    {
+      "id": "upper-query-flac",
+      "input": "MEDIA:/tmp/a.FLAC?x=1#t",
+      "expected": "[Audio: a.FLAC?x=1#t](#media:%2Ftmp%2Fa.FLAC%3Fx%3D1%23t)"
+    },
+    {
+      "id": "duplicates-prose",
+      "input": "MEDIA:/tmp/a.mp3 then MEDIA:/tmp/a.mp3",
+      "expected": "[Audio: a.mp3](#media:%2Ftmp%2Fa.mp3%20then%20MEDIA%3A%2Ftmp%2Fa.mp3)"
+    },
+    {
+      "id": "duplicates-lines",
+      "input": "MEDIA:/tmp/a.mp3\nprose\nMEDIA:/tmp/a.mp3",
+      "expected": "[Audio: a.mp3](#media:%2Ftmp%2Fa.mp3)\nprose\n[Audio: a.mp3](#media:%2Ftmp%2Fa.mp3)"
+    },
+    {
+      "id": "duplicates-adjacent",
+      "input": "MEDIA:/tmp/a.mp3MEDIA:/tmp/a.mp3",
+      "expected": "[Audio: a.mp3](#media:%2Ftmp%2Fa.mp3MEDIA%3A%2Ftmp%2Fa.mp3)"
+    },
+    {
+      "id": "ordinary-external",
+      "input": "[listen](https://example.invalid/a.mp3?x=1#f)",
+      "expected": "[listen](https://example.invalid/a.mp3?x=1#f)"
+    },
+    {
+      "id": "media-external",
+      "input": "MEDIA:https://example.invalid/a.mp3?x=1#f",
+      "expected": "[Audio: a.mp3](#media:https%3A%2F%2Fexample.invalid%2Fa.mp3%3Fx%3D1%23f)"
+    },
+    {
+      "id": "file-uri",
+      "input": "MEDIA:file:///tmp/a.mp3",
+      "expected": "[Audio: a.mp3](#media:file%3A%2F%2F%2Ftmp%2Fa.mp3)"
+    },
+    {
+      "id": "relative",
+      "input": "MEDIA:audio/a.mp3",
+      "expected": "[Audio: a.mp3](#media:audio%2Fa.mp3)"
+    },
+    {
+      "id": "windows",
+      "input": "MEDIA:C:\\Users\\A\\My song.mp3",
+      "expected": "[Audio: My song.mp3](#media:C%3A%5CUsers%5CA%5CMy%20song.mp3)"
+    },
+    {
+      "id": "inline-code",
+      "input": "`MEDIA:/tmp/a.mp3`",
+      "expected": "[Audio: a.mp3](#media:%2Ftmp%2Fa.mp3)"
+    },
+    {
+      "id": "fenced-code",
+      "input": "```\nMEDIA:/tmp/a.mp3\n```",
+      "expected": "```\n[Audio: a.mp3](#media:%2Ftmp%2Fa.mp3)\n```"
+    },
+    {
+      "id": "not-path",
+      "input": "MEDIA:download",
+      "expected": "MEDIA:download"
+    },
+    {
+      "id": "fragment",
+      "input": "MEDIA:/tmp/a.mp3#frag",
+      "expected": "[Audio: a.mp3#frag](#media:%2Ftmp%2Fa.mp3%23frag)"
+    },
+    {
+      "id": "quote-unclosed",
+      "input": "MEDIA:\"/tmp/a b.mp3",
+      "expected": "MEDIA:\"/tmp/a b.mp3"
+    }
+  ],
+  "stream": [
+    {
+      "id": "unquoted",
+      "input": "MEDIA:",
+      "expected": "MEDIA:"
+    },
+    {
+      "id": "unquoted",
+      "input": "MEDIA:/tmp/a",
+      "expected": "[File: a](#media:%2Ftmp%2Fa)"
+    },
+    {
+      "id": "unquoted",
+      "input": "MEDIA:/tmp/a.mp",
+      "expected": "[File: a.mp](#media:%2Ftmp%2Fa.mp)"
+    },
+    {
+      "id": "unquoted",
+      "input": "MEDIA:/tmp/a.mp3",
+      "expected": "[Audio: a.mp3](#media:%2Ftmp%2Fa.mp3)"
+    },
+    {
+      "id": "unquoted",
+      "input": "MEDIA:/tmp/a.mp3 and later",
+      "expected": "[Audio: a.mp3](#media:%2Ftmp%2Fa.mp3) and later"
+    },
+    {
+      "id": "quoted",
+      "input": "MEDIA:",
+      "expected": "MEDIA:"
+    },
+    {
+      "id": "quoted",
+      "input": "MEDIA:\"/tmp/a",
+      "expected": "MEDIA:\"/tmp/a"
+    },
+    {
+      "id": "quoted",
+      "input": "MEDIA:\"/tmp/a b.mp",
+      "expected": "MEDIA:\"/tmp/a b.mp"
+    },
+    {
+      "id": "quoted",
+      "input": "MEDIA:\"/tmp/a b.mp3",
+      "expected": "MEDIA:\"/tmp/a b.mp3"
+    },
+    {
+      "id": "quoted",
+      "input": "MEDIA:\"/tmp/a b.mp3\"",
+      "expected": "[Audio: a b.mp3](#media:%2Ftmp%2Fa%20b.mp3)"
+    },
+    {
+      "id": "quoted",
+      "input": "MEDIA:\"/tmp/a b.mp3\" later",
+      "expected": "[Audio: a b.mp3](#media:%2Ftmp%2Fa%20b.mp3) later"
+    }
+  ]
+}

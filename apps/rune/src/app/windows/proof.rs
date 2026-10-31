@@ -106,6 +106,44 @@ impl Viewer {
             "profile-route-actions-item0",
             "profile-route-actions-item1",
             "profile-route-actions-item2",
+            "settings-section-connections",
+            "connections-saved-tab",
+            "connections-routing-tab",
+            "legacy-routing-settings",
+            "legacy-scope-global",
+            "legacy-scope-profile",
+            "legacy-profile-name",
+            "legacy-profile-open",
+            "legacy-mode-local",
+            "legacy-mode-inherit",
+            "legacy-mode-url",
+            "legacy-mode-cloud",
+            "legacy-mode-ssh",
+            "legacy-field-url",
+            "legacy-field-remote-profile",
+            "legacy-field-org",
+            "legacy-field-cloud-name",
+            "legacy-field-token",
+            "legacy-field-ssh-host",
+            "legacy-field-ssh-user",
+            "legacy-field-ssh-port",
+            "legacy-field-ssh-key-path",
+            "legacy-field-ssh-hermes-path",
+            "legacy-field-ssh-profile",
+            "legacy-auth-token",
+            "legacy-auth-oauth",
+            "legacy-token-keep",
+            "legacy-token-set",
+            "legacy-token-clear",
+            "legacy-header-add",
+            "legacy-save",
+            "legacy-discard",
+            "legacy-reload",
+            "legacy-remove-override",
+            "legacy-error",
+            "legacy-notice",
+            "legacy-dirty",
+            "legacy-loading",
         ] {
             if let Some(rect) = cx.layout(key) {
                 geometry.insert(key.into(), serde_json::json!(rect));
@@ -130,6 +168,36 @@ impl Viewer {
                 }
             }
         }
+        if let Some(form) = &self.legacy_settings.form {
+            for header in &form.headers {
+                for key in [
+                    format!("legacy-field-header-name-{}", header.id),
+                    format!("legacy-field-header-value-{}", header.id),
+                    format!("legacy-header-remove-{}", header.id),
+                    format!("legacy-header-{}-keep", header.id),
+                    format!("legacy-header-{}-set", header.id),
+                    format!("legacy-header-{}-clear", header.id),
+                ] {
+                    if let Some(rect) = cx.layout(&key) {
+                        geometry.insert(key, serde_json::json!(rect));
+                    }
+                }
+            }
+        }
+        let legacy_settings = serde_json::json!({
+            "scope": match &self.legacy_settings.scope { crate::connections::legacy::Scope::Global => serde_json::json!({"kind":"global"}),crate::connections::legacy::Scope::Profile(name) => serde_json::json!({"kind":"profile","name":name}) },
+            "dirty":self.legacy_settings.dirty(),"pending":self.legacy_settings.pending(),"loading":self.legacy_settings.loading(),
+            "error":self.legacy_settings.error,"notice":self.legacy_settings.notice,
+            "form":self.legacy_settings.form.as_ref().map(|form|serde_json::json!({
+                "generation":form.generation,
+                "mode":match form.mode {crate::legacy_settings::FormMode::Inherit=>"inherit",crate::legacy_settings::FormMode::Url=>"url",crate::legacy_settings::FormMode::Cloud=>"cloud",crate::legacy_settings::FormMode::Ssh=>"ssh"},
+                "auth_mode":match form.auth_mode {crate::connections::legacy::AuthMode::Token=>"token",crate::connections::legacy::AuthMode::Oauth=>"oauth"},
+                "url_input_state":form.field(crate::legacy_settings::Field::Url).map(|field|serde_json::json!({"focused":field.focused,"anchor":field.anchor,"focus":field.focus,"selected_bytes":field.selected().len(),"bytes":field.text.len(),"secure":field.is_secure()})),
+                "token_stored":form.token_stored,
+                "token_authored":form.field(crate::legacy_settings::Field::Token).is_some_and(|field|!field.text.is_empty()),
+                "headers":form.headers.iter().map(|header|serde_json::json!({"id":header.id,"stored":header.stored,"authored":form.field(crate::legacy_settings::Field::HeaderValue(header.id)).is_some_and(|field|!field.text.is_empty())})).collect::<Vec<_>>(),
+            })),
+        });
         let scope = self.composer_scope();
         let editor_state = self.composer.draft(&scope).map(|draft| {
             serde_json::json!({
@@ -156,7 +224,7 @@ impl Viewer {
                 url.to_string()
             });
         let native=self.window.native.as_ref().and_then(WindowHandle::geometry).map(|f|serde_json::json!({"position":f.position,"inner_size":f.inner_size,"scale":f.scale_factor,"maximized":f.maximized}));
-        let snapshot = serde_json::json!({"id":lease.id().as_str(),"editor":self.composer.editor_id().as_str(),"window_editor":lease.editor_id().as_str(),"native_raw_handle":self.window.native.as_ref().and_then(|host|host.with_raw_handle(|handle|format!("{:?}",handle.as_raw())).ok()),"editor_state":editor_state,"retired_input_state":retired_input_state,"focused_inputs":focused_inputs,"last_unhandled_key":self.window.last_unhandled_key,"default_profile":self.default_profile_route(),"route_pending":self.device_route_pending(),"device_default_error":self.device_default_error(),"registry":{"loaded":self.connections.registry_loaded(),"primary":self.connections.primary(),"last_used":self.connections.last_used(),"launch_mode":self.connections.launch_mode(),"busy":self.connections.busy,"error":self.connections.error},"can_send":self.can_send(),"connection_form":self.connection_form,"connection_url":connection_url,"connection_token_set":!self.connection_token.text.is_empty(),"kind":lease.record().kind,"dark":self.theme.unwrap_or(self.client_settings.system_dark.get()),"profile":self.profile,"session":self.selected_session,"source_stamp":self.connection.as_ref().and_then(|c|crate::source::SourceStamp::from_connection(c).ok()),"fleet":self.inspect_fleet_sources(),"parked":self.inspect_parked_sources(),"tabs":self.tabs.iter().map(|tab|serde_json::json!({"profile":tab.profile,"session":tab.session,"title":tab.title,"bot":tab.bot})).collect::<Vec<_>>(),"source_epoch":scope.connection,"principal":self.connection.as_ref().and_then(|c|crate::client::connection_key(c).ok()),"route":format!("{:?}",self.route),"loading":self.loading||self.history_loading,"error":self.error,"client_error":self.client_error,"compose_error":self.compose_error,"draft":self.composer.draft(&scope).map(|d|d.text.text.as_str()).unwrap_or(""),"running":self.chat_running(),"active_text":self.conversation.view(&scope).map(|v|v.active_text.as_str()).unwrap_or(""),"messages":self.messages.iter().map(|m|serde_json::json!({"role":m.role,"content":m.content})).collect::<Vec<_>>(),"geometry":geometry,"native":native});
+        let snapshot = serde_json::json!({"id":lease.id().as_str(),"editor":self.composer.editor_id().as_str(),"window_editor":lease.editor_id().as_str(),"native_raw_handle":self.window.native.as_ref().and_then(|host|host.with_raw_handle(|handle|format!("{:?}",handle.as_raw())).ok()),"editor_state":editor_state,"retired_input_state":retired_input_state,"focused_inputs":focused_inputs,"last_unhandled_key":self.window.last_unhandled_key,"default_profile":self.default_profile_route(),"route_pending":self.device_route_pending(),"device_default_error":self.device_default_error(),"legacy_settings":legacy_settings,"registry":{"loaded":self.connections.registry_loaded(),"primary":self.connections.primary(),"last_used":self.connections.last_used(),"launch_mode":self.connections.launch_mode(),"busy":self.connections.busy,"error":self.connections.error},"can_send":self.can_send(),"connection_form":self.connection_form,"connection_url":connection_url,"connection_token_set":!self.connection_token.text.is_empty(),"kind":lease.record().kind,"dark":self.theme.unwrap_or(self.client_settings.system_dark.get()),"profile":self.profile,"profile_intent":self.profile_intent,"session":self.selected_session,"source_stamp":self.connection.as_ref().and_then(|c|crate::source::SourceStamp::from_connection(c).ok()),"fleet":self.inspect_fleet_sources(),"parked":self.inspect_parked_sources(),"tabs":self.tabs.iter().map(|tab|serde_json::json!({"profile":tab.profile,"profile_intent":tab.profile_intent,"session":tab.session,"title":tab.title,"bot":tab.bot})).collect::<Vec<_>>(),"source_epoch":scope.connection,"principal":self.connection.as_ref().and_then(|c|crate::client::connection_key(c).ok()),"route":format!("{:?}",self.route),"loading":self.loading||self.history_loading,"error":self.error,"client_error":self.client_error,"compose_error":self.compose_error,"draft":self.composer.draft(&scope).map(|d|d.text.text.as_str()).unwrap_or(""),"running":self.chat_running(),"active_text":self.conversation.view(&scope).map(|v|v.active_text.as_str()).unwrap_or(""),"messages":self.messages.iter().map(|m|serde_json::json!({"role":m.role,"content":m.content})).collect::<Vec<_>>(),"geometry":geometry,"native":native});
         if let Ok(bytes) = serde_json::to_vec(&snapshot) {
             let _ = crate::client::private_write(
                 &directory.join(format!("{}.json", lease.id().as_str())),

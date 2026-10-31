@@ -243,7 +243,10 @@ pub(super) async fn deliver(
         }
         let hints: HashMap<&str, Value<'_>> = HashMap::from([
             ("urgency", Value::U8(1)),
-            ("desktop-entry", Value::Str("hermes".into())),
+            (
+                "desktop-entry",
+                Value::Str("io.github.nggurbanov.hermes-desktop-rune".into()),
+            ),
             ("suppress-sound", Value::Bool(request.notice.silent)),
         ]);
         let response = connection

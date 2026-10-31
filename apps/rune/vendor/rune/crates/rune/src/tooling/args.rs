@@ -211,7 +211,7 @@ pub(crate) const HELP: &str = "usage: <app> [window]
                         through its registered global shortcut handler, never on_key;
                         an object adds \"displays\" and \"pointer\" for place() (rune-placed, --tree)
                         menu-pick with an \"id\" and menu-cancel answer a pop-up menu;
-                        file-dialog with a \"path\" and file-dialog-cancel a file dialog
+                        file-dialog with a \"path\", file-dialogs with a \"paths\" array, and file-dialog-cancel a file dialog
   --frames N --fps 60 --start S --out DIR     dump N frames from S seconds
   --video out.mp4       stream frames into ffmpeg (.mp4 H.264, .mov ProRes 4444, .webm VP9);
                         --frames N or --duration SECONDS|auto long (default auto: to the

@@ -51,19 +51,37 @@ pub fn content<S: 'static>(
     k: &Kit,
     access: fn(&mut S) -> &mut MediaPlayers,
 ) -> El {
+    content_layout(players, id, k, access, false)
+}
+pub fn inline(
+    players: &MediaPlayers,
+    id: PlayerId,
+    k: &Kit,
+    access: fn(&mut Viewer) -> &mut MediaPlayers,
+) -> El {
+    content_layout(players, id, k, access, true)
+}
+fn content_layout<S: 'static>(
+    players: &MediaPlayers,
+    id: PlayerId,
+    k: &Kit,
+    access: fn(&mut S) -> &mut MediaPlayers,
+    inline: bool,
+) -> El {
     let mut body = col()
         .key("native-audio-preview")
         .role("group")
         .label("Audio preview")
         .w_full()
-        .h_full()
         .min_h(0.)
         .min_w(0.)
-        .padding(24.)
-        .gap(16.)
-        .scroll(rune::ScrollSpec {
+        .padding(if inline { 8. } else { 24. })
+        .gap(if inline { 8. } else { 16. });
+    if !inline {
+        body = body.h_full().scroll(rune::ScrollSpec {
             stick_bottom: false,
         });
+    }
     let Some(player) = players.get(id) else {
         return body.child(
             text("This audio preview is closed")

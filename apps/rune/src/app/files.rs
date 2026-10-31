@@ -4,6 +4,53 @@ use crate::{
     pages::{PageRequest, Route},
 };
 impl Viewer {
+    pub(crate) fn inline_audio_mount(
+        &mut self,
+        identity: (DraftScope, String, String, InlineAudioOccurrence, String),
+        label: String,
+        mounted: bool,
+    ) -> bool {
+        if mounted {
+            if self.composer_scope() != identity.0
+                || self.composer.editor_id().as_str() != identity.1
+                || self.inline_audio.contains_key(&identity)
+            {
+                return false;
+            }
+            let Some(connection) = self.connection.clone() else {
+                return false;
+            };
+            let target = crate::preview::Target {
+                owner: identity.0.clone(),
+                source: if matches!(&identity.3, InlineAudioOccurrence::Media { .. })
+                    && url::Url::parse(&identity.4)
+                        .is_ok_and(|url| matches!(url.scheme(), "http" | "https"))
+                {
+                    crate::preview::Source::RemoteUrl(identity.4.clone())
+                } else {
+                    crate::preview::Source::AgentPath(identity.4.clone())
+                },
+                label,
+                kind: crate::preview::Kind::Audio,
+            };
+            match self.media_players.open_inline(connection, target) {
+                Ok(id) => {
+                    self.inline_audio.insert(identity, id);
+                    true
+                }
+                Err(error) => {
+                    self.client_error = Some(error);
+                    true
+                }
+            }
+        } else if let Some(id) = self.inline_audio.remove(&identity) {
+            self.media_players.close(id);
+            true
+        } else {
+            false
+        }
+    }
+
     pub(super) fn poll_preview(&mut self) -> bool {
         if let Some(id) = self.audio_preview {
             let visible = self.route == Route::FilePreview
@@ -214,6 +261,8 @@ impl Viewer {
             connection,
             crate::preview::Target {
                 owner: DraftScope {
+                    draft_origin: None,
+                    profile_intent: crate::source::ProfileIntent::Backend,
                     connection: self.connection_epoch,
                     profile: artifact.profile,
                     session: Some(artifact.session),
@@ -301,6 +350,8 @@ mod audio_preview_tests {
         }
         crate::preview::Target {
             owner: DraftScope {
+                draft_origin: None,
+                profile_intent: crate::source::ProfileIntent::Backend,
                 connection: 9,
                 profile: "secondary".into(),
                 session: Some("owned-history".into()),
@@ -397,5 +448,756 @@ mod audio_preview_tests {
         s.media_players.act(old, crate::media_player::Action::Play);
         assert!(s.media_players.get(old).is_none());
         s.close_audio_preview();
+    }
+    #[test]
+    fn transcript_audio_click_uses_owned_loopback_and_independent_players() {
+        use std::time::{Duration, Instant};
+        let peer =
+            crate::media_player::tests::virtual_peer::peer(crate::media_player::tests::wav(1, 1.));
+        let mut s = Viewer::empty();
+        s.connection = Some(peer.connection.clone());
+        s.profile = "sample".into();
+        s.selected_session = Some("owned".into());
+        s.media_players.init(std::sync::Arc::new(|| {}));
+        s.media_players.use_null_output();
+        s.messages = vec![crate::gateway::HistoryMessage::from_row(
+            &serde_json::json!({
+                "row_id": 7, "role": "assistant", "content": [
+                    {"type": "file", "path": "/owned/a.wav", "name": "a.wav"},
+                    {"type": "file", "path": "/owned/b.wav", "name": "b.wav"}
+                ]
+            }),
+        )];
+        let mut rt = rune::Runtime::new(
+            s,
+            crate::view::transcript::search_test_timeline,
+            (800., 600.),
+            rune::Env::new(true, 1.),
+        );
+        let start = Instant::now();
+        loop {
+            rt.state.media_players.poll();
+            rt.invalidate();
+            rt.frame(0.);
+            if rt.state.inline_audio.len() == 2
+                && rt.state.inline_audio.values().all(|id| {
+                    rt.state
+                        .media_players
+                        .get(*id)
+                        .is_some_and(|p| p.state == crate::media_player::State::Paused)
+                })
+            {
+                break;
+            }
+            assert!(
+                start.elapsed() < Duration::from_secs(5),
+                "players did not load"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let a = *rt
+            .state
+            .inline_audio
+            .iter()
+            .find(|(key, _)| key.4.ends_with("a.wav"))
+            .unwrap()
+            .1;
+        let b = *rt
+            .state
+            .inline_audio
+            .iter()
+            .find(|(key, _)| key.4.ends_with("b.wav"))
+            .unwrap()
+            .1;
+        rt.wheel(400., 300., 10_000.);
+        rt.settle_all();
+        for _ in 0..5 {
+            rt.frame(1. / 60.);
+        }
+        let button = rt
+            .elements()
+            .into_iter()
+            .find(|e| e.key.as_deref() == Some("audio-play-pause") && !e.exiting)
+            .unwrap();
+        let (x, y) = (
+            button.rect[0] + button.rect[2] / 2.,
+            button.rect[1] + button.rect[3] / 2.,
+        );
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(0.);
+        rt.state.media_players.poll();
+        assert!(
+            !rt.state.media_players.get(a).unwrap().paused,
+            "a paused {}, b paused {}",
+            rt.state.media_players.get(a).unwrap().paused,
+            rt.state.media_players.get(b).unwrap().paused
+        );
+        assert!(rt.state.media_players.get(b).unwrap().paused);
+        assert!(
+            peer.requests
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|r| r.contains("a.wav"))
+        );
+        rt.state.messages.clear();
+        rt.invalidate();
+        rt.frame(0.);
+        assert!(rt.state.media_players.get(a).is_none() && rt.state.media_players.get(b).is_none());
+        std::thread::sleep(Duration::from_millis(100));
+        rt.state.media_players.poll();
+        assert!(
+            rt.state.media_players.get(a).is_none() && rt.state.media_players.get(b).is_none(),
+            "late worker updates must not resurrect retired players"
+        );
+    }
+
+    #[test]
+    fn inline_audio_survives_overscan_and_retires_when_culled() {
+        let mut s = Viewer::empty();
+        s.connection = Some(Connection::Url {
+            endpoint: "http://127.0.0.1:1".into(),
+            token: None,
+        });
+        s.media_players.init(std::sync::Arc::new(|| {}));
+        s.messages = (0..100).map(|i| crate::gateway::HistoryMessage::from_row(&serde_json::json!({
+            "row_id": i + 1, "role": "assistant", "content": if i == 0 {
+                serde_json::json!([{ "type": "file", "path": "/overscan.wav", "name": "overscan" }])
+            } else { serde_json::json!(format!("Filler message {i}")) }
+        }))).collect();
+        let mut rt = rune::Runtime::new(
+            s,
+            crate::view::transcript::search_test_timeline,
+            (800., 600.),
+            rune::Env::new(true, 1.),
+        );
+        for _ in 0..8 {
+            rt.frame(0.);
+        }
+        rt.wheel(400., 300., 100_000.);
+        for _ in 0..8 {
+            rt.frame(0.);
+        }
+        let id = *rt
+            .state
+            .inline_audio
+            .values()
+            .next()
+            .expect("top audio mounted");
+        rt.wheel(400., 300., -650.);
+        for _ in 0..8 {
+            rt.frame(0.);
+        }
+        let audio = rt
+            .elements()
+            .into_iter()
+            .find(|e| e.key.as_deref() == Some("audio-play-pause") && !e.exiting)
+            .expect("overscan audio node remains mounted");
+        assert!(
+            audio.rect[1] + audio.rect[3] < 0.,
+            "audio control is offscreen: {:?}",
+            audio.rect
+        );
+        assert_eq!(rt.state.inline_audio.values().copied().next(), Some(id));
+        rt.wheel(400., 300., -100_000.);
+        for _ in 0..8 {
+            rt.frame(0.);
+        }
+        assert!(
+            rt.state.media_players.get(id).is_none(),
+            "culled audio retired"
+        );
+        rt.wheel(400., 300., 100_000.);
+        for _ in 0..8 {
+            rt.frame(0.);
+        }
+        let new_id = *rt
+            .state
+            .inline_audio
+            .values()
+            .next()
+            .expect("audio remounted");
+        assert_ne!(id, new_id);
+    }
+
+    #[test]
+    fn external_media_uses_credential_free_ranged_transport() {
+        use std::{
+            io::{BufRead, BufReader, Write},
+            net::TcpListener,
+            sync::{
+                Arc, Mutex,
+                atomic::{AtomicBool, Ordering},
+            },
+            time::{Duration, Instant},
+        };
+        let audio = Arc::new(crate::media_player::tests::wav(1, 1.));
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let done = stop.clone();
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let recorded = requests.clone();
+        let server = std::thread::spawn(move || {
+            while !done.load(Ordering::Acquire) {
+                let (mut stream, _) = match listener.accept() {
+                    Ok(pair) => pair,
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(5));
+                        continue;
+                    }
+                    Err(e) => panic!("{e}"),
+                };
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut reader = BufReader::new(&mut stream);
+                let mut request = String::new();
+                reader.read_line(&mut request).unwrap();
+                let mut headers = String::new();
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    if line == "\r\n" || line.is_empty() {
+                        break;
+                    }
+                    headers.push_str(&line);
+                }
+                recorded
+                    .lock()
+                    .unwrap()
+                    .push((request.clone(), headers.clone()));
+                let len = audio.len();
+                if request.starts_with("HEAD ") {
+                    write!(stream,"HTTP/1.1 200 OK\r\nContent-Length: {len}\r\nAccept-Ranges: bytes\r\nETag: \"tone\"\r\nConnection: close\r\n\r\n").unwrap();
+                } else {
+                    let range = headers
+                        .lines()
+                        .find_map(|line| {
+                            line.to_ascii_lowercase()
+                                .strip_prefix("range: bytes=")
+                                .map(str::to_owned)
+                        })
+                        .unwrap();
+                    let (a, b) = range.split_once('-').unwrap();
+                    let a: usize = a.parse().unwrap();
+                    let b: usize = b.trim().parse().unwrap();
+                    write!(stream,"HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {a}-{b}/{len}\r\nETag: \"tone\"\r\nConnection: close\r\n\r\n",b-a+1).unwrap();
+                    stream.write_all(&audio[a..=b]).unwrap();
+                }
+            }
+        });
+        let peer =
+            crate::media_player::tests::virtual_peer::peer(crate::media_player::tests::wav(1, 1.));
+        let mut s = Viewer::empty();
+        s.connection = Some(peer.connection.clone());
+        s.profile = "sample".into();
+        s.selected_session = Some("owned".into());
+        s.media_players.init(Arc::new(|| {}));
+        s.media_players.use_null_output();
+        s.messages = vec![crate::gateway::HistoryMessage::from_row(
+            &serde_json::json!({"row_id":7,"role":"assistant","content":format!("MEDIA:/owned/a.wav\nMEDIA:http://{address}/public.wav?sig=abc%2Fdef")}),
+        )];
+        let mut rt = rune::Runtime::new(
+            s,
+            crate::view::transcript::search_test_timeline,
+            (800., 600.),
+            rune::Env::new(true, 1.),
+        );
+        let start = Instant::now();
+        loop {
+            rt.state.media_players.poll();
+            rt.invalidate();
+            rt.frame(0.);
+            if rt.state.inline_audio.len() == 2
+                && rt.state.inline_audio.values().all(|id| {
+                    rt.state
+                        .media_players
+                        .get(*id)
+                        .is_some_and(|p| p.state == crate::media_player::State::Paused)
+                })
+            {
+                break;
+            }
+            assert!(start.elapsed() < Duration::from_secs(5));
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let saved = requests.lock().unwrap().clone();
+        assert!(
+            saved
+                .iter()
+                .any(|(r, _)| r.starts_with("GET /public.wav?sig=abc%2Fdef "))
+        );
+        assert!(saved.iter().all(|(r, h)| {
+            (r.starts_with("HEAD /public.wav?sig=abc%2Fdef ")
+                || r.starts_with("GET /public.wav?sig=abc%2Fdef "))
+                && !h.to_ascii_lowercase().lines().any(|line| {
+                    line.starts_with("authorization:")
+                        || line.starts_with("cookie:")
+                        || line.starts_with("x-hermes-gateway-ticket:")
+                })
+        }));
+        assert!(
+            peer.requests
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|r| r.contains("a.wav") && r.contains("sample") && r.contains("owned"))
+        );
+        stop.store(true, Ordering::Release);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn queued_quoted_media_closure_mounts_and_retains_the_player() {
+        use std::time::{Duration, Instant};
+        let peer =
+            crate::media_player::tests::virtual_peer::peer(crate::media_player::tests::wav(1, 1.));
+        let mut s = Viewer::empty();
+        s.connection = Some(peer.connection.clone());
+        s.profile = "sample".into();
+        s.selected_session = Some("owned".into());
+        s.media_players.init(std::sync::Arc::new(|| {}));
+        s.media_players.use_null_output();
+        let owner = s.composer_scope();
+        s.conversation
+            .fixture(
+                owner.clone(),
+                &serde_json::json!({"execution_generation":2}),
+            )
+            .unwrap();
+        let mut rt = rune::Runtime::new(
+            s,
+            crate::view::transcript::search_test_timeline,
+            (800., 600.),
+            rune::Env::new(true, 1.),
+        );
+        let mut offset = 0;
+        let mut mounted = None;
+        for (seq, text) in [(1, "MEDIA:\"/owned/a.wav"), (2, "\""), (3, "\nprose")] {
+            let event = crate::gateway::conversation::Event {
+                session: "owned".into(),
+                kind: "message.delta".into(),
+                payload: serde_json::json!({"text":text,"turn_id":"t","segment":0,"offset":offset}),
+                epoch: None,
+                sequence: Some(seq),
+                generation: Some(2),
+                authority: None,
+                admission: None,
+            };
+            offset += text.encode_utf16().count();
+            rt.state
+                .conversation
+                .fixture_queue_event(owner.clone(), event);
+            assert!(rt.state.poll_conversations());
+            rt.invalidate();
+            rt.frame(0.);
+            if seq == 1 {
+                assert!(rt.state.inline_audio.is_empty());
+            }
+            if seq == 2 {
+                let start = Instant::now();
+                while rt.state.inline_audio.is_empty() {
+                    rt.state.media_players.poll();
+                    rt.invalidate();
+                    rt.frame(0.);
+                    assert!(start.elapsed() < Duration::from_secs(5));
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
+            if seq == 2 {
+                assert_eq!(rt.state.inline_audio.len(), 1);
+                mounted = Some(rt.state.inline_audio.clone());
+            }
+            if seq == 3 {
+                assert_eq!(rt.state.inline_audio, mounted.take().unwrap());
+                assert!(
+                    rt.elements()
+                        .iter()
+                        .any(|e| e.key.as_deref() == Some("audio-play-pause") && !e.exiting)
+                );
+            }
+        }
+        assert_eq!(
+            rt.state
+                .conversation
+                .view(&owner)
+                .unwrap()
+                .messages
+                .last()
+                .unwrap()
+                .content,
+            "MEDIA:\"/owned/a.wav\"\nprose"
+        );
+    }
+
+    #[test]
+    fn media_lines_mount_independent_players_and_retire_on_removal() {
+        use std::time::{Duration, Instant};
+        let peer =
+            crate::media_player::tests::virtual_peer::peer(crate::media_player::tests::wav(1, 1.));
+        let mut s = Viewer::empty();
+        s.connection = Some(peer.connection.clone());
+        s.profile = "sample".into();
+        s.selected_session = Some("owned".into());
+        s.media_players.init(std::sync::Arc::new(|| {}));
+        s.media_players.use_null_output();
+        let make = |body: &str| {
+            crate::gateway::HistoryMessage::from_row(&serde_json::json!({
+                "row_id": 7, "role": "assistant", "content": [
+                    {"type":"text", "text":body}, {"type":"file", "path":"/owned/a.wav", "name":"a.wav"}
+                ]
+            }))
+        };
+        let body = "Before\nMEDIA:/owned/a.wav\nMEDIA:/owned/a.wav";
+        s.messages = vec![make(body)];
+        let mut rt = rune::Runtime::new(
+            s,
+            crate::view::transcript::search_test_timeline,
+            (800., 600.),
+            rune::Env::new(true, 1.),
+        );
+        let start = Instant::now();
+        loop {
+            rt.state.media_players.poll();
+            rt.invalidate();
+            rt.frame(0.);
+            if rt.state.inline_audio.len() == 3
+                && rt.state.inline_audio.values().all(|id| {
+                    rt.state
+                        .media_players
+                        .get(*id)
+                        .is_some_and(|p| p.state == crate::media_player::State::Paused)
+                })
+            {
+                break;
+            }
+            assert!(
+                start.elapsed() < Duration::from_secs(5),
+                "players: {}",
+                rt.state.inline_audio.len()
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let old = rt.state.inline_audio.clone();
+        assert_eq!(
+            old.keys()
+                .filter(|key| matches!(key.3, InlineAudioOccurrence::Media { .. }))
+                .count(),
+            2
+        );
+        rt.update(|s, tx| tx.scroll_to_y(s.chat_history_key(), 0.));
+        rt.settle_all();
+        for _ in 0..5 {
+            rt.frame(1. / 60.);
+        }
+        let controls: Vec<_> = rt
+            .elements()
+            .into_iter()
+            .filter(|e| e.key.as_deref() == Some("audio-play-pause") && !e.exiting)
+            .collect();
+        assert_eq!(controls.len(), 3);
+        let rect = controls[0].rect;
+        rt.pointer_down(rect[0] + rect[2] / 2., rect[1] + rect[3] / 2.);
+        rt.pointer_up(rect[0] + rect[2] / 2., rect[1] + rect[3] / 2.);
+        rt.frame(0.);
+        rt.state.media_players.poll();
+        assert_eq!(
+            old.values()
+                .filter(|id| !rt.state.media_players.get(**id).unwrap().paused)
+                .count(),
+            1
+        );
+        rt.state.messages = vec![make(&format!("{body}\nextra"))];
+        rt.invalidate();
+        rt.frame(0.);
+        assert_eq!(rt.state.inline_audio, old);
+        rt.state.messages = vec![make("Before\nMEDIA:/owned/a.wav")];
+        rt.invalidate();
+        rt.frame(0.);
+        assert_eq!(rt.state.inline_audio.len(), 2);
+        assert_eq!(
+            old.values()
+                .filter(|id| rt.state.media_players.get(**id).is_none())
+                .count(),
+            1
+        );
+        rt.state.messages = vec![make(body)];
+        rt.invalidate();
+        rt.frame(0.);
+        rt.frame(0.);
+        assert_eq!(rt.state.inline_audio.len(), 3);
+        assert_eq!(
+            rt.state
+                .inline_audio
+                .values()
+                .filter(|id| !old.values().any(|previous| previous == *id))
+                .count(),
+            1
+        );
+        assert!(
+            peer.requests
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|r| r.contains("a.wav") && r.contains("sample") && r.contains("owned"))
+        );
+    }
+
+    #[test]
+    fn markdown_audio_links_mount_independent_controls() {
+        use std::time::{Duration, Instant};
+        let peer =
+            crate::media_player::tests::virtual_peer::peer(crate::media_player::tests::wav(1, 1.));
+        let mut s = Viewer::empty();
+        s.connection = Some(peer.connection.clone());
+        s.profile = "sample".into();
+        s.selected_session = Some("owned".into());
+        s.media_players.init(std::sync::Arc::new(|| {}));
+        s.media_players.use_null_output();
+        let body = "Привет **styled** [listen](/owned/a.wav) then [listen](file:///owned/a.wav)";
+        let make_message = |text: &str| {
+            crate::gateway::HistoryMessage::from_row(&serde_json::json!({
+                "row_id": 7, "role": "assistant", "content": [
+                    {"type":"text", "text": text}, {"type":"file", "path":"/owned/a.wav", "name":"a.wav"}
+                ]
+            }))
+        };
+        s.messages = vec![make_message(body)];
+        let mut rt = rune::Runtime::new(
+            s,
+            crate::view::transcript::search_test_timeline,
+            (800., 600.),
+            rune::Env::new(true, 1.),
+        );
+        let start = Instant::now();
+        loop {
+            rt.state.media_players.poll();
+            rt.invalidate();
+            rt.frame(0.);
+            if rt.state.inline_audio.len() == 3
+                && rt.state.inline_audio.values().all(|id| {
+                    rt.state
+                        .media_players
+                        .get(*id)
+                        .is_some_and(|p| p.state == crate::media_player::State::Paused)
+                })
+            {
+                break;
+            }
+            assert!(
+                start.elapsed() < Duration::from_secs(5),
+                "three players did not load: {}",
+                rt.state.inline_audio.len()
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        rt.update(|s, tx| tx.scroll_to_y(s.chat_history_key(), 0.));
+        rt.settle_all();
+        for _ in 0..5 {
+            rt.frame(1. / 60.);
+        }
+        let controls: Vec<_> = rt
+            .elements()
+            .into_iter()
+            .filter(|e| e.key.as_deref() == Some("audio-play-pause") && !e.exiting)
+            .collect();
+        assert_eq!(controls.len(), 3);
+        assert!(
+            controls
+                .windows(2)
+                .all(|pair| pair[0].rect[1] < pair[1].rect[1])
+        );
+        let ids = rt.state.inline_audio.clone();
+        assert!(ids.keys().all(|key| key.0.profile == "sample"
+            && key.0.session.as_deref() == Some("owned")
+            && key.4 == "/owned/a.wav"));
+        assert!(
+            controls[0].visible[2] > 0. && controls[0].visible[3] > 0.,
+            "first control clipped: {:?}",
+            controls[0]
+        );
+        let first = controls[0].rect;
+        rt.pointer_down(first[0] + first[2] / 2., first[1] + first[3] / 2.);
+        rt.pointer_up(first[0] + first[2] / 2., first[1] + first[3] / 2.);
+        rt.frame(0.);
+        rt.state.media_players.poll();
+        assert_eq!(
+            ids.values()
+                .filter(|id| !rt.state.media_players.get(**id).unwrap().paused)
+                .count(),
+            1,
+            "controls: {:?}",
+            controls
+        );
+        assert!(
+            peer.requests
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|r| r.contains("a.wav") && r.contains("sample") && r.contains("owned"))
+        );
+        let without_second = body.replace("[listen](file:///owned/a.wav)", "removed");
+        rt.state.messages = vec![make_message(&without_second)];
+        rt.invalidate();
+        rt.frame(0.);
+        assert_eq!(rt.state.inline_audio.len(), 2);
+        assert_eq!(
+            ids.values()
+                .filter(|id| rt.state.media_players.get(**id).is_none())
+                .count(),
+            1
+        );
+        rt.state.messages = vec![make_message(body)];
+        rt.invalidate();
+        rt.frame(0.);
+        rt.frame(0.);
+        assert_eq!(rt.state.inline_audio.len(), 3);
+        assert_eq!(
+            rt.state
+                .inline_audio
+                .values()
+                .filter(|id| !ids.values().any(|old| old == *id))
+                .count(),
+            1
+        );
+        let ids = rt.state.inline_audio.clone();
+        rt.state.messages = vec![make_message(&format!("{body} appended"))];
+        rt.invalidate();
+        rt.frame(0.);
+        assert_eq!(rt.state.inline_audio, ids);
+        rt.state.messages.insert(
+            0,
+            crate::gateway::HistoryMessage::from_row(
+                &serde_json::json!({"row_id":6,"role":"assistant","content":"earlier"}),
+            ),
+        );
+        rt.invalidate();
+        rt.frame(0.);
+        assert_eq!(rt.state.inline_audio, ids);
+        rt.state.messages.clear();
+        rt.invalidate();
+        rt.frame(0.);
+        assert!(rt.state.inline_audio.is_empty());
+        rt.state.messages = vec![make_message(body)];
+        rt.invalidate();
+        rt.frame(0.);
+        rt.frame(0.);
+        assert_eq!(rt.state.inline_audio.len(), 3);
+        assert!(
+            rt.state
+                .inline_audio
+                .values()
+                .all(|id| !ids.values().any(|old| old == id))
+        );
+    }
+
+    #[test]
+    fn empty_markdown_audio_labels_mount_distinct_players() {
+        let mut s = Viewer::empty();
+        s.connection = Some(Connection::Url {
+            endpoint: "http://127.0.0.1:1".into(),
+            token: None,
+        });
+        s.media_players.init(std::sync::Arc::new(|| {}));
+        s.messages = vec![crate::gateway::HistoryMessage::from_row(
+            &serde_json::json!({
+                "row_id":7,"role":"assistant","content":"[](/tmp/a.wav) [](/tmp/a.wav)"
+            }),
+        )];
+        let mut rt = rune::Runtime::new(
+            s,
+            crate::view::transcript::search_test_timeline,
+            (800., 600.),
+            rune::Env::new(true, 1.),
+        );
+        rt.frame(0.);
+        rt.frame(0.);
+        assert_eq!(rt.state.inline_audio.len(), 2);
+    }
+
+    #[test]
+    fn markdown_external_and_code_links_do_not_mount_audio() {
+        let mut s = Viewer::empty();
+        s.connection = Some(Connection::Url {
+            endpoint: "http://127.0.0.1:1".into(),
+            token: None,
+        });
+        s.media_players.init(std::sync::Arc::new(|| {}));
+        s.messages = vec![crate::gateway::HistoryMessage::from_row(
+            &serde_json::json!({
+                "row_id":7,"role":"assistant","content":"[external](https://example.test/a.mp3) ` [code](/tmp/a.wav) `"
+            }),
+        )];
+        let mut rt = rune::Runtime::new(
+            s,
+            crate::view::transcript::search_test_timeline,
+            (800., 600.),
+            rune::Env::new(true, 1.),
+        );
+        rt.frame(0.);
+        rt.frame(0.);
+        assert!(rt.state.inline_audio.is_empty());
+    }
+
+    #[test]
+    fn transcript_mounts_two_independent_audio_controls() {
+        let mut s = Viewer::empty();
+        s.connection = Some(Connection::Url {
+            endpoint: "http://127.0.0.1:1".into(),
+            token: None,
+        });
+        s.media_players.init(std::sync::Arc::new(|| {}));
+        s.messages = vec![crate::gateway::HistoryMessage::from_row(
+            &serde_json::json!({
+                "row_id": 7, "role": "assistant", "content": [
+                    {"type": "file", "path": "/a.wav", "name": "A"},
+                    {"type": "file", "path": "/b.wav", "name": "B"}
+                ]
+            }),
+        )];
+        let mut rt = rune::Runtime::new(
+            s,
+            crate::view::transcript::search_test_timeline,
+            (800., 600.),
+            rune::Env::new(true, 1.),
+        );
+        rt.frame(0.);
+        rt.frame(0.);
+        let controls = rt
+            .elements()
+            .into_iter()
+            .filter(|e| e.key.as_deref() == Some("audio-play-pause") && !e.exiting)
+            .count();
+        assert_eq!(controls, 2, "both attachments need their own inline player");
+        let ids: Vec<_> = rt.state.inline_audio.values().copied().collect();
+        assert_eq!(ids.len(), 2);
+        rt.invalidate();
+        rt.frame(0.);
+        assert!(
+            ids.iter()
+                .all(|id| rt.state.inline_audio.values().any(|current| current == id)),
+            "rerender retains players"
+        );
+        let messages = rt.state.messages.clone();
+        rt.state.messages.clear();
+        rt.invalidate();
+        rt.frame(0.);
+        assert!(rt.state.inline_audio.is_empty(), "unmount retires players");
+        assert!(
+            ids.iter()
+                .all(|id| rt.state.media_players.get(*id).is_none())
+        );
+        rt.state.messages = messages;
+        rt.invalidate();
+        rt.frame(0.);
+        rt.frame(0.);
+        assert_eq!(rt.state.inline_audio.len(), 2);
+        assert!(
+            rt.state.inline_audio.values().all(|id| !ids.contains(id)),
+            "remount starts new players"
+        );
     }
 }

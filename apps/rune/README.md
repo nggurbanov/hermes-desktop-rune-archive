@@ -120,3 +120,19 @@ mutations, provider calls, prompts and human microphone access are excluded from
 the automated acceptance suite. The optional virtual audio test uses its own
 Pulse server/null sink and must be explicitly invoked as documented in the
 voice ledger.
+
+## macOS alpha from a clone
+
+On macOS 13 or newer, install Xcode Command Line Tools, Rust 1.95.0 with
+`rustup`, and Node.js. From the repository root run:
+
+```sh
+./apps/rune/scripts/build-on-mac.sh
+```
+
+Cargo dependencies must be available via network or cache. The script builds for
+the Mac's architecture and creates `rune-macos-alpha/Hermes.app` and a ZIP,
+using ad hoc signing. Pass a nonexistent output directory as the first argument
+to choose another location. This signature is not Developer ID and the app is
+not notarized. The macOS build and runtime have not yet been verified on a Mac.
+The app connects to an existing Hermes gateway; it does not bundle the server.

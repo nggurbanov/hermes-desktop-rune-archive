@@ -70,11 +70,13 @@ pub(super) fn spawn(
                                 .to_owned();
                             let connection = connection.clone();
                             let profile = scope.profile.clone();
+                            let intent = scope.profile_intent;
                             let history = history.clone();
                             let send = answer_send.clone();
                             std::thread::spawn(move || {
-                                let result = AudioGateway::connect(&connection, &profile)
-                                    .and_then(|mut gateway| gateway.live_answer(&sdp, history));
+                                let result =
+                                    AudioGateway::connect_scoped(&connection, &profile, intent)
+                                        .and_then(|mut gateway| gateway.live_answer(&sdp, history));
                                 let _ = send.send(result);
                             });
                         }

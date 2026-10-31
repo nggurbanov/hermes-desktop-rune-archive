@@ -77,6 +77,8 @@ fn physical_shifted_keys_and_typing_safety_do_not_depend_on_emitted_symbol() {
 fn profile_read_binding_clears_previous_fonts_and_only_restores_confirmed_configuration() {
     let mut c = ClientSettings::new();
     let owner = DraftScope {
+        draft_origin: None,
+        profile_intent: crate::source::ProfileIntent::Backend,
         connection: 3,
         profile: "first".into(),
         session: Some("a".into()),
@@ -99,6 +101,7 @@ fn profile_read_binding_clears_previous_fonts_and_only_restores_confirmed_config
     assert!(
         c.bind(DraftScope {
             session: Some("b".into()),
+            draft_origin: None,
             ..owner.clone()
         })
         .is_empty()
@@ -183,5 +186,29 @@ fn close_flush_retries_pending_display_intent_immediately_after_repair() {
     assert_eq!(loaded.prefs.bubble_transparency, 45);
     assert_eq!(loaded.prefs.other["future"], true);
     assert!(client.preferences_wake_after().is_none());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn default_project_directory_is_a_persisted_client_preference() {
+    let root =
+        std::env::temp_dir().join(format!("hermes-default-project-{}", uuid::Uuid::new_v4()));
+    let path = root.join("display.json");
+    let mut settings = ClientSettings::new();
+    settings.load_at(path.clone());
+    settings.act(
+        Action::DefaultProjectDir(Some("/private/project".into())),
+        true,
+    );
+    let mut restored = ClientSettings::new();
+    restored.load_at(path.clone());
+    assert_eq!(
+        restored.prefs.default_project_dir.as_deref(),
+        Some("/private/project")
+    );
+    restored.act(Action::DefaultProjectDir(None), true);
+    let mut cleared = ClientSettings::new();
+    cleared.load_at(path);
+    assert_eq!(cleared.prefs.default_project_dir, None);
     std::fs::remove_dir_all(root).unwrap();
 }

@@ -149,6 +149,9 @@ pub struct ConversationView {
     pub reasoning: String,
     pub tools: Vec<String>,
     pub activities: Vec<Value>,
+    pub(crate) search_receipt: Option<(String, u64, u64, u64, String, String)>,
+    pub(crate) search_reasoning_bridge: Option<(String, u64)>,
+    pub(crate) search_tool_bridge: Vec<(String, String)>,
     pub truncated: bool,
     pub history_cursor: usize,
     pub history_loading: bool,
@@ -216,7 +219,7 @@ pub struct Conversation {
     workspaces: HashMap<DraftScope, workspace::Intent>,
     workers: HashMap<DraftScope, Sender<worker::Command>>,
     aliases: HashMap<DraftScope, DraftScope>,
-    retired_profiles: std::collections::HashSet<(u64, String)>,
+    retired_profiles: std::collections::HashSet<(u64, String, crate::source::ProfileIntent)>,
     views: HashMap<DraftScope, ConversationView>,
     replies: Sender<worker::Reply>,
     receive: Receiver<worker::Reply>,
@@ -250,6 +253,46 @@ impl Conversation {
             .cloned()
             .unwrap_or_else(|| scope.clone())
     }
+    #[cfg(test)]
+    pub(crate) fn fixture_queue_event(
+        &self,
+        origin: DraftScope,
+        event: crate::gateway::conversation::Event,
+    ) {
+        self.replies
+            .send(worker::Reply::Event {
+                origin,
+                event,
+                replay: false,
+            })
+            .unwrap();
+    }
+    #[cfg(test)]
+    pub(crate) fn fixture_event(
+        &mut self,
+        scope: &DraftScope,
+        event: &crate::gateway::conversation::Event,
+    ) -> bool {
+        let key = self.key(scope);
+        self.views.get_mut(&key).unwrap().apply_event(event)
+    }
+    #[cfg(test)]
+    pub(crate) fn fixture_search_bridge(&mut self, scope: &DraftScope, turn: String, row: u64) {
+        let key = self.key(scope);
+        let view = self.views.get_mut(&key).unwrap();
+        view.search_tool_bridge = view
+            .activities
+            .iter()
+            .filter_map(|tool| {
+                tool["id"]
+                    .as_str()
+                    .map(|id| (format!("{turn}-tool-{id}"), id.to_owned()))
+            })
+            .collect();
+        view.search_reasoning_bridge = Some((turn, row));
+        view.activities.clear();
+        view.reasoning.clear();
+    }
     pub fn view(&self, scope: &DraftScope) -> Option<&ConversationView> {
         self.views.get(&self.key(scope))
     }
@@ -278,6 +321,7 @@ impl Conversation {
         for (scope, view) in &mut self.views {
             if scope.connection == owner.connection
                 && scope.profile == owner.profile
+                && scope.profile_intent == owner.profile_intent
                 && view.policy.approval_mode.as_deref() != Some(mode)
             {
                 view.policy.approval_mode = Some(mode.into());
@@ -327,20 +371,39 @@ impl Conversation {
             .map_err(|_| "Conversation worker is unavailable".into())
     }
     pub fn close_profile(&mut self, connection: u64, profile: &str) {
-        self.retired_profiles.insert((connection, profile.into()));
-        self.workspaces
-            .retain(|scope, _| !(scope.connection == connection && scope.profile == profile));
-        self.workers
-            .retain(|scope, _| !(scope.connection == connection && scope.profile == profile));
-        self.views
-            .retain(|scope, _| !(scope.connection == connection && scope.profile == profile));
-        self.aliases
-            .retain(|scope, _| !(scope.connection == connection && scope.profile == profile));
+        self.retired_profiles.insert((
+            connection,
+            profile.into(),
+            crate::source::ProfileIntent::Backend,
+        ));
+        self.workspaces.retain(|scope, _| {
+            !(scope.connection == connection
+                && scope.profile == profile
+                && scope.profile_intent == crate::source::ProfileIntent::Backend)
+        });
+        self.workers.retain(|scope, _| {
+            !(scope.connection == connection
+                && scope.profile == profile
+                && scope.profile_intent == crate::source::ProfileIntent::Backend)
+        });
+        self.views.retain(|scope, _| {
+            !(scope.connection == connection
+                && scope.profile == profile
+                && scope.profile_intent == crate::source::ProfileIntent::Backend)
+        });
+        self.aliases.retain(|scope, _| {
+            !(scope.connection == connection
+                && scope.profile == profile
+                && scope.profile_intent == crate::source::ProfileIntent::Backend)
+        });
     }
     pub fn blocks_profile_retirement(&self, connection: u64, profile: Option<&str>) -> bool {
         self.views.iter().any(|(scope, view)| {
             scope.connection == connection
-                && profile.is_none_or(|profile| scope.profile == profile)
+                && profile.is_none_or(|profile| {
+                    scope.profile == profile
+                        && scope.profile_intent == crate::source::ProfileIntent::Backend
+                })
                 && (view.preparing
                     || view.workspace_pending
                     || view.workspace_uncertain
@@ -370,11 +433,18 @@ impl Conversation {
         Ok(())
     }
     pub fn profile_readback(&mut self, connection: u64, profile: &str) {
-        self.retired_profiles.remove(&(connection, profile.into()));
+        self.retired_profiles.remove(&(
+            connection,
+            profile.into(),
+            crate::source::ProfileIntent::Backend,
+        ));
     }
     pub fn reconnect(&mut self, connection: Connection, scope: &DraftScope) -> Result<(), String> {
-        self.retired_profiles
-            .remove(&(scope.connection, scope.profile.clone()));
+        self.retired_profiles.remove(&(
+            scope.connection,
+            scope.profile.clone(),
+            scope.profile_intent,
+        ));
         let key = self.key(scope);
         if key.session.is_none() {
             return Err("Choose a stored conversation before reconnecting".into());
@@ -397,7 +467,7 @@ impl Conversation {
             .filter(|scope| scope.connection == connection)
         {
             self.retired_profiles
-                .insert((connection, scope.profile.clone()));
+                .insert((connection, scope.profile.clone(), scope.profile_intent));
         }
         self.workspaces
             .retain(|scope, _| scope.connection != connection);
@@ -470,10 +540,11 @@ impl Conversation {
         if let Some(replay) = &input.replay {
             replay.verify(&connection, &scope)?;
         }
-        if self
-            .retired_profiles
-            .contains(&(scope.connection, scope.profile.clone()))
-        {
+        if self.retired_profiles.contains(&(
+            scope.connection,
+            scope.profile.clone(),
+            scope.profile_intent,
+        )) {
             return Err(
                 "This profile is being changed; wait for its registry readback before sending"
                     .into(),
@@ -764,10 +835,11 @@ impl Conversation {
         scope: DraftScope,
         control: worker::Control,
     ) -> Result<(), String> {
-        if self
-            .retired_profiles
-            .contains(&(scope.connection, scope.profile.clone()))
-        {
+        if self.retired_profiles.contains(&(
+            scope.connection,
+            scope.profile.clone(),
+            scope.profile_intent,
+        )) {
             return Err(
                 "This profile is being changed; its controls are unavailable until readback".into(),
             );
@@ -784,10 +856,11 @@ impl Conversation {
         connection: Connection,
         key: DraftScope,
     ) -> Result<Sender<worker::Command>, String> {
-        if self
-            .retired_profiles
-            .contains(&(key.connection, key.profile.clone()))
-        {
+        if self.retired_profiles.contains(&(
+            key.connection,
+            key.profile.clone(),
+            key.profile_intent,
+        )) {
             return Err(
                 "This profile is being changed; refresh its registry before reconnecting".into(),
             );
@@ -819,9 +892,11 @@ impl Conversation {
                 | worker::Reply::Recovered { origin, .. }
                 | worker::Reply::ModelConfirmation { origin, .. }
                 | worker::Reply::ClarifyLocked { origin, .. }
-                | worker::Reply::ControlSettled { origin } => {
-                    (origin.connection, origin.profile.clone())
-                }
+                | worker::Reply::ControlSettled { origin } => (
+                    origin.connection,
+                    origin.profile.clone(),
+                    origin.profile_intent,
+                ),
             };
             if self.retired_profiles.contains(&reply_owner) {
                 continue;
@@ -878,10 +953,7 @@ impl Conversation {
                         view.history_loading = false;
                         match result {
                             Ok(history) if view.history_cursor == cursor => {
-                                view.messages = history::older(
-                                    std::mem::take(&mut view.messages),
-                                    history.messages,
-                                );
+                                view.prepend_history(history.messages);
                                 view.history_cursor = history.cursor;
                                 view.truncated = history.has_more;
                             }
@@ -901,6 +973,7 @@ impl Conversation {
                 } => {
                     let scope = DraftScope {
                         session: Some(snapshot.stored.clone()),
+                        draft_origin: None,
                         ..origin.clone()
                     };
                     if origin != scope {
@@ -910,7 +983,9 @@ impl Conversation {
                         if let Some(view) = self.views.remove(&origin) {
                             self.views.insert(scope.clone(), view);
                         }
-                    } else if origin != scope {
+                        if let Some(workspace) = self.workspaces.remove(&origin) {
+                            self.workspaces.insert(scope.clone(), workspace);
+                        }
                         self.aliases.insert(origin.clone(), scope.clone());
                     }
                     let folder_confirmed =
@@ -947,7 +1022,8 @@ impl Conversation {
                     policy_stamp,
                     policy_fields,
                 } => {
-                    let view = self.views.entry(origin.clone()).or_default();
+                    let key = self.key(&origin);
+                    let view = self.views.entry(key).or_default();
                     view.preparing = false;
                     view.uncertain = None;
                     view.model_confirmation = None;
@@ -960,6 +1036,7 @@ impl Conversation {
                             role: "user".into(),
                             content: text.clone(),
                             raw: serde_json::json!({"input_id":id,"row_id":user_row}),
+                            ..Default::default()
                         });
                     }
                     if status == "started" {
@@ -991,6 +1068,7 @@ impl Conversation {
                     }
                     let scope = DraftScope {
                         session: Some(view.stored.clone()),
+                        draft_origin: None,
                         ..origin
                     };
                     updates.push(Update::Admitted {
@@ -1015,6 +1093,7 @@ impl Conversation {
                     if view.apply_event(&event) {
                         let scope = DraftScope {
                             session: Some(view.stored.clone()),
+                            draft_origin: None,
                             ..origin
                         };
                         if matches!(
@@ -1087,7 +1166,8 @@ impl Conversation {
                     message,
                     uncertain,
                 } => {
-                    let view = self.views.entry(origin.clone()).or_default();
+                    let key = self.key(&origin);
+                    let view = self.views.entry(key).or_default();
                     if id.is_some() {
                         view.preparing = false;
                     }
@@ -1096,6 +1176,11 @@ impl Conversation {
                         view.uncertain = id;
                     }
                     let scope = DraftScope {
+                        draft_origin: if !view.stored.is_empty() || origin.session.is_some() {
+                            None
+                        } else {
+                            origin.draft_origin.clone()
+                        },
                         session: (!view.stored.is_empty())
                             .then(|| view.stored.clone())
                             .or(origin.session.clone()),
@@ -1114,17 +1199,19 @@ impl Conversation {
                     answer,
                     remaining,
                 } => {
-                    let view = self.views.entry(origin.clone()).or_default();
+                    let key = self.key(&origin);
+                    let view = self.views.entry(key.clone()).or_default();
                     if remaining.is_empty() {
                         view.prompts.retain(|p| p.prompt_id != id);
                     } else if let Some(prompt) = view.prompts.iter_mut().find(|p| p.prompt_id == id)
                     {
                         prompt.answers.insert(qid, answer);
                     }
-                    updates.push(Update::Changed { scope: origin });
+                    updates.push(Update::Changed { scope: key });
                 }
                 worker::Reply::Recovered { origin, snapshot } => {
-                    let view = self.views.entry(origin.clone()).or_default();
+                    let key = self.key(&origin);
+                    let view = self.views.entry(key.clone()).or_default();
                     view.revision = snapshot.revision;
                     view.cwd = snapshot
                         .info
@@ -1144,7 +1231,7 @@ impl Conversation {
                                 .insert(admission.admission_id.clone(), admission.input_id.clone());
                         }
                     }
-                    updates.push(Update::Changed { scope: origin });
+                    updates.push(Update::Changed { scope: key });
                 }
                 worker::Reply::ModelConfirmation {
                     origin,
@@ -1152,7 +1239,8 @@ impl Conversation {
                     message,
                     journal_revision,
                 } => {
-                    let view = self.views.entry(origin.clone()).or_default();
+                    let key = self.key(&origin);
+                    let view = self.views.entry(key).or_default();
                     view.preparing = false;
                     view.uncertain = Some(id.clone());
                     view.model_confirmation = Some(ModelConfirmation {
@@ -1163,17 +1251,26 @@ impl Conversation {
                     updates.push(Update::Changed {
                         scope: DraftScope {
                             session: Some(view.stored.clone()),
+                            draft_origin: None,
                             ..origin
                         },
                     });
                 }
                 worker::Reply::ControlSettled { origin } => {
+                    let key = self.key(&origin);
+                    let stored = self
+                        .views
+                        .get(&key)
+                        .map(|v| v.stored.clone())
+                        .filter(|id| !id.is_empty())
+                        .or(origin.session.clone());
                     let scope = DraftScope {
-                        session: self
-                            .views
-                            .get(&origin)
-                            .map(|v| v.stored.clone())
-                            .or(origin.session.clone()),
+                        draft_origin: if stored.is_some() {
+                            None
+                        } else {
+                            origin.draft_origin.clone()
+                        },
+                        session: stored,
                         ..origin
                     };
                     updates.push(Update::Changed { scope });

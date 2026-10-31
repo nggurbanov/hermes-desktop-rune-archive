@@ -60,6 +60,9 @@ pub struct Snapshot {
 }
 impl Snapshot {
     fn parse(value: &Value, profile: &str, canonical: bool) -> Result<Self, String> {
+        Self::parse_owned(value, Some(profile), canonical)
+    }
+    fn parse_owned(value: &Value, profile: Option<&str>, canonical: bool) -> Result<Self, String> {
         let runtime = required_str(value, "session_id")?.to_owned();
         valid_scope(&runtime)?;
         let stored = value
@@ -69,7 +72,11 @@ impl Snapshot {
             .to_owned();
         valid_scope(&stored)?;
         let info = value.get("info").cloned().unwrap_or_else(|| json!({}));
-        if canonical && info.get("profile_name").and_then(Value::as_str) != Some(profile) {
+        if canonical
+            && profile.is_some_and(|profile| {
+                info.get("profile_name").and_then(Value::as_str) != Some(profile)
+            })
+        {
             return Err("Session snapshot profile identity mismatch".into());
         }
         if canonical
@@ -171,6 +178,7 @@ pub struct SessionTransport {
     gateway: Gateway,
     pub canonical: bool,
     pub profile: String,
+    provenance: prepared::ProfileProvenance,
     queued: VecDeque<Event>,
     pub snapshot: Option<Snapshot>,
 }
@@ -186,9 +194,46 @@ impl SessionTransport {
             gateway,
             canonical,
             profile: profile.into(),
+            provenance: prepared::ProfileProvenance::Backend(profile.into()),
             queued: VecDeque::new(),
             snapshot: None,
         })
+    }
+    pub(crate) fn connect_native_self(
+        connection: &Connection,
+        window_alias: &str,
+    ) -> Result<Self, String> {
+        let selected = connection
+            .wire_policy()
+            .and_then(|policy| policy.selected())
+            .ok_or("NativeSelf requires a selected backend route")?;
+        if selected.window_alias() != window_alias {
+            return Err("The selected backend belongs to a different Desktop route".into());
+        }
+        let mut transport = Self::connect(connection, window_alias)?;
+        transport.provenance = prepared::ProfileProvenance::NativeSelf;
+        Ok(transport)
+    }
+    fn parse_snapshot(&self, value: &Value) -> Result<Snapshot, CallError> {
+        if matches!(&self.provenance, prepared::ProfileProvenance::NativeSelf) {
+            let info = value.get("info").cloned().unwrap_or_else(|| json!({}));
+            self.gateway
+                .validate_response_owner(&self.provenance, &info, "profile_name", false)?;
+            let name = match self
+                .gateway
+                .prepared
+                .policy()
+                .and_then(|policy| policy.selected())
+                .map(|context| context.target())
+            {
+                Some(prepared::BackendTarget::Named(name)) => Some(name.as_str()),
+                Some(prepared::BackendTarget::Root(proof)) => proof.profile.as_deref(),
+                None => return Err("The selected backend context is missing".into()),
+            };
+            Snapshot::parse_owned(value, name, self.canonical).map_err(Into::into)
+        } else {
+            Snapshot::parse(value, &self.profile, self.canonical).map_err(Into::into)
+        }
     }
     pub fn call(&mut self, method: &str, params: Value) -> Result<Value, CallError> {
         self.call_with_timeout(method, params, TIMEOUT)
@@ -199,10 +244,14 @@ impl SessionTransport {
         mut params: Value,
         timeout: Duration,
     ) -> Result<Value, CallError> {
-        params
-            .as_object_mut()
-            .ok_or("Invalid conversation request")?
-            .insert("profile".into(), json!(self.profile));
+        if matches!(&self.provenance, prepared::ProfileProvenance::NativeSelf) {
+            params = self.gateway.rpc_params_for(&self.provenance, params)?;
+        } else {
+            params
+                .as_object_mut()
+                .ok_or("Invalid conversation request")?
+                .insert("profile".into(), json!(self.profile));
+        }
         self.gateway.sequence += 1;
         let id = self.gateway.sequence;
         let timeout = timeout.min(Duration::from_secs(660));
@@ -272,9 +321,12 @@ impl SessionTransport {
     }
     fn read_frame(&mut self) -> Result<Option<Value>, CallError> {
         match self.gateway.socket.read() {
-            Ok(Message::Text(text)) => serde_json::from_str(&text)
-                .map(Some)
-                .map_err(|_| CallError::from("Invalid conversation event")),
+            Ok(Message::Text(text)) => {
+                let value: Value = serde_json::from_str(&text)
+                    .map_err(|_| CallError::from("Invalid conversation event"))?;
+                self.validate_event_owner(&value)?;
+                Ok(Some(value))
+            }
             Ok(Message::Close(_)) => Err(CallError::from("The conversation connection closed")),
             Ok(Message::Ping(_)) => {
                 self.gateway
@@ -294,6 +346,45 @@ impl SessionTransport {
             }
             Err(_) => Err(CallError::from("The conversation connection failed")),
         }
+    }
+    fn validate_event_owner(&self, frame: &Value) -> Result<(), CallError> {
+        if !matches!(&self.provenance, prepared::ProfileProvenance::NativeSelf) {
+            return Ok(());
+        }
+        let params = if frame["method"] == "event" {
+            &frame["params"]
+        } else {
+            frame
+        };
+        if Event::from_value(frame).is_none()
+            && !matches!(
+                frame["method"].as_str(),
+                Some("approval.request" | "clarify.request" | "approval" | "clarify")
+            )
+        {
+            return Ok(());
+        }
+        // Session authority epochs are fenced by admission/replay reducers,
+        // independently of the runtime authority proved before first use.
+        let mut owner = json!({});
+        for key in ["profile", "profile_id", "instance_id"] {
+            if let Some(value) = params.get(key) {
+                owner[key] = value.clone();
+            }
+        }
+        self.gateway
+            .validate_response_owner(&self.provenance, &owner, "profile", true)?;
+        if params["type"] == "session.info" {
+            let mut info = json!({});
+            for key in ["profile_name", "profile_id", "instance_id"] {
+                if let Some(value) = params["payload"].get(key) {
+                    info[key] = value.clone();
+                }
+            }
+            self.gateway
+                .validate_response_owner(&self.provenance, &info, "profile_name", true)?;
+        }
+        Ok(())
     }
     fn queue_frame(&mut self, frame: &Value) {
         if let Some(event) = Event::from_value(frame) {
@@ -375,7 +466,7 @@ impl SessionTransport {
             "session.resume",
             json!({"session_id":stored,"source":"desktop","omit_messages":true}),
         )?;
-        let snapshot = Snapshot::parse(&value, &self.profile, self.canonical)?;
+        let snapshot = self.parse_snapshot(&value)?;
         self.snapshot = Some(snapshot.clone());
         Ok(snapshot)
     }
@@ -386,12 +477,13 @@ impl SessionTransport {
             "session.resume",
             json!({"session_id":stored,"source":"desktop","cols":96,"lazy":true,"defer_history":false}),
         )?;
-        let snapshot = Snapshot::parse(&value, &self.profile, self.canonical)?;
-        if snapshot
-            .info
-            .get("profile_name")
-            .and_then(Value::as_str)
-            .is_some_and(|owner| owner != self.profile)
+        let snapshot = self.parse_snapshot(&value)?;
+        if matches!(&self.provenance, prepared::ProfileProvenance::Backend(_))
+            && snapshot
+                .info
+                .get("profile_name")
+                .and_then(Value::as_str)
+                .is_some_and(|owner| owner != self.profile)
         {
             return Err("The spectator returned a different profile".into());
         }
@@ -403,7 +495,7 @@ impl SessionTransport {
     }
     pub fn create(&mut self, params: Value) -> Result<Snapshot, CallError> {
         let value = self.call("session.create", params)?;
-        let snapshot = Snapshot::parse(&value, &self.profile, self.canonical)?;
+        let snapshot = self.parse_snapshot(&value)?;
         self.snapshot = Some(snapshot.clone());
         Ok(snapshot)
     }
@@ -411,20 +503,48 @@ impl SessionTransport {
         // Resolve native HTTP ownership without calling rpc_until, which is a
         // read-only helper that intentionally discards notifications.
         self.ensure_profiles()?;
+        if matches!(&self.provenance, prepared::ProfileProvenance::NativeSelf) {
+            return self
+                .gateway
+                .history_for(&self.provenance, stored, 0)
+                .map_err(Into::into);
+        }
         self.gateway
             .history(&self.profile, stored)
             .map_err(Into::into)
     }
     pub fn older_history(&mut self, stored: &str, offset: usize) -> Result<History, CallError> {
         self.ensure_profiles()?;
+        if matches!(&self.provenance, prepared::ProfileProvenance::NativeSelf) {
+            return self
+                .gateway
+                .history_for(&self.provenance, stored, offset)
+                .map_err(Into::into);
+        }
         self.gateway
             .history_window(&self.profile, stored, offset, Instant::now() + TIMEOUT)
             .map_err(Into::into)
     }
     fn ensure_profiles(&mut self) -> Result<(), CallError> {
         #[cfg(target_os = "linux")]
+        let owner = if matches!(&self.provenance, prepared::ProfileProvenance::NativeSelf) {
+            match self
+                .gateway
+                .prepared
+                .policy()
+                .and_then(|policy| policy.selected())
+                .map(|context| context.target())
+            {
+                Some(prepared::BackendTarget::Named(name)) => name.clone(),
+                Some(prepared::BackendTarget::Root(_)) => return Ok(()),
+                None => return Err("The selected backend context is missing".into()),
+            }
+        } else {
+            self.profile.clone()
+        };
+        #[cfg(target_os = "linux")]
         if matches!(self.gateway.auth, Auth::Native(_))
-            && !self.gateway.profile_homes.contains_key(&self.profile)
+            && !self.gateway.profile_homes.contains_key(&owner)
         {
             let profiles = self.call("profiles.list", json!({"include_sessions":false}))?;
             let profiles = rows(&profiles, "profiles")?;
@@ -438,11 +558,18 @@ impl SessionTransport {
                         .insert(name.into(), PathBuf::from(path));
                 }
             }
-            if !self.gateway.profile_homes.contains_key(&self.profile) {
+            if !self.gateway.profile_homes.contains_key(&owner) {
                 return Err("The selected profile is not served by this gateway".into());
             }
         }
         Ok(())
+    }
+    fn owned_request(&self, request: crate::pages::PageRequest) -> crate::pages::PageRequest {
+        if matches!(&self.provenance, prepared::ProfileProvenance::NativeSelf) {
+            request.provenance(self.provenance.clone())
+        } else {
+            request
+        }
     }
     pub fn replay(
         &mut self,
@@ -495,6 +622,7 @@ impl SessionTransport {
                 .query("path", source)
                 .query("session_id", stored)
         };
+        let request = self.owned_request(request);
         self.gateway
             .page_request(&self.profile, &request)
             .map_err(CallError::from)
@@ -505,6 +633,7 @@ impl SessionTransport {
             "/api/chat/image-upload",
             json!({"data_url":data_url,"filename":name}),
         );
+        let request = self.owned_request(request);
         let value = self.gateway.page_request(&self.profile, &request)?;
         let path = required_str(&value, "path")?;
         let mime = required_str(&value, "mime_type")?;
@@ -517,6 +646,7 @@ impl SessionTransport {
         self.ensure_profiles()?;
         let request =
             crate::pages::PageRequest::get("/api/model/options").query("explicit_only", "1");
+        let request = self.owned_request(request);
         let value = self.gateway.page_request(&self.profile, &request)?;
         let catalog = ModelCatalog::from_value(&value)?;
         Ok((

@@ -10,27 +10,36 @@ use std::{
 };
 
 use serde_json::{Value, json};
-use tungstenite::{Message, WebSocket, client::IntoClientRequest, stream::MaybeTlsStream};
+use tungstenite::{Message, WebSocket, stream::MaybeTlsStream};
 use url::Url;
 
 pub(crate) mod audio;
+mod backend;
 mod catalog;
 pub(crate) mod conversation;
 #[cfg(target_os = "linux")]
 mod local;
 mod pages;
 pub(crate) mod plugin;
+pub(crate) mod prepared;
 pub(crate) mod roster;
+pub(crate) mod route;
+mod scoped;
 pub(crate) mod sidebar;
 pub(crate) mod stream;
 pub(crate) mod terminal;
 mod voice;
+pub(crate) use backend::BackendRootProof;
 pub use catalog::{CatalogModel, ModelCapabilities, ModelCatalog, ModelProvider};
 pub use voice::{VoiceEngine, VoiceStatus};
+#[cfg(test)]
+mod cloud_tests;
 #[cfg(test)]
 mod pages_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod ws_cloud_tests;
 
 const TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_BODY: usize = 8 * 1024 * 1024;
@@ -38,6 +47,11 @@ const HISTORY_LIMIT: usize = 500;
 
 #[derive(Clone)]
 pub enum Connection {
+    Routed {
+        actual: Box<Connection>,
+        policy: std::sync::Arc<prepared::WirePolicy>,
+        owner: std::sync::Arc<crate::source::RouteOwner>,
+    },
     Saved {
         id: String,
         revision: String,
@@ -55,8 +69,16 @@ pub enum Connection {
 impl Connection {
     pub fn transport(&self) -> &Self {
         match self {
+            Self::Routed { actual, .. } => actual.transport(),
             Self::Saved { inner, .. } => inner.transport(),
             other => other,
+        }
+    }
+    pub(crate) fn wire_policy(&self) -> Option<&std::sync::Arc<prepared::WirePolicy>> {
+        match self {
+            Self::Routed { policy, .. } => Some(policy),
+            Self::Saved { inner, .. } => inner.wire_policy(),
+            _ => None,
         }
     }
 }
@@ -64,6 +86,10 @@ impl Connection {
 impl fmt::Debug for Connection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Routed { actual, .. } => f
+                .debug_struct("Routed")
+                .field("transport", actual)
+                .finish_non_exhaustive(),
             Self::Saved { id, inner, .. } => f
                 .debug_struct("Saved")
                 .field("id", id)
@@ -86,6 +112,13 @@ pub struct Profile {
     pub description: String,
     pub canonical_session: Option<CanonicalSession>,
 }
+/// Raw authenticated inventory. An absent active field proves no launch root.
+#[derive(Clone)]
+pub(crate) struct BackendProfiles {
+    pub profiles: Vec<Profile>,
+    pub active: Option<String>,
+    pub homes: Vec<(String, String)>,
+}
 /// The server's named Bot Chat registry row, never a recent-session guess.
 #[derive(Clone, Debug)]
 pub struct CanonicalSession {
@@ -99,13 +132,26 @@ pub struct Session {
     pub title: String,
     pub updated: String,
 }
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct HistoryMessage {
     pub role: String,
     pub content: String,
     /// Original display projection, durable row IDs and attachment/tool metadata.
     /// Private replay text is never substituted for the server's display fields.
     pub raw: Value,
+    pub(crate) identity: uuid::Uuid,
+    pub(crate) keep_live_key: bool,
+}
+impl Default for HistoryMessage {
+    fn default() -> Self {
+        Self {
+            role: String::new(),
+            content: String::new(),
+            raw: Value::Null,
+            identity: uuid::Uuid::new_v4(),
+            keep_live_key: false,
+        }
+    }
 }
 impl HistoryMessage {
     pub fn from_row(row: &Value) -> Self {
@@ -117,6 +163,7 @@ impl HistoryMessage {
                 .into(),
             content: message_text(row),
             raw: row.clone(),
+            ..Default::default()
         }
     }
     pub fn text(role: &str, text: &str) -> Self {
@@ -124,7 +171,16 @@ impl HistoryMessage {
             role: role.into(),
             content: text.into(),
             raw: json!({"role":role,"content":text}),
+            ..Default::default()
         }
+    }
+    pub(crate) fn display_key(&self) -> String {
+        if !self.keep_live_key {
+            if let Some(id) = self.row_id() {
+                return format!("row-{id}");
+            }
+        }
+        format!("live-{}", self.identity)
     }
     pub fn row_id(&self) -> Option<u64> {
         self.raw
@@ -142,6 +198,7 @@ pub struct History {
     pub cursor: usize,
 }
 
+#[derive(Clone)]
 enum Auth {
     Token(Option<String>),
     #[cfg(target_os = "linux")]
@@ -152,44 +209,26 @@ pub struct Gateway {
     socket: WebSocket<MaybeTlsStream<DeadlineStream>>,
     base: Url,
     auth: Auth,
+    prepared: prepared::PreparedTransport,
     http: reqwest::blocking::Client,
     sequence: u64,
     initial_profile: String,
     profile_homes: HashMap<String, PathBuf>,
+    raw_backend_homes: Option<Vec<(String, String)>>,
+    selected_root_verified: bool,
     session_targets: HashMap<(String, String), String>,
     canonical_targets: HashMap<(String, String), String>,
 }
 
 impl Gateway {
     pub fn connect(connection: &Connection) -> Result<Self, String> {
-        let (base, auth, initial_profile, native_ticket) = match connection {
-            Connection::Saved { inner, .. } => return Self::connect(inner),
-            Connection::Url { endpoint, token } => {
-                let (base, url_token) = endpoint_url(endpoint)?;
-                (
-                    base,
-                    Auth::Token(token.clone().or(url_token)),
-                    "default".to_owned(),
-                    None,
-                )
-            }
-            Connection::Local { home } => {
-                #[cfg(target_os = "linux")]
-                {
-                    let endpoint = local::identify(home)?;
-                    let ticket = endpoint.ticket(&endpoint.profile_id, "interactive")?;
-                    let base =
-                        Url::parse(&endpoint.origin).map_err(|_| "Invalid local gateway origin")?;
-                    let profile = endpoint.profile_name();
-                    (base, Auth::Native(endpoint), profile, Some(ticket))
-                }
-                #[cfg(not(target_os = "linux"))]
-                {
-                    let _ = home;
-                    return Err("Native local attachment is currently supported on Linux; use a gateway URL".into());
-                }
-            }
-        };
+        let prepared = prepared::PreparedTransport::from_connection(
+            connection,
+            Instant::now() + Duration::from_secs(5),
+        )?;
+        let base = prepared.base().clone();
+        let auth = prepared.auth().clone();
+        let initial_profile = prepared.initial_profile().to_owned();
         let mut ws = base.join("api/ws").map_err(|_| "Invalid gateway route")?;
         ws.set_scheme(if base.scheme() == "https" {
             "wss"
@@ -197,29 +236,20 @@ impl Gateway {
             "ws"
         })
         .map_err(|_| "Invalid gateway scheme")?;
-        if let Auth::Token(Some(token)) = &auth {
-            ws.query_pairs_mut().append_pair("token", token);
-        }
-        let mut request = ws
-            .as_str()
-            .into_client_request()
-            .map_err(|_| "Invalid WebSocket request")?;
-        if let Some(ticket) = &native_ticket {
-            request.headers_mut().insert(
-                "Sec-WebSocket-Protocol",
-                format!("hermes-gateway-v1, hermes-gateway-ticket.{ticket}")
-                    .parse()
-                    .map_err(|_| "Invalid native gateway ticket")?,
-            );
-        }
-        let stream = connect_tcp(&ws)?;
+        let handshake = prepared.prepare_ws(
+            ws,
+            None,
+            prepared::WsPurpose::Interactive,
+            Instant::now() + Duration::from_secs(5),
+        )?;
+        let stream = connect_tcp(&handshake.url)?;
         let config = tungstenite::protocol::WebSocketConfig::default()
             .max_message_size(Some(MAX_BODY))
             .max_frame_size(Some(MAX_BODY));
         let (socket, response) =
-            tungstenite::client_tls_with_config(request, stream, Some(config), None)
+            tungstenite::client_tls_with_config(handshake.request, stream, Some(config), None)
                 .map_err(|_| "WebSocket connection failed (network, TLS or authentication)")?;
-        if native_ticket.is_some()
+        if handshake.private_protocol
             && response
                 .headers()
                 .get("Sec-WebSocket-Protocol")
@@ -249,12 +279,15 @@ impl Gateway {
             socket,
             base,
             auth,
+            prepared,
             http: http
                 .build()
                 .map_err(|_| "Could not initialize HTTP transport")?,
             sequence: 0,
             initial_profile,
             profile_homes: HashMap::new(),
+            raw_backend_homes: None,
+            selected_root_verified: false,
             session_targets: HashMap::new(),
             canonical_targets: HashMap::new(),
         })
@@ -265,14 +298,33 @@ impl Gateway {
     }
 
     fn profiles_until(&mut self, deadline: Instant) -> Result<Vec<Profile>, String> {
+        self.backend_profiles_until(deadline)
+            .map(|reply| reply.profiles)
+    }
+
+    pub(crate) fn backend_profiles(&mut self) -> Result<BackendProfiles, String> {
+        self.backend_profiles_until(Instant::now() + TIMEOUT)
+    }
+
+    fn backend_profiles_until(&mut self, deadline: Instant) -> Result<BackendProfiles, String> {
         let value = self.rpc_until(
             "profiles.list",
             json!({"profile": self.initial_profile, "include_sessions": true}),
             deadline,
         )?;
+        let active = match value.get("active") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(name)) if name.trim().is_empty() => None,
+            Some(Value::String(name)) => {
+                valid_scope(name)?;
+                Some(name.clone())
+            }
+            Some(_) => return Err("Invalid active backend profile evidence".into()),
+        };
         let rows = rows(&value, "profiles")?;
         let mut result = Vec::new();
         let mut homes = HashMap::new();
+        let mut raw_homes = Vec::new();
         let mut canonical_targets = HashMap::new();
         for row in rows {
             let name = required_str(row, "name")?.to_owned();
@@ -302,6 +354,7 @@ impl Gateway {
                 _ => None,
             };
             if let Some(home) = row.get("path").and_then(Value::as_str) {
+                raw_homes.push((name.clone(), home.to_owned()));
                 homes.insert(name.clone(), PathBuf::from(home));
             }
             result.push(Profile {
@@ -312,20 +365,43 @@ impl Gateway {
             });
         }
         self.profile_homes = homes;
+        self.raw_backend_homes = Some(raw_homes.clone());
         self.canonical_targets = canonical_targets;
-        Ok(result)
+        Ok(BackendProfiles {
+            profiles: result,
+            active,
+            homes: raw_homes,
+        })
     }
 
     pub fn sessions(&mut self, profile: &str) -> Result<Vec<Session>, String> {
+        self.sessions_for(
+            &prepared::ProfileProvenance::Backend(profile.into()),
+            profile,
+        )
+    }
+
+    pub(crate) fn sessions_for(
+        &mut self,
+        provenance: &prepared::ProfileProvenance,
+        profile: &str,
+    ) -> Result<Vec<Session>, String> {
         valid_scope(profile)?;
-        let value = self.rpc(
-            "session.list",
-            json!({"profile": profile, "scope": "stored", "limit": 200, "include_hidden": false}),
+        let params = self.rpc_params_for(
+            provenance,
+            json!({"scope": "stored", "limit": 200, "include_hidden": false}),
         )?;
+        let value = self.rpc("session.list", params)?;
+        if matches!(provenance, prepared::ProfileProvenance::NativeSelf) {
+            self.validate_response_owner(provenance, &value, "profile", false)?;
+        }
         let rows = rows(&value, "sessions")?;
         let mut result = Vec::new();
         self.session_targets.clear();
         for row in rows {
+            if matches!(provenance, prepared::ProfileProvenance::NativeSelf) {
+                self.validate_response_owner(provenance, row, "profile", false)?;
+            }
             let id = row
                 .get("session_id")
                 .or_else(|| row.get("id"))
@@ -389,7 +465,53 @@ impl Gateway {
         offset: usize,
         deadline: Instant,
     ) -> Result<History, String> {
-        let mut page = self.history_page(profile, session, HISTORY_LIMIT, offset, deadline)?;
+        self.history_window_with(profile, session, offset, deadline, None)
+    }
+    pub(crate) fn history_for(
+        &mut self,
+        provenance: &prepared::ProfileProvenance,
+        session: &str,
+        offset: usize,
+    ) -> Result<History, String> {
+        valid_scope(session)?;
+        self.ensure_profile_scope(provenance)?;
+        let profile = match provenance {
+            prepared::ProfileProvenance::Backend(name) => name.clone(),
+            prepared::ProfileProvenance::NativeSelf => self
+                .prepared
+                .policy()
+                .and_then(|policy| policy.selected())
+                .map(|context| context.window_alias().to_owned())
+                .ok_or("The Desktop route has no selected backend context")?,
+            prepared::ProfileProvenance::Ambient(_) => {
+                return Err("History requires an explicit owner".into());
+            }
+        };
+        self.history_window_with(
+            &profile,
+            session,
+            offset,
+            Instant::now() + TIMEOUT,
+            Some(provenance),
+        )
+    }
+    fn history_window_with(
+        &self,
+        profile: &str,
+        session: &str,
+        offset: usize,
+        deadline: Instant,
+        provenance: Option<&prepared::ProfileProvenance>,
+    ) -> Result<History, String> {
+        let mut page = self.history_page_order_with(
+            profile,
+            session,
+            HISTORY_LIMIT,
+            offset,
+            "latest",
+            deadline,
+            provenance,
+        )?;
         // Older runtimes ignore `order=latest`. A full orderless first page
         // cannot be trusted as the tail, so hydrate their actual full response.
         if offset == 0
@@ -400,13 +522,14 @@ impl Gateway {
             let mut complete = Vec::new();
             let mut consumed = 0;
             loop {
-                let earlier = self.history_page_order(
+                let earlier = self.history_page_order_with(
                     profile,
                     session,
                     HISTORY_LIMIT,
                     consumed,
                     "oldest",
                     deadline,
+                    provenance,
                 )?;
                 let rows = rows(&earlier, "messages")?;
                 complete.extend(rows.iter().cloned());
@@ -434,7 +557,15 @@ impl Gateway {
             && page.pointer("/pagination/order").and_then(Value::as_str) == Some("latest")
         {
             !rows(
-                &self.history_page(profile, session, 1, offset + message_rows.len(), deadline)?,
+                &self.history_page_order_with(
+                    profile,
+                    session,
+                    1,
+                    offset + message_rows.len(),
+                    "latest",
+                    deadline,
+                    provenance,
+                )?,
                 "messages",
             )?
             .is_empty()
@@ -475,6 +606,18 @@ impl Gateway {
         order: &str,
         deadline: Instant,
     ) -> Result<Value, String> {
+        self.history_page_order_with(profile, session, limit, offset, order, deadline, None)
+    }
+    fn history_page_order_with(
+        &self,
+        profile: &str,
+        session: &str,
+        limit: usize,
+        offset: usize,
+        order: &str,
+        deadline: Instant,
+        provenance: Option<&prepared::ProfileProvenance>,
+    ) -> Result<Value, String> {
         let mut url = self
             .base
             .join("api/sessions/")
@@ -484,17 +627,38 @@ impl Gateway {
             .pop_if_empty()
             .push(session)
             .push("messages");
+        if provenance.is_none() {
+            url.query_pairs_mut().append_pair("profile", profile);
+        }
         url.query_pairs_mut()
-            .append_pair("profile", profile)
             .append_pair("limit", &limit.to_string())
             .append_pair("offset", &offset.to_string())
             .append_pair("order", order)
             .append_pair("include_compacted", "true")
             .append_pair("inline_images", "false");
-        let value = self.get_json(profile, url, deadline, "History")?;
-        if value.get("profile").and_then(Value::as_str) != Some(profile) {
-            return Err("History profile identity mismatch".into());
-        }
+        let value = if let Some(provenance) = provenance {
+            let mut path = url
+                .path()
+                .strip_prefix(self.base.path().trim_end_matches('/'))
+                .ok_or("The history route changed its API prefix")?
+                .to_owned();
+            if let Some(query) = url.query() {
+                path.push('?');
+                path.push_str(query);
+            }
+            let url = self.api_url_for(provenance, "GET", &path)?;
+            let parts =
+                self.http_parts_for_method(provenance, url, deadline, Some(reqwest::Method::GET))?;
+            let value = self.get_json_parts(parts, deadline, "History")?;
+            self.validate_response_owner(provenance, &value, "profile", false)?;
+            value
+        } else {
+            let value = self.get_json(profile, url, deadline, "History")?;
+            if value.get("profile").and_then(Value::as_str) != Some(profile) {
+                return Err("History profile identity mismatch".into());
+            }
+            value
+        };
         let resolved = self
             .session_targets
             .get(&(profile.into(), session.into()))
@@ -520,39 +684,39 @@ impl Gateway {
     fn get_json(
         &self,
         profile: &str,
-        mut url: Url,
+        url: Url,
         deadline: Instant,
         label: &str,
     ) -> Result<Value, String> {
-        let mut headers = reqwest::header::HeaderMap::new();
-        match &self.auth {
-            Auth::Token(Some(token)) => {
-                url.query_pairs_mut().append_pair("token", token);
-            }
-            Auth::Token(None) => {}
-            #[cfg(target_os = "linux")]
-            Auth::Native(endpoint) => {
-                let home = self
-                    .profile_homes
-                    .get(profile)
-                    .ok_or("Refresh profiles before reading this profile")?;
-                let ticket = endpoint.ticket_until(home, "native-http", deadline)?;
-                headers.insert(
-                    "X-Hermes-Gateway-Ticket",
-                    ticket.parse().map_err(|_| "Invalid native HTTP ticket")?,
-                );
-            }
+        let prepared =
+            self.http_parts_method(profile, url, deadline, Some(reqwest::Method::GET))?;
+        self.get_json_parts(prepared, deadline, label)
+    }
+    fn get_json_parts(
+        &self,
+        prepared: prepared::HttpParts,
+        deadline: Instant,
+        label: &str,
+    ) -> Result<Value, String> {
+        let send = |parts: &prepared::HttpParts| -> Result<reqwest::blocking::Response, String> {
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .ok_or_else(|| format!("{label} request timed out"))?;
+            self.http
+                .request(parts.method.clone(), parts.url.clone())
+                .headers(parts.headers.clone())
+                .timeout(remaining)
+                .send()
+                .map_err(|_| format!("{label} request failed (network, TLS or timeout)"))
+        };
+        let mut response = send(&prepared)?;
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED
+            && prepared.method == reqwest::Method::GET
+            && prepared::PreparedTransport::has_cloud_receipt(&prepared)
+        {
+            let retry = self.prepared.retry_http_unauthorized(prepared, deadline)?;
+            response = send(&retry)?;
         }
-        let remaining = deadline
-            .checked_duration_since(Instant::now())
-            .ok_or_else(|| format!("{label} request timed out"))?;
-        let response = self
-            .http
-            .get(url)
-            .headers(headers)
-            .timeout(remaining)
-            .send()
-            .map_err(|_| format!("{label} request failed (network, TLS or timeout)"))?;
         if !response.status().is_success() {
             return Err(format!(
                 "{label} request refused (HTTP {})",
@@ -570,6 +734,44 @@ impl Gateway {
         serde_json::from_slice(&bytes).map_err(|_| format!("Invalid {label} response"))
     }
 
+    fn http_parts(
+        &self,
+        profile: &str,
+        url: Url,
+        deadline: Instant,
+    ) -> Result<prepared::HttpParts, String> {
+        self.http_parts_method(profile, url, deadline, None)
+    }
+    fn http_parts_method(
+        &self,
+        profile: &str,
+        url: Url,
+        deadline: Instant,
+        method: Option<reqwest::Method>,
+    ) -> Result<prepared::HttpParts, String> {
+        #[cfg(target_os = "linux")]
+        let home = if matches!(&self.auth, Auth::Native(_)) {
+            Some(
+                self.profile_homes
+                    .get(profile)
+                    .ok_or("Refresh profiles before reading this profile")?
+                    .as_path(),
+            )
+        } else {
+            None
+        };
+        #[cfg(not(target_os = "linux"))]
+        let home = {
+            let _ = profile;
+            None
+        };
+        match method {
+            Some(method) => self
+                .prepared
+                .prepare_http_method(method, url, home, deadline),
+            None => self.prepared.prepare_http(url, home, deadline),
+        }
+    }
     fn rpc(&mut self, method: &str, params: Value) -> Result<Value, String> {
         self.rpc_until(method, params, Instant::now() + TIMEOUT)
     }
@@ -580,8 +782,16 @@ impl Gateway {
         params: Value,
         deadline: Instant,
     ) -> Result<Value, String> {
-        if !matches!(method, "profiles.list" | "session.list" | "model.options") {
+        if !matches!(
+            method,
+            "profiles.list" | "session.list" | "model.options" | "runtime.describe"
+        ) {
             return Err("This viewer permits read methods only".into());
+        }
+        if method == "runtime.describe" && params != json!({}) {
+            return Err(
+                "Runtime authority discovery cannot carry an ambient profile selector".into(),
+            );
         }
         self.sequence += 1;
         let id = self.sequence;

@@ -57,12 +57,14 @@ impl Drop for Handle {
 pub(crate) struct Start {
     pub target: Target,
     pub profile: String,
+    pub profile_intent: crate::source::ProfileIntent,
     pub cwd: String,
     pub rows: u16,
     pub cols: u16,
     pub durable: Option<String>,
 }
 pub(crate) fn spawn(
+    owner: String,
     id: String,
     generation: u64,
     start: Start,
@@ -76,6 +78,7 @@ pub(crate) fn spawn(
         let notify = |event| {
             if replies
                 .send(Reply::Event {
+                    owner: owner.clone(),
                     id: id.clone(),
                     generation,
                     event,
@@ -115,9 +118,10 @@ fn remote(
         } else {
             Status::Starting
         }));
-        let dial = HostTerminal::connect(
+        let dial = HostTerminal::connect_scoped(
             connection,
             &start.profile,
+            start.profile_intent,
             &start.cwd,
             size.0,
             size.1,
@@ -173,6 +177,7 @@ fn remote(
                     Command::Drop(paths) => staged.start(
                         connection.clone(),
                         start.profile.clone(),
+                        start.profile_intent,
                         paths,
                         cancel.clone(),
                     ),
@@ -324,9 +329,10 @@ fn close_remote(
     id: &str,
     notify: &impl Fn(Event),
 ) -> Result<(), String> {
-    let mut socket = HostTerminal::connect(
+    let mut socket = HostTerminal::connect_scoped(
         connection,
         &start.profile,
+        start.profile_intent,
         "",
         start.cols,
         start.rows,
@@ -494,6 +500,7 @@ fn native(
                         staged.start(
                             connection.clone(),
                             start.profile.clone(),
+                            start.profile_intent,
                             paths,
                             cancel.clone(),
                         );

@@ -274,6 +274,8 @@ mod tests {
         state.context = Some(json!({"context_max":100}));
         state.observe(
             crate::composer::DraftScope {
+                draft_origin: None,
+                profile_intent: crate::source::ProfileIntent::Backend,
                 connection: 1,
                 profile: "work".into(),
                 session: Some("a".into()),

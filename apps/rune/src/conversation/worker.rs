@@ -139,6 +139,16 @@ struct Worker {
     reconnect_attempts: u8,
     want_reconnect: bool,
 }
+fn connect_scope(connection: &Connection, scope: &DraftScope) -> Result<SessionTransport, String> {
+    match scope.profile_intent {
+        crate::source::ProfileIntent::Backend => {
+            SessionTransport::connect(connection, &scope.profile)
+        }
+        crate::source::ProfileIntent::NativeSelf => {
+            SessionTransport::connect_native_self(connection, &scope.profile)
+        }
+    }
+}
 impl Worker {
     fn notify(&self, reply: Reply) {
         if self.replies.send(reply).is_ok() {
@@ -147,10 +157,7 @@ impl Worker {
     }
     fn transport(&mut self) -> Result<&mut SessionTransport, CallError> {
         if self.transport.is_none() {
-            self.transport = Some(SessionTransport::connect(
-                &self.connection,
-                &self.scope.profile,
-            )?);
+            self.transport = Some(connect_scope(&self.connection, &self.scope)?);
             self.notify(Reply::StreamOpened {
                 origin: self.scope.clone(),
             });
@@ -215,6 +222,7 @@ impl Worker {
             history,
         });
         self.scope.session = Some(stored);
+        self.scope.draft_origin = None;
         Ok(())
     }
     fn attach(&mut self) -> Result<(), CallError> {
@@ -1078,7 +1086,7 @@ pub(crate) fn control(
                     stored, runtime, ..
                 } => (stored.clone(), runtime.clone()),
             };
-            let mut transport = SessionTransport::connect(&connection, &scope.profile)?;
+            let mut transport = connect_scope(&connection, &scope)?;
             let snapshot = transport.resume(&stored)?;
             if snapshot.runtime != runtime {
                 return Err(
@@ -1340,6 +1348,8 @@ mod tests {
             token: None,
         };
         let scope = DraftScope {
+            draft_origin: None,
+            profile_intent: crate::source::ProfileIntent::Backend,
             connection: 1,
             profile: "named".into(),
             session: None,
@@ -1395,3 +1405,6 @@ mod tests {
 mod claim_tests;
 #[cfg(test)]
 mod contract_tests;
+
+#[cfg(test)]
+mod ownership_tests;

@@ -669,6 +669,8 @@ mod tests {
     use super::*;
     fn scope() -> DraftScope {
         DraftScope {
+            draft_origin: None,
+            profile_intent: crate::source::ProfileIntent::Backend,
             connection: 1,
             profile: "work".into(),
             session: Some("stored".into()),

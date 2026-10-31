@@ -50,6 +50,7 @@ struct Observed {
     title: String,
     body: String,
     silent: bool,
+    desktop_entry: Option<String>,
     actions: Vec<String>,
 }
 #[derive(Default)]
@@ -93,6 +94,10 @@ impl Fake {
                 .get("suppress-sound")
                 .and_then(|v| bool::try_from(v).ok())
                 .unwrap_or(false),
+            desktop_entry: hints
+                .get("desktop-entry")
+                .and_then(|value| <&str>::try_from(value).ok())
+                .map(str::to_owned),
             actions,
         });
         let id = self.state.sequence.fetch_add(1, Ordering::SeqCst) + 1;
@@ -240,6 +245,10 @@ async fn private_daemon_delivery_shared_dedup_silent_and_approval_origin() {
     assert_eq!(seen[0].title, "Test");
     assert_eq!(seen[0].body, "Private fixture");
     assert!(seen[0].silent);
+    assert_eq!(
+        seen[0].desktop_entry.as_deref(),
+        Some("io.github.nggurbanov.hermes-desktop-rune")
+    );
     assert_eq!(seen[0].actions, ["default", "View", "0", "Approve"]);
     let imposter = zbus::connection::Builder::address(bus.address.as_str())
         .unwrap()
